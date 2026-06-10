@@ -98,6 +98,33 @@ def test_mt4_gold_uses_lot_contract_size_for_overnight(tmp_path) -> None:
     assert item.estimated_mt4_overnight_net == Decimal("-10.0000")
 
 
+def test_mt4_gold_uses_minimum_lot_as_minimum_margin(tmp_path) -> None:
+    store = Mt4QuoteStore(tmp_path / "quotes.json")
+    store.update(
+        Mt4QuoteIn(
+            symbol="XAUUSD",
+            bid=Decimal("2000"),
+            ask=Decimal("2000.5"),
+            instrument_type="commodity",
+            overnight_long_usdt=Decimal("-100"),
+            overnight_short_usdt=Decimal("50"),
+        )
+    )
+    scanner = _GoldScanner(store)
+    settings = BotSettings(mt4_notional_usdt=Decimal("100"), mt4_default_leverage=Decimal("5"))
+
+    opportunities, _candidates, issues = scanner.scan(settings)
+
+    assert issues == []
+    item = opportunities[0]
+    assert item.mt4_contract_size == Decimal("100.000000")
+    assert item.mt4_lots == Decimal("0.010000")
+    assert item.hedge_base_quantity == Decimal("1.000000")
+    assert item.notional_usdt == Decimal("2000.00")
+    assert item.margin_required_usdt == Decimal("400.00")
+    assert item.estimated_mt4_overnight_net == Decimal("0.5000")
+
+
 def test_mt4_quote_store_maps_stock_symbols_with_broker_suffix(tmp_path) -> None:
     store = Mt4QuoteStore(tmp_path / "quotes.json")
 

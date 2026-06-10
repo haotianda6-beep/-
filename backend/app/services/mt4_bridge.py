@@ -54,6 +54,7 @@ MT4_CONTRACT_SIZE_OVERRIDES: dict[str, Decimal] = {
     "XAUUSD": Decimal("100"),
     "XAGUSD": Decimal("1000"),
 }
+MT4_MIN_LOTS = Decimal("0.01")
 
 
 class Mt4QuoteIn(BaseModel):
@@ -251,20 +252,22 @@ class Mt4SpreadScanner:
         if exchange_mid >= mt4_mid:
             spread_pct = (exchange_bid - quote.ask) / quote.ask * Decimal("100")
             long_venue, short_venue = "MT4", exchange.value
-            hedge_base_quantity = settings.mt4_notional_usdt / quote.ask
+            hedge_base_quantity = self._effective_hedge_base(quote, settings.mt4_notional_usdt / quote.ask)
             mt4_lots = self._mt4_lots(quote, hedge_base_quantity)
-            exchange_funding = settings.mt4_notional_usdt * funding_rate
+            effective_notional = hedge_base_quantity * quote.ask
+            exchange_funding = effective_notional * funding_rate
             mt4_overnight = self._mt4_overnight(quote, mt4_lots, quote.overnight_long_usdt)
         else:
             spread_pct = (quote.bid - exchange_ask) / exchange_ask * Decimal("100")
             long_venue, short_venue = exchange.value, "MT4"
-            hedge_base_quantity = settings.mt4_notional_usdt / quote.bid
+            hedge_base_quantity = self._effective_hedge_base(quote, settings.mt4_notional_usdt / quote.bid)
             mt4_lots = self._mt4_lots(quote, hedge_base_quantity)
-            exchange_funding = -settings.mt4_notional_usdt * funding_rate
+            effective_notional = hedge_base_quantity * quote.bid
+            exchange_funding = -effective_notional * funding_rate
             mt4_overnight = self._mt4_overnight(quote, mt4_lots, quote.overnight_short_usdt)
         fee_rate = FEE_RATES.get(exchange, Decimal("0.0006"))
-        fee = settings.mt4_notional_usdt * fee_rate * Decimal("2")
-        basis_profit = settings.mt4_notional_usdt * spread_pct / Decimal("100")
+        fee = effective_notional * fee_rate * Decimal("2")
+        basis_profit = effective_notional * spread_pct / Decimal("100")
         net = basis_profit + exchange_funding + mt4_overnight - fee
         reasons = []
         if spread_pct < settings.mt4_min_spread_pct:
@@ -284,8 +287,8 @@ class Mt4SpreadScanner:
             exchange_bid=q(exchange_bid),
             exchange_ask=q(exchange_ask),
             spread_pct=q(spread_pct),
-            notional_usdt=q(settings.mt4_notional_usdt, "0.01"),
-            margin_required_usdt=q(settings.mt4_notional_usdt / settings.mt4_default_leverage if settings.mt4_default_leverage > 0 else settings.mt4_notional_usdt, "0.01"),
+            notional_usdt=q(effective_notional, "0.01"),
+            margin_required_usdt=q(effective_notional / settings.mt4_default_leverage if settings.mt4_default_leverage > 0 else effective_notional, "0.01"),
             leverage=settings.mt4_default_leverage,
             mt4_contract_size=q(quote.contract_size, "0.000001"),
             mt4_lots=q(mt4_lots, "0.000001"),
@@ -391,6 +394,10 @@ class Mt4SpreadScanner:
 
     def _mt4_lots(self, quote: Mt4Quote, hedge_base_quantity: Decimal) -> Decimal:
         return hedge_base_quantity / quote.contract_size if quote.contract_size > 0 else hedge_base_quantity
+
+    def _effective_hedge_base(self, quote: Mt4Quote, requested_base_quantity: Decimal) -> Decimal:
+        min_base_quantity = quote.contract_size * MT4_MIN_LOTS
+        return max(requested_base_quantity, min_base_quantity)
 
     def _mt4_overnight(self, quote: Mt4Quote, mt4_lots: Decimal, overnight_per_payload_lots: Decimal) -> Decimal:
         payload_lots = quote.lots if quote.lots > 0 else Decimal("1")
