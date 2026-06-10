@@ -1,5 +1,5 @@
 import { Activity, BarChart3 } from "lucide-react";
-import { dateTimeMs, money, pct, valueTone } from "../lib/format";
+import { dateTimeMs, money, pct, qty, valueTone } from "../lib/format";
 import type { Mt4SpreadOpportunity, RealtimeSnapshot } from "../types/api";
 
 type Props = {
@@ -91,6 +91,9 @@ function Mt4SpreadTable({ rows, mode }: { rows: Mt4SpreadOpportunity[]; mode: "r
             <th>名义本金</th>
             <th>预估保证金</th>
             <th>杠杆</th>
+            <th>MT4规格</th>
+            <th>MT4手数</th>
+            <th>等价对冲数量</th>
             <th>资金费率收支</th>
             <th>MT4隔夜费收支</th>
             <th>开平手续费</th>
@@ -115,6 +118,9 @@ function Mt4SpreadTable({ rows, mode }: { rows: Mt4SpreadOpportunity[]; mode: "r
               <td>{money(item.notional_usdt, 2)}</td>
               <td>{money(item.margin_required_usdt, 2)}</td>
               <td>{money(item.leverage, 1)}x</td>
+              <td>{qty(item.mt4_contract_size)} / 手</td>
+              <td>{qty(item.mt4_lots)}</td>
+              <td>{qty(item.hedge_base_quantity)}</td>
               <td className={valueTone(item.estimated_exchange_funding_net)}>{money(item.estimated_exchange_funding_net, 4)}</td>
               <td className={valueTone(item.estimated_mt4_overnight_net)}>{money(item.estimated_mt4_overnight_net, 4)}</td>
               <td>{money(item.estimated_open_close_fee, 4)}</td>

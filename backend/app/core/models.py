@@ -166,6 +166,9 @@ class Mt4SpreadOpportunity(BaseSchema):
     notional_usdt: Decimal
     margin_required_usdt: Decimal
     leverage: Decimal
+    mt4_contract_size: Decimal
+    mt4_lots: Decimal
+    hedge_base_quantity: Decimal
     estimated_exchange_funding_net: Decimal
     estimated_mt4_overnight_net: Decimal
     estimated_open_close_fee: Decimal

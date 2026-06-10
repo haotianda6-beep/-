@@ -314,6 +314,9 @@ export type Mt4SpreadOpportunity = {
   notional_usdt: string;
   margin_required_usdt: string;
   leverage: string;
+  mt4_contract_size: string;
+  mt4_lots: string;
+  hedge_base_quantity: string;
   estimated_exchange_funding_net: string;
   estimated_mt4_overnight_net: string;
   estimated_open_close_fee: string;

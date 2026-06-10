@@ -50,6 +50,10 @@ DEFAULT_INSTRUMENTS: dict[str, dict[str, Any]] = {
     "TSLA": {"type": "stock", "aliases": ["TSLAUSDT"]},
     "V": {"type": "stock", "aliases": ["VUSDT"]},
 }
+MT4_CONTRACT_SIZE_OVERRIDES: dict[str, Decimal] = {
+    "XAUUSD": Decimal("100"),
+    "XAGUSD": Decimal("1000"),
+}
 
 
 class Mt4QuoteIn(BaseModel):
@@ -126,7 +130,7 @@ class Mt4QuoteStore:
             ask=payload.ask,
             timestamp=payload.timestamp or datetime.now(timezone.utc),
             instrument_type=instrument["type"],
-            contract_size=payload.contract_size,
+            contract_size=_contract_size(symbol, payload.contract_size),
             lots=payload.lots,
             tick_value=payload.tick_value,
             tick_size=tick_size,
@@ -220,7 +224,6 @@ class Mt4SpreadScanner:
         for quote in quotes:
             symbol = self._mapped_symbol(quote.symbol, markets)
             if not symbol:
-                rows.append(self._blocked_missing_market(exchange, quote, settings))
                 continue
             try:
                 ticker = instance.fetch_ticker(markets[symbol])
@@ -248,13 +251,17 @@ class Mt4SpreadScanner:
         if exchange_mid >= mt4_mid:
             spread_pct = (exchange_bid - quote.ask) / quote.ask * Decimal("100")
             long_venue, short_venue = "MT4", exchange.value
+            hedge_base_quantity = settings.mt4_notional_usdt / quote.ask
+            mt4_lots = self._mt4_lots(quote, hedge_base_quantity)
             exchange_funding = settings.mt4_notional_usdt * funding_rate
-            mt4_overnight = settings.mt4_notional_usdt / quote.ask * quote.overnight_long_usdt
+            mt4_overnight = self._mt4_overnight(quote, mt4_lots, quote.overnight_long_usdt)
         else:
             spread_pct = (quote.bid - exchange_ask) / exchange_ask * Decimal("100")
             long_venue, short_venue = exchange.value, "MT4"
+            hedge_base_quantity = settings.mt4_notional_usdt / quote.bid
+            mt4_lots = self._mt4_lots(quote, hedge_base_quantity)
             exchange_funding = -settings.mt4_notional_usdt * funding_rate
-            mt4_overnight = settings.mt4_notional_usdt / quote.bid * quote.overnight_short_usdt
+            mt4_overnight = self._mt4_overnight(quote, mt4_lots, quote.overnight_short_usdt)
         fee_rate = FEE_RATES.get(exchange, Decimal("0.0006"))
         fee = settings.mt4_notional_usdt * fee_rate * Decimal("2")
         basis_profit = settings.mt4_notional_usdt * spread_pct / Decimal("100")
@@ -280,6 +287,9 @@ class Mt4SpreadScanner:
             notional_usdt=q(settings.mt4_notional_usdt, "0.01"),
             margin_required_usdt=q(settings.mt4_notional_usdt / settings.mt4_default_leverage if settings.mt4_default_leverage > 0 else settings.mt4_notional_usdt, "0.01"),
             leverage=settings.mt4_default_leverage,
+            mt4_contract_size=q(quote.contract_size, "0.000001"),
+            mt4_lots=q(mt4_lots, "0.000001"),
+            hedge_base_quantity=q(hedge_base_quantity, "0.000001"),
             estimated_exchange_funding_net=q(exchange_funding),
             estimated_mt4_overnight_net=q(mt4_overnight),
             estimated_open_close_fee=q(fee),
@@ -309,6 +319,9 @@ class Mt4SpreadScanner:
             notional_usdt=q(settings.mt4_notional_usdt, "0.01"),
             margin_required_usdt=q(settings.mt4_notional_usdt / settings.mt4_default_leverage if settings.mt4_default_leverage > 0 else settings.mt4_notional_usdt, "0.01"),
             leverage=settings.mt4_default_leverage,
+            mt4_contract_size=q(quote.contract_size, "0.000001"),
+            mt4_lots=Decimal("0"),
+            hedge_base_quantity=Decimal("0"),
             estimated_exchange_funding_net=Decimal("0"),
             estimated_mt4_overnight_net=Decimal("0"),
             estimated_open_close_fee=Decimal("0"),
@@ -376,9 +389,23 @@ class Mt4SpreadScanner:
                 return alias
         return mt4_symbol if mt4_symbol in markets else None
 
+    def _mt4_lots(self, quote: Mt4Quote, hedge_base_quantity: Decimal) -> Decimal:
+        return hedge_base_quantity / quote.contract_size if quote.contract_size > 0 else hedge_base_quantity
+
+    def _mt4_overnight(self, quote: Mt4Quote, mt4_lots: Decimal, overnight_per_payload_lots: Decimal) -> Decimal:
+        payload_lots = quote.lots if quote.lots > 0 else Decimal("1")
+        return mt4_lots / payload_lots * overnight_per_payload_lots
+
 
 def normalize_mt4_symbol(symbol: str) -> str:
     return "".join(ch for ch in symbol.upper() if ch.isalnum())
+
+
+def _contract_size(symbol: str, payload_contract_size: Decimal) -> Decimal:
+    override = MT4_CONTRACT_SIZE_OVERRIDES.get(symbol)
+    if override:
+        return override
+    return payload_contract_size if payload_contract_size > 0 else Decimal("1")
 
 
 def instrument_info(symbol: str, fallback_type: str | None = None) -> dict[str, Any]:

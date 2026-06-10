@@ -52,8 +52,50 @@ def test_mt4_spread_scanner_builds_candidate_with_funding_and_overnight(tmp_path
     assert item.long_venue == "MT4"
     assert item.short_venue == "BINANCE"
     assert item.margin_required_usdt == Decimal("20.00")
+    assert item.mt4_contract_size == Decimal("1.000000")
+    assert item.mt4_lots == Decimal("0.999001")
+    assert item.hedge_base_quantity == Decimal("0.999001")
     assert item.estimated_exchange_funding_net == Decimal("0.0200")
     assert candidates
+
+
+def test_mt4_spread_scanner_hides_unmatched_markets(tmp_path) -> None:
+    store = Mt4QuoteStore(tmp_path / "quotes.json")
+    store.update(Mt4QuoteIn(symbol="META", bid=Decimal("100"), ask=Decimal("100.1"), instrument_type="stock"))
+    scanner = _MissingMarketScanner(store)
+
+    opportunities, candidates, issues = scanner.scan(BotSettings())
+
+    assert opportunities == []
+    assert candidates == []
+    assert issues == []
+
+
+def test_mt4_gold_uses_lot_contract_size_for_overnight(tmp_path) -> None:
+    store = Mt4QuoteStore(tmp_path / "quotes.json")
+    quote = store.update(
+        Mt4QuoteIn(
+            symbol="XAUUSD",
+            bid=Decimal("100"),
+            ask=Decimal("100"),
+            instrument_type="commodity",
+            contract_size=Decimal("1"),
+            overnight_long_usdt=Decimal("-100"),
+            overnight_short_usdt=Decimal("50"),
+        )
+    )
+    scanner = _GoldScanner(store)
+    settings = BotSettings(mt4_notional_usdt=Decimal("1000"), mt4_min_spread_pct=Decimal("0.5"))
+
+    opportunities, _candidates, issues = scanner.scan(settings)
+
+    assert issues == []
+    assert quote.contract_size == Decimal("100")
+    item = opportunities[0]
+    assert item.mt4_contract_size == Decimal("100.000000")
+    assert item.hedge_base_quantity == Decimal("10.000000")
+    assert item.mt4_lots == Decimal("0.100000")
+    assert item.estimated_mt4_overnight_net == Decimal("-10.0000")
 
 
 def test_mt4_quote_store_maps_stock_symbols_with_broker_suffix(tmp_path) -> None:
@@ -108,10 +150,10 @@ class _Scanner(Mt4SpreadScanner):
     def _funding(self, exchange_name, exchange):
         return {"AAPLUSDT": Decimal("0.0002")}
 
-    def _exchange_rows(self, exchange, quote, settings, issues):
+    def _exchange_rows_for_quotes(self, exchange, quotes, settings, issues):
         if exchange != ExchangeName.BINANCE:
             return []
-        return super()._exchange_rows(exchange, quote, settings, issues)
+        return super()._exchange_rows_for_quotes(exchange, quotes, settings, issues)
 
 
 class _Exchange:
@@ -125,6 +167,19 @@ class _GoogleScanner(_Scanner):
 
     def _funding(self, exchange_name, exchange):
         return {"GOOGLUSDT": Decimal("0.0002")}
+
+
+class _MissingMarketScanner(_Scanner):
+    def _markets(self, exchange_name, exchange):
+        return {}
+
+
+class _GoldScanner(_Scanner):
+    def _markets(self, exchange_name, exchange):
+        return {"XAUUSDT": "XAU/USDT:USDT"}
+
+    def _funding(self, exchange_name, exchange):
+        return {"XAUUSDT": Decimal("0")}
 
 
 class _OkxMarketExchange:
