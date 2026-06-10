@@ -1,3 +1,5 @@
+import threading
+import time
 from datetime import datetime, timezone
 from decimal import Decimal
 from itertools import permutations
@@ -50,6 +52,10 @@ class ArbitrageEngine:
         self.mt4_spread_scanner = Mt4SpreadScanner(self.mt4_quote_store)
         self.trade_history = TradeHistoryStore()
         self.ai_monitor = DeepSeekMonitor()
+        self._cash_positions_cache: list[CashCarryPositionRow] = []
+        self._cash_positions_cache_at = 0.0
+        self._cash_positions_refreshing = False
+        self._cash_positions_lock = threading.Lock()
         self.live_runtime = LiveRuntimeCache(
             self.live_read,
             self.live_scanner,
@@ -74,7 +80,7 @@ class ArbitrageEngine:
         reverse_candidates = live_runtime.reverse_cash_carry.candidates if live_runtime else []
         mt4_opps = live_runtime.mt4_spread_opportunities if live_runtime else []
         mt4_candidates = live_runtime.mt4_spread_candidates if live_runtime else []
-        cash_positions = self.cash_carry_positions.build(positions, cash_prices, settings) if live_enabled else []
+        cash_positions = self._cash_positions_snapshot(positions, cash_prices, settings) if live_enabled else []
         risk_events = self.get_risk_events(
             settings,
             live_runtime.account.issues if live_runtime else [],
@@ -158,6 +164,35 @@ class ArbitrageEngine:
 
     def get_trades(self) -> list[TradeHistory]:
         return self.trade_history.load()
+
+    def _cash_positions_snapshot(self, positions: list[PositionSnapshot], cash_prices: list, settings: BotSettings) -> list[CashCarryPositionRow]:
+        if not positions:
+            with self._cash_positions_lock:
+                self._cash_positions_cache = []
+                self._cash_positions_cache_at = time.monotonic()
+            return []
+        with self._cash_positions_lock:
+            cached = list(self._cash_positions_cache)
+            stale = time.monotonic() - self._cash_positions_cache_at > 5
+            if stale and not self._cash_positions_refreshing:
+                self._cash_positions_refreshing = True
+                threading.Thread(
+                    target=self._refresh_cash_positions,
+                    args=(list(positions), list(cash_prices), settings),
+                    daemon=True,
+                    name="cash-position-refresh",
+                ).start()
+            return cached
+
+    def _refresh_cash_positions(self, positions: list[PositionSnapshot], cash_prices: list, settings: BotSettings) -> None:
+        try:
+            rows = self.cash_carry_positions.build(positions, cash_prices, settings)
+        except Exception:
+            rows = []
+        with self._cash_positions_lock:
+            self._cash_positions_cache = rows
+            self._cash_positions_cache_at = time.monotonic()
+            self._cash_positions_refreshing = False
 
     def get_risk_events(
         self,

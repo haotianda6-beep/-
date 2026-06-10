@@ -74,6 +74,7 @@ class LiveRuntimeCache:
         self._settings = BotSettings()
         self._lock = threading.Lock()
         self._execution_lock = threading.Lock()
+        self._full_scan_lock = threading.Lock()
         self._started = False
 
     def get(self, settings: BotSettings) -> LiveRuntimeSnapshot:
@@ -95,10 +96,10 @@ class LiveRuntimeCache:
             return
         self._started = True
         threading.Thread(target=self._account_loop, daemon=True, name="live-account-loop").start()
-        threading.Thread(target=self._scan_loop, daemon=True, name="live-opportunity-loop").start()
-        threading.Thread(target=self._cash_carry_loop, daemon=True, name="cash-carry-loop").start()
-        threading.Thread(target=self._reverse_cash_carry_loop, daemon=True, name="reverse-cash-carry-loop").start()
-        threading.Thread(target=self._mt4_spread_loop, daemon=True, name="mt4-spread-loop").start()
+        threading.Thread(target=self._scan_loop, args=(5.0,), daemon=True, name="live-opportunity-loop").start()
+        threading.Thread(target=self._cash_carry_loop, args=(20.0,), daemon=True, name="cash-carry-loop").start()
+        threading.Thread(target=self._reverse_cash_carry_loop, args=(35.0,), daemon=True, name="reverse-cash-carry-loop").start()
+        threading.Thread(target=self._mt4_spread_loop, args=(10.0,), daemon=True, name="mt4-spread-loop").start()
 
     def _account_loop(self) -> None:
         while True:
@@ -110,8 +111,9 @@ class LiveRuntimeCache:
                 self._account = result
             time.sleep(ACCOUNT_REFRESH_SECONDS)
 
-    def _scan_loop(self) -> None:
+    def _scan_loop(self, initial_delay: float = 0.0) -> None:
         last_full_scan = 0.0
+        time.sleep(initial_delay)
         while True:
             if not self.live_read.live_data_enabled():
                 time.sleep(FAST_REFRESH_SECONDS)
@@ -120,7 +122,7 @@ class LiveRuntimeCache:
             with self._lock:
                 current = self._scan
             if last_full_scan == 0.0 or now - last_full_scan >= FULL_SCAN_INTERVAL_SECONDS:
-                result = self.scanner.scan(self._settings)
+                result = self._run_full_scan(lambda: self.scanner.scan(self._settings), current)
                 last_full_scan = time.monotonic()
             else:
                 result = self.refresher.refresh(current, self._settings)
@@ -129,15 +131,18 @@ class LiveRuntimeCache:
             self._execute_cross_spread(result)
             time.sleep(FAST_REFRESH_SECONDS)
 
-    def _cash_carry_loop(self) -> None:
+    def _cash_carry_loop(self, initial_delay: float = 0.0) -> None:
         last_full_scan = 0.0
+        time.sleep(initial_delay)
         while True:
             if not self.live_read.live_data_enabled():
                 time.sleep(FAST_REFRESH_SECONDS)
                 continue
             now = time.monotonic()
             if last_full_scan == 0.0 or now - last_full_scan >= FULL_SCAN_INTERVAL_SECONDS:
-                result = self.cash_carry_scanner.scan(self._settings)
+                with self._lock:
+                    current = self._cash_carry
+                result = self._run_full_scan(lambda: self.cash_carry_scanner.scan(self._settings), current)
                 last_full_scan = time.monotonic()
                 self._subscribe_cash_carry(result, self.cash_carry_scanner)
             else:
@@ -149,15 +154,18 @@ class LiveRuntimeCache:
                 self._cash_carry = result
             time.sleep(FAST_REFRESH_SECONDS)
 
-    def _reverse_cash_carry_loop(self) -> None:
+    def _reverse_cash_carry_loop(self, initial_delay: float = 0.0) -> None:
         last_full_scan = 0.0
+        time.sleep(initial_delay)
         while True:
             if not self.live_read.live_data_enabled():
                 time.sleep(FAST_REFRESH_SECONDS)
                 continue
             now = time.monotonic()
             if last_full_scan == 0.0 or now - last_full_scan >= FULL_SCAN_INTERVAL_SECONDS:
-                result = self.reverse_cash_carry_scanner.scan(self._settings)
+                with self._lock:
+                    current = self._reverse_cash_carry
+                result = self._run_full_scan(lambda: self.reverse_cash_carry_scanner.scan(self._settings), current)
                 last_full_scan = time.monotonic()
                 self._subscribe_cash_carry(result, self.reverse_cash_carry_scanner)
             else:
@@ -169,17 +177,28 @@ class LiveRuntimeCache:
                 self._reverse_cash_carry = result
             time.sleep(FAST_REFRESH_SECONDS)
 
-    def _mt4_spread_loop(self) -> None:
+    def _mt4_spread_loop(self, initial_delay: float = 0.0) -> None:
+        time.sleep(initial_delay)
         while True:
             if not self.live_read.live_data_enabled():
                 time.sleep(MT4_SCAN_SECONDS)
                 continue
-            opportunities, candidates, issues = self.mt4_spread_scanner.scan(self._settings)
+            opportunities, candidates, issues = self._run_full_scan(
+                lambda: self.mt4_spread_scanner.scan(self._settings),
+                (self._mt4_spread_opportunities, self._mt4_spread_candidates, self._mt4_spread_issues),
+            )
             with self._lock:
                 self._mt4_spread_opportunities = opportunities
                 self._mt4_spread_candidates = candidates
                 self._mt4_spread_issues = issues
             time.sleep(MT4_SCAN_SECONDS)
+
+    def _run_full_scan(self, action, fallback):
+        self._full_scan_lock.acquire()
+        try:
+            return action()
+        finally:
+            self._full_scan_lock.release()
 
     def _subscribe_cash_carry(self, scan: CashCarryScan, scanner: CashCarryScanner) -> None:
         for item in [*scan.opportunities, *scan.candidates]:

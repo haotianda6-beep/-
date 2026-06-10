@@ -1,10 +1,12 @@
 import asyncio
+import logging
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import engine, router
 
+logger = logging.getLogger(__name__)
 app = FastAPI(title="Perpetual Spread Arbitrage Bot", version="0.1.0")
 
 app.add_middleware(
@@ -38,8 +40,11 @@ async def realtime_socket(websocket: WebSocket) -> None:
     await websocket.accept()
     try:
         while True:
-            payload = await asyncio.to_thread(lambda: engine.snapshot().model_dump_json())
-            await websocket.send_text(payload)
-            await asyncio.sleep(0.5)
+            try:
+                payload = await asyncio.to_thread(lambda: engine.snapshot().model_dump_json())
+                await websocket.send_text(payload)
+            except Exception as exc:  # noqa: BLE001 - keep realtime connection alive through transient exchange issues.
+                logger.warning("realtime snapshot failed: %s", str(exc)[:200])
+            await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         return
