@@ -72,6 +72,18 @@ def test_mt4_quote_store_maps_stock_symbols_with_broker_suffix(tmp_path) -> None
     assert store.quotes(Decimal("10"))[0].symbol == "AAPL"
 
 
+def test_mt4_quote_store_maps_google_nasdaq_symbol_to_exchange_alias(tmp_path) -> None:
+    store = Mt4QuoteStore(tmp_path / "quotes.json")
+    store.update(Mt4QuoteIn(symbol="GOOG.NAS", bid=Decimal("100"), ask=Decimal("100.1"), instrument_type="stock"))
+    scanner = _GoogleScanner(store)
+    settings = BotSettings(mt4_notional_usdt=Decimal("100"), mt4_min_spread_pct=Decimal("0.5"))
+
+    opportunities, _candidates, _issues = scanner.scan(settings)
+
+    assert opportunities[0].instrument == "GOOG"
+    assert opportunities[0].exchange_symbol == "GOOGLUSDT"
+
+
 class _Scanner(Mt4SpreadScanner):
     def _exchange(self, exchange_name):
         return _Exchange()
@@ -91,3 +103,11 @@ class _Scanner(Mt4SpreadScanner):
 class _Exchange:
     def fetch_ticker(self, symbol):
         return {"bid": "101.5", "ask": "101.6"}
+
+
+class _GoogleScanner(_Scanner):
+    def _markets(self, exchange_name, exchange):
+        return {"GOOGLUSDT": "GOOGL/USDT:USDT"}
+
+    def _funding(self, exchange_name, exchange):
+        return {"GOOGLUSDT": Decimal("0.0002")}
