@@ -8,7 +8,8 @@ from app.core.credential_utils import ENV_PATH
 from app.core.models import ExchangeName
 
 
-def build_ccxt_exchange(exchange_name: ExchangeName, exchange_id: str, default_type: str, timeout: int = 12000):
+def build_ccxt_exchange(exchange_name: ExchangeName | str, exchange_id: str, default_type: str, timeout: int = 12000):
+    exchange_name = ExchangeName(exchange_name)
     load_dotenv(ENV_PATH, override=False)
     creds = CredentialStore().effective_exchange(exchange_name)
     config: dict[str, Any] = {
@@ -26,7 +27,8 @@ def build_ccxt_exchange(exchange_name: ExchangeName, exchange_id: str, default_t
     return exchange
 
 
-def apply_modes_from_credentials(exchange, exchange_name: ExchangeName) -> None:
+def apply_modes_from_credentials(exchange, exchange_name: ExchangeName | str) -> None:
+    exchange_name = ExchangeName(exchange_name)
     load_dotenv(ENV_PATH, override=False)
     creds = CredentialStore().effective_exchange(exchange_name)
     _apply_exchange_modes(exchange, exchange_name, creds.use_testnet, creds.use_demo)

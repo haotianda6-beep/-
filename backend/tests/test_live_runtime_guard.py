@@ -1,6 +1,7 @@
 from decimal import Decimal
+from datetime import datetime, timezone
 
-from app.core.models import ExchangeName, PositionSnapshot
+from app.core.models import ExchangeBalance, ExchangeName, PositionSnapshot
 from app.services.cash_carry_executor import CashCarryExecutor
 from app.services.cross_spread_executor import CrossSpreadExecutor
 from app.services.live_read import LiveAccountSnapshot
@@ -18,6 +19,7 @@ def test_runtime_open_guard_blocks_until_account_is_clean(tmp_path) -> None:
 def test_runtime_open_guard_blocks_when_live_position_is_untracked(tmp_path) -> None:
     runtime = _runtime(tmp_path)
     runtime._account = LiveAccountSnapshot(
+        balances=[_balance(ExchangeName.GATE)],
         positions=[
             PositionSnapshot(
                 exchange=ExchangeName.GATE,
@@ -40,6 +42,7 @@ def test_runtime_open_guard_allows_single_exchange_strategies_on_other_exchanges
     state.write_text('{"positions":[{"exchange":"GATE","symbol":"ABCUSDT","status":"mismatch"}]}', encoding="utf-8")
     runtime = _runtime(tmp_path, cash_executor=CashCarryExecutor(state))
     runtime._account = LiveAccountSnapshot(
+        balances=[_balance(ExchangeName.GATE), _balance(ExchangeName.BYBIT)],
         positions=[
             PositionSnapshot(
                 exchange=ExchangeName.GATE,
@@ -69,7 +72,7 @@ def test_runtime_open_guard_blocks_when_cross_state_is_active(tmp_path) -> None:
         encoding="utf-8",
     )
     runtime = _runtime(tmp_path, cross_executor=CrossSpreadExecutor(state))
-    runtime._account = LiveAccountSnapshot()
+    runtime._account = LiveAccountSnapshot(balances=[_balance(ExchangeName.BINANCE), _balance(ExchangeName.OKX)])
 
     assert runtime._auto_open_allowed(STRATEGY_CROSS) is True
     assert runtime._auto_open_allowed(STRATEGY_CASH) is False
@@ -85,6 +88,7 @@ def test_runtime_single_exchange_lock_combines_forward_and_reverse(tmp_path) -> 
     )
     runtime = _runtime(tmp_path, cash_executor=CashCarryExecutor(cash_state), reverse_executor=ReverseCashCarryExecutor(reverse_state))
     runtime._account = LiveAccountSnapshot(
+        balances=[_balance(ExchangeName.GATE), _balance(ExchangeName.BYBIT), _balance(ExchangeName.OKX)],
         positions=[
             _position(ExchangeName.GATE, "ABCUSDT"),
             _position(ExchangeName.BYBIT, "XYZUSDT"),
@@ -100,9 +104,21 @@ def test_runtime_single_exchange_lock_combines_forward_and_reverse(tmp_path) -> 
 
 def test_runtime_open_guard_allows_when_no_active_position(tmp_path) -> None:
     runtime = _runtime(tmp_path)
-    runtime._account = LiveAccountSnapshot()
+    runtime._account = LiveAccountSnapshot(balances=[_balance(ExchangeName.BYBIT)])
 
     assert runtime._auto_open_allowed(STRATEGY_CASH) is True
+
+
+def test_runtime_single_exchange_open_ignores_unrelated_account_issue(tmp_path) -> None:
+    runtime = _runtime(tmp_path)
+    runtime._account = LiveAccountSnapshot(
+        balances=[_balance(ExchangeName.BYBIT)],
+        issues=["OKX: 接口临时异常"],
+    )
+
+    assert runtime._auto_open_allowed(STRATEGY_REVERSE) is True
+    assert runtime._auto_open_allowed(STRATEGY_CROSS) is False
+    assert runtime._allowed_single_exchange_open_exchanges() == {ExchangeName.BYBIT}
 
 
 def _runtime(tmp_path, cash_executor=None, cross_executor=None, reverse_executor=None) -> LiveRuntimeCache:
@@ -120,6 +136,10 @@ def _runtime(tmp_path, cash_executor=None, cross_executor=None, reverse_executor
 
 def _position(exchange: ExchangeName, symbol: str) -> PositionSnapshot:
     return PositionSnapshot(exchange=exchange, symbol=symbol, side="short", quantity=Decimal("1"), entry_price=Decimal("100"), mark_price=Decimal("101"), leverage=Decimal("2"), unrealized_pnl=Decimal("0"))
+
+
+def _balance(exchange: ExchangeName) -> ExchangeBalance:
+    return ExchangeBalance(exchange=exchange, equity_usdt=Decimal("1000"), available_usdt=Decimal("1000"), margin_used_usdt=Decimal("0"), updated_at=datetime.now(timezone.utc))
 
 
 class _LiveRead:

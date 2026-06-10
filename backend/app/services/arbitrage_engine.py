@@ -1,6 +1,6 @@
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from itertools import permutations
 
@@ -227,7 +227,7 @@ class ArbitrageEngine:
         for result in recent_execution_results():
             if result["status"] not in {"failed", "blocked_by_safety_gate"}:
                 continue
-            if self._stale_cash_carry_result(result, cash_carry_positions or []):
+            if self._stale_execution_result(result, cash_carry_positions or []):
                 continue
             events.append(RiskEvent(id=f"execution-{result['strategy_id']}", severity="warning", title=f"{result['title']}未完成", detail=result["reason"], action="按失败原因补齐交易所 API 权限、账户资金或关闭对应自动步骤后再重试。", created_at=now))
         if settings.reverse_cash_carry_enabled:
@@ -239,6 +239,9 @@ class ArbitrageEngine:
             events.append(RiskEvent(id="emergency-close", severity="critical", title="紧急平仓开关已打开", detail="系统应停止新开仓并准备执行保护性平仓。", action="检查持仓并人工确认。", created_at=now))
         return events
 
+    def _stale_execution_result(self, result: dict[str, str], rows: list[CashCarryPositionRow]) -> bool:
+        return self._stale_cash_carry_result(result, rows) or self._expired_borrow_pool_result(result)
+
     def _stale_cash_carry_result(self, result: dict[str, str], rows: list[CashCarryPositionRow]) -> bool:
         if result.get("strategy_id") != "cash-carry":
             return False
@@ -248,6 +251,21 @@ class ArbitrageEngine:
             if row.status == "matched" and exchange in reason and row.symbol in reason:
                 return True
         return False
+
+    def _expired_borrow_pool_result(self, result: dict[str, str]) -> bool:
+        if result.get("strategy_id") != "reverse-cash-carry":
+            return False
+        reason = result.get("reason", "")
+        if "借币资金池不足" not in reason:
+            return False
+        at = result.get("at")
+        if not at:
+            return False
+        try:
+            happened_at = datetime.fromisoformat(at.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        return datetime.now(timezone.utc) - happened_at > timedelta(minutes=20)
 
     def _strategy_switches(self, settings: BotSettings) -> dict[str, object]:
         switches = {"cross_auto_open": settings.auto_open_enabled, "cross_auto_close": settings.auto_close_enabled, "cash_carry_auto_open": settings.cash_carry_auto_open_enabled, "cash_carry_auto_trade": settings.cash_carry_auto_trade_enabled, "cash_carry_auto_close": settings.cash_carry_auto_close_enabled, "reverse_cash_carry_auto_open": settings.reverse_cash_carry_auto_open_enabled, "reverse_cash_carry_auto_close": settings.reverse_cash_carry_auto_close_enabled, "mt4_spread_enabled": settings.mt4_spread_enabled, "manual_confirm_required": settings.manual_confirm_required}

@@ -186,7 +186,7 @@ async def _snapshot() -> RealtimeSnapshot:
 
 
 async def _runtime():
-    settings = await run_in_threadpool(engine.settings_store.load)
-    if not await run_in_threadpool(engine.live_read.live_data_enabled):
+    settings = engine.settings_store.load()
+    if not engine.live_read.live_data_enabled():
         return settings, None
-    return settings, await run_in_threadpool(engine.live_runtime.get, settings)
+    return settings, engine.live_runtime.get(settings)

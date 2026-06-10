@@ -1,5 +1,5 @@
 from decimal import Decimal
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.core.models import BotSettings, CashCarryPositionRow, ExchangeName, OpportunityCandidate
 from app.services.asset_identity import MarketAsset
@@ -112,6 +112,20 @@ def test_matched_cash_carry_position_suppresses_stale_execution_warning(tmp_path
     events = engine.get_risk_events(BotSettings(), cash_carry_positions=[_cash_position()])
 
     assert all("数量不一致" not in item.detail for item in events)
+
+
+def test_expired_borrow_pool_failure_is_not_reported_as_current_risk(tmp_path, monkeypatch) -> None:
+    store = SettingsStore(tmp_path / "settings.json")
+    engine = ArbitrageEngine(store)
+    old_at = (datetime.now(timezone.utc) - timedelta(minutes=25)).isoformat()
+    monkeypatch.setattr(
+        "app.services.arbitrage_engine.recent_execution_results",
+        lambda: [{"strategy_id": "reverse-cash-carry", "title": "反向期现执行器", "status": "failed", "reason": "BYBIT 借币资金池不足", "at": old_at}],
+    )
+
+    events = engine.get_risk_events(BotSettings())
+
+    assert all("借币资金池不足" not in item.detail for item in events)
 
 
 def _market_data(exchange: ExchangeName, price_key: str, price: str, swap_asset: MarketAsset) -> ExchangeMarketData:

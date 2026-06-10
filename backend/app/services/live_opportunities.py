@@ -22,8 +22,9 @@ class LiveOpportunityScanner:
         self._funding_cache: dict[ExchangeName, tuple[datetime, dict[str, Decimal]]] = {}
 
     def scan(self, settings: BotSettings) -> LiveOpportunityScan:
-        with ThreadPoolExecutor(max_workers=len(list(ExchangeName))) as executor:
-            data = list(executor.map(self._load_exchange_data, list(ExchangeName)))
+        exchanges = list(ExchangeName)
+        with ThreadPoolExecutor(max_workers=min(3, len(exchanges))) as executor:
+            data = list(executor.map(self._load_exchange_data, exchanges))
         issues = [issue for item in data for issue in item.issues]
         by_exchange = {item.exchange: item for item in data}
         candidates: list[tuple[Opportunity, list[str]]] = []

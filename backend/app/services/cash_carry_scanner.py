@@ -48,7 +48,7 @@ class CashCarryScanner:
         if not settings.cash_carry_enabled:
             return CashCarryScan()
         exchanges = [exchange for exchange in ExchangeName if exchange not in set(settings.exchange_blacklist)]
-        with ThreadPoolExecutor(max_workers=max(1, len(exchanges))) as executor:
+        with ThreadPoolExecutor(max_workers=max(1, min(3, len(exchanges)))) as executor:
             data = list(executor.map(self._load_exchange_data, exchanges))
         checked = [
             item

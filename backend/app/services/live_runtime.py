@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ MT4_SCAN_SECONDS = 5.0
 STRATEGY_CROSS = "cross_spread"
 STRATEGY_CASH = "cash_carry"
 STRATEGY_REVERSE = "reverse_cash_carry"
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -74,7 +76,7 @@ class LiveRuntimeCache:
         self._settings = BotSettings()
         self._lock = threading.Lock()
         self._execution_lock = threading.Lock()
-        self._full_scan_lock = threading.Lock()
+        self._full_scan_slots = threading.BoundedSemaphore(1)
         self._started = False
 
     def get(self, settings: BotSettings) -> LiveRuntimeSnapshot:
@@ -122,8 +124,9 @@ class LiveRuntimeCache:
             with self._lock:
                 current = self._scan
             if last_full_scan == 0.0 or now - last_full_scan >= FULL_SCAN_INTERVAL_SECONDS:
-                result = self._run_full_scan(lambda: self.scanner.scan(self._settings), current)
-                last_full_scan = time.monotonic()
+                result, completed = self._run_full_scan(lambda: self.scanner.scan(self._settings), current)
+                if completed:
+                    last_full_scan = time.monotonic()
             else:
                 result = self.refresher.refresh(current, self._settings)
             with self._lock:
@@ -142,9 +145,10 @@ class LiveRuntimeCache:
             if last_full_scan == 0.0 or now - last_full_scan >= FULL_SCAN_INTERVAL_SECONDS:
                 with self._lock:
                     current = self._cash_carry
-                result = self._run_full_scan(lambda: self.cash_carry_scanner.scan(self._settings), current)
-                last_full_scan = time.monotonic()
-                self._subscribe_cash_carry(result, self.cash_carry_scanner)
+                result, completed = self._run_full_scan(lambda: self.cash_carry_scanner.scan(self._settings), current)
+                if completed:
+                    last_full_scan = time.monotonic()
+                    self._subscribe_cash_carry(result, self.cash_carry_scanner)
             else:
                 with self._lock:
                     current = self._cash_carry
@@ -165,9 +169,10 @@ class LiveRuntimeCache:
             if last_full_scan == 0.0 or now - last_full_scan >= FULL_SCAN_INTERVAL_SECONDS:
                 with self._lock:
                     current = self._reverse_cash_carry
-                result = self._run_full_scan(lambda: self.reverse_cash_carry_scanner.scan(self._settings), current)
-                last_full_scan = time.monotonic()
-                self._subscribe_cash_carry(result, self.reverse_cash_carry_scanner)
+                result, completed = self._run_full_scan(lambda: self.reverse_cash_carry_scanner.scan(self._settings), current)
+                if completed:
+                    last_full_scan = time.monotonic()
+                    self._subscribe_cash_carry(result, self.reverse_cash_carry_scanner)
             else:
                 with self._lock:
                     current = self._reverse_cash_carry
@@ -183,10 +188,11 @@ class LiveRuntimeCache:
             if not self.live_read.live_data_enabled():
                 time.sleep(MT4_SCAN_SECONDS)
                 continue
-            opportunities, candidates, issues = self._run_full_scan(
+            result, _completed = self._run_full_scan(
                 lambda: self.mt4_spread_scanner.scan(self._settings),
                 (self._mt4_spread_opportunities, self._mt4_spread_candidates, self._mt4_spread_issues),
             )
+            opportunities, candidates, issues = result
             with self._lock:
                 self._mt4_spread_opportunities = opportunities
                 self._mt4_spread_candidates = candidates
@@ -194,11 +200,15 @@ class LiveRuntimeCache:
             time.sleep(MT4_SCAN_SECONDS)
 
     def _run_full_scan(self, action, fallback):
-        self._full_scan_lock.acquire()
+        if not self._full_scan_slots.acquire(blocking=False):
+            return fallback, False
         try:
-            return action()
+            return action(), True
+        except Exception as exc:  # noqa: BLE001 - keep background loops alive through exchange/client failures.
+            logger.warning("live full scan failed: %s", str(exc)[:220])
+            return fallback, False
         finally:
-            self._full_scan_lock.release()
+            self._full_scan_slots.release()
 
     def _subscribe_cash_carry(self, scan: CashCarryScan, scanner: CashCarryScanner) -> None:
         for item in [*scan.opportunities, *scan.candidates]:
@@ -211,25 +221,34 @@ class LiveRuntimeCache:
 
     def _execute_cash_carry(self, result: CashCarryScan) -> None:
         rows = result.opportunities + result.candidates
-        positions = self._cash_position_rows(rows)
-        with self._execution_lock:
-            self.cash_carry_executor.evaluate(
-                rows,
-                self._settings,
-                positions,
-                allow_open=self._auto_open_allowed(STRATEGY_CASH),
-                allow_add=self._cash_carry_add_allowed(),
-                allowed_open_exchanges=self._allowed_single_exchange_open_exchanges(),
-            )
+        try:
+            positions = self._cash_position_rows(rows)
+            with self._execution_lock:
+                self.cash_carry_executor.evaluate(
+                    rows,
+                    self._settings,
+                    positions,
+                    allow_open=self._auto_open_allowed(STRATEGY_CASH),
+                    allow_add=self._cash_carry_add_allowed(),
+                    allowed_open_exchanges=self._allowed_single_exchange_open_exchanges(),
+                )
+        except Exception as exc:  # noqa: BLE001 - exchange execution failures must not stop scanning.
+            logger.warning("cash carry execution failed: %s", str(exc)[:220])
 
     def _execute_cross_spread(self, result: LiveOpportunityScan) -> None:
-        with self._execution_lock:
-            self.cross_spread_executor.evaluate(result.opportunities, self._settings, allow_open=self._auto_open_allowed(STRATEGY_CROSS))
+        try:
+            with self._execution_lock:
+                self.cross_spread_executor.evaluate(result.opportunities, self._settings, allow_open=self._auto_open_allowed(STRATEGY_CROSS))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("cross spread execution failed: %s", str(exc)[:220])
 
     def _execute_reverse_cash_carry(self, result: CashCarryScan) -> None:
         rows = result.opportunities + result.candidates
-        with self._execution_lock:
-            self.reverse_cash_carry_executor.evaluate(rows, self._settings, allow_open=self._auto_open_allowed(STRATEGY_REVERSE), allowed_open_exchanges=self._allowed_single_exchange_open_exchanges())
+        try:
+            with self._execution_lock:
+                self.reverse_cash_carry_executor.evaluate(rows, self._settings, allow_open=self._auto_open_allowed(STRATEGY_REVERSE), allowed_open_exchanges=self._allowed_single_exchange_open_exchanges())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("reverse cash carry execution failed: %s", str(exc)[:220])
 
     def _cash_position_rows(self, rows):
         with self._lock:
@@ -238,16 +257,22 @@ class LiveRuntimeCache:
 
     def _auto_open_allowed(self, strategy: str | None = None) -> bool:
         with self._lock:
-            if self._account.issues:
-                return False
+            account_has_issues = bool(self._account.issues)
+            healthy_exchanges = self._healthy_account_exchanges_locked()
             live_positions = list(self._account.positions)
+        if not healthy_exchanges:
+            return False
         if self._has_untracked_live_positions(live_positions):
             return False
         active = self._active_strategy_flags()
         if strategy is None:
+            if account_has_issues:
+                return False
             return not any(active.values())
         if strategy in {STRATEGY_CASH, STRATEGY_REVERSE}:
             return not active[STRATEGY_CROSS]
+        if account_has_issues:
+            return False
         return not any(enabled for name, enabled in active.items() if name != strategy)
 
     def _cash_carry_add_allowed(self) -> bool:
@@ -263,8 +288,13 @@ class LiveRuntimeCache:
     def _allowed_single_exchange_open_exchanges(self) -> set[ExchangeName]:
         if not self._auto_open_allowed(STRATEGY_CASH):
             return set()
+        with self._lock:
+            healthy = self._healthy_account_exchanges_locked()
         used = self.cash_carry_executor.state.active_exchanges() | self.reverse_cash_carry_executor.active_exchanges()
-        return set(ExchangeName) - used
+        return healthy - used
+
+    def _healthy_account_exchanges_locked(self) -> set[ExchangeName]:
+        return {ExchangeName(item.exchange) for item in self._account.balances}
 
     def _has_untracked_live_positions(self, positions) -> bool:
         tracked = self._tracked_live_position_keys()

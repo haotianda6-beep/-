@@ -242,6 +242,7 @@ class ReverseCashCarryExecutor:
         return {"skipped": "exchange does not expose set_leverage"}
 
     def _exchange(self, exchange_name: ExchangeName, default_type: str):
+        exchange_name = ExchangeName(exchange_name)
         exchange_id = SPOT_EXCHANGE_IDS[exchange_name] if default_type == "spot" else SWAP_EXCHANGE_IDS[exchange_name]
         return build_ccxt_exchange(exchange_name, exchange_id, default_type, timeout=12000)
 
