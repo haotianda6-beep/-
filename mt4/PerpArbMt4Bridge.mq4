@@ -11,6 +11,16 @@ input double LotsForSwapEstimate = 1.0;
 input int PushIntervalSeconds = 1;
 input int RequestTimeoutMs = 3000;
 
+void PushSymbols(string symbols, string instrumentType);
+void PushOne(string symbol, string instrumentType);
+string ResolveSymbol(string requested);
+bool SymbolMatches(string requested, string candidate);
+string NormalizeSymbolName(string value);
+string NormalizedChar(int ch);
+int DigitsFor(string symbol);
+string Trim(string value);
+string JsonEscape(string value);
+
 int OnInit()
 {
    EventSetTimer(MathMax(PushIntervalSeconds, 1));
@@ -125,13 +135,24 @@ string NormalizeSymbolName(string value)
    for(int i = 0; i < StringLen(value); i++)
    {
       int ch = StringGetCharacter(value, i);
-      if(ch >= 97 && ch <= 122) ch -= 32;
-      if((ch >= 65 && ch <= 90) || (ch >= 48 && ch <= 57))
-      {
-         result += CharToString((uchar)ch);
-      }
+      string normalized = NormalizedChar(ch);
+      if(normalized != "") result = result + normalized;
    }
    return result;
+}
+
+string NormalizedChar(int ch)
+{
+   if(ch >= 97 && ch <= 122) ch -= 32;
+   if(ch >= 65 && ch <= 90)
+   {
+      return StringSubstr("ABCDEFGHIJKLMNOPQRSTUVWXYZ", ch - 65, 1);
+   }
+   if(ch >= 48 && ch <= 57)
+   {
+      return StringSubstr("0123456789", ch - 48, 1);
+   }
+   return "";
 }
 
 int DigitsFor(string symbol)
