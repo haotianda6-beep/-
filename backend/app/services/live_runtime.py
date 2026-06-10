@@ -77,6 +77,7 @@ class LiveRuntimeCache:
         self._lock = threading.Lock()
         self._execution_lock = threading.Lock()
         self._full_scan_slots = threading.BoundedSemaphore(1)
+        self._mt4_scan_slots = threading.BoundedSemaphore(1)
         self._started = False
 
     def get(self, settings: BotSettings) -> LiveRuntimeSnapshot:
@@ -188,7 +189,8 @@ class LiveRuntimeCache:
             if not self.live_read.live_data_enabled():
                 time.sleep(MT4_SCAN_SECONDS)
                 continue
-            result, _completed = self._run_full_scan(
+            result, _completed = self._run_guarded_scan(
+                self._mt4_scan_slots,
                 lambda: self.mt4_spread_scanner.scan(self._settings),
                 (self._mt4_spread_opportunities, self._mt4_spread_candidates, self._mt4_spread_issues),
             )
@@ -200,7 +202,10 @@ class LiveRuntimeCache:
             time.sleep(MT4_SCAN_SECONDS)
 
     def _run_full_scan(self, action, fallback):
-        if not self._full_scan_slots.acquire(blocking=False):
+        return self._run_guarded_scan(self._full_scan_slots, action, fallback)
+
+    def _run_guarded_scan(self, slot: threading.BoundedSemaphore, action, fallback):
+        if not slot.acquire(blocking=False):
             return fallback, False
         try:
             return action(), True
@@ -208,7 +213,7 @@ class LiveRuntimeCache:
             logger.warning("live full scan failed: %s", str(exc)[:220])
             return fallback, False
         finally:
-            self._full_scan_slots.release()
+            slot.release()
 
     def _subscribe_cash_carry(self, scan: CashCarryScan, scanner: CashCarryScanner) -> None:
         for item in [*scan.opportunities, *scan.candidates]:

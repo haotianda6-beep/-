@@ -6,7 +6,7 @@
 input string BridgeUrl = "https://redzhong.top/api/mt4/quote";
 input string BridgeToken = "";
 input string CommoditySymbols = "XAUUSD,XAGUSD,USOIL,UKOIL,NATGAS";
-input string StockSymbols = "AAPL.NAS,AMZN.NAS,GOOG.NAS,META.NAS,MSFT.NAS,NVDA.NAS,TSLA.NAS";
+input string StockSymbols = "AAPL.NAS,AMZN.NAS,BA.NYS,BABA.NYS,BIDU.NAS,C.NYS,GILD.NAS,GOOG.NAS,IBM.NYS,JD.NAS,KO.NYS,MCD.NYS,META.NAS,MSFT.NAS,NFLX.NAS,NKE.NYS,NTES.NAS,NVDA.NAS,SBUX.NAS,TSLA.NAS,V.NYS";
 input double LotsForSwapEstimate = 1.0;
 input int PushIntervalSeconds = 1;
 input int RequestTimeoutMs = 3000;

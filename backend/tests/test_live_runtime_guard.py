@@ -121,6 +121,19 @@ def test_runtime_single_exchange_open_ignores_unrelated_account_issue(tmp_path) 
     assert runtime._allowed_single_exchange_open_exchanges() == {ExchangeName.BYBIT}
 
 
+def test_mt4_scan_uses_independent_slot(tmp_path) -> None:
+    runtime = _runtime(tmp_path)
+    assert runtime._full_scan_slots.acquire(blocking=False) is True
+
+    try:
+        result, completed = runtime._run_guarded_scan(runtime._mt4_scan_slots, lambda: "mt4-ok", "fallback")
+    finally:
+        runtime._full_scan_slots.release()
+
+    assert completed is True
+    assert result == "mt4-ok"
+
+
 def _runtime(tmp_path, cash_executor=None, cross_executor=None, reverse_executor=None) -> LiveRuntimeCache:
     return LiveRuntimeCache(
         _LiveRead(),

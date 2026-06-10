@@ -185,6 +185,7 @@ class Mt4SpreadScanner:
         self.quote_store = quote_store or Mt4QuoteStore()
         self._market_cache: dict[ExchangeName, tuple[datetime, dict[str, str]]] = {}
         self._funding_cache: dict[ExchangeName, tuple[datetime, dict[str, Decimal]]] = {}
+        self._okx_market_objects: tuple[datetime, list[dict[str, Any]]] | None = None
 
     def scan(self, settings: BotSettings) -> tuple[list[Mt4SpreadOpportunity], list[Mt4SpreadOpportunity], list[str]]:
         if not settings.mt4_spread_enabled:
@@ -195,26 +196,39 @@ class Mt4SpreadScanner:
         if not quotes and stale:
             issues.append("MT4 报价已过期，等待插件继续推送。")
         rows: list[Mt4SpreadOpportunity] = []
-        for quote in quotes:
-            for exchange in ExchangeName:
-                rows.extend(self._exchange_rows(exchange, quote, settings, issues))
+        for exchange in ExchangeName:
+            rows.extend(self._exchange_rows_for_quotes(exchange, quotes, settings, issues))
         opportunities = [item for item in rows if not item.blocked_reasons]
         candidates = sorted(rows, key=lambda item: (len(item.blocked_reasons), -item.estimated_net_profit))[:50]
         return sorted(opportunities, key=lambda item: item.estimated_net_profit, reverse=True), candidates, issues
 
     def _exchange_rows(self, exchange: ExchangeName, quote: Mt4Quote, settings: BotSettings, issues: list[str]) -> list[Mt4SpreadOpportunity]:
+        return self._exchange_rows_for_quotes(exchange, [quote], settings, issues)
+
+    def _exchange_rows_for_quotes(self, exchange: ExchangeName, quotes: list[Mt4Quote], settings: BotSettings, issues: list[str]) -> list[Mt4SpreadOpportunity]:
+        if not quotes:
+            return []
         try:
             instance = self._exchange(exchange)
             markets = self._markets(exchange, instance)
-            symbol = self._mapped_symbol(quote.symbol, markets)
-            if not symbol:
-                return [self._blocked_missing_market(exchange, quote, settings)]
-            ticker = instance.fetch_ticker(markets[symbol])
-            funding = self._funding(exchange, instance).get(symbol, Decimal("0"))
-            return [self._row(exchange, quote, symbol, ticker, funding, settings)]
+            funding = self._funding(exchange, instance)
         except Exception as exc:  # noqa: BLE001
             issues.append(f"{exchange}: MT4 对比合约行情读取失败 {str(exc)[:180]}")
             return []
+
+        rows: list[Mt4SpreadOpportunity] = []
+        for quote in quotes:
+            symbol = self._mapped_symbol(quote.symbol, markets)
+            if not symbol:
+                rows.append(self._blocked_missing_market(exchange, quote, settings))
+                continue
+            try:
+                ticker = instance.fetch_ticker(markets[symbol])
+            except Exception as exc:  # noqa: BLE001
+                issues.append(f"{exchange} {quote.symbol}: MT4 对比合约行情读取失败 {str(exc)[:160]}")
+                continue
+            rows.append(self._row(exchange, quote, symbol, ticker, funding.get(symbol, Decimal("0")), settings))
+        return rows
 
     def _row(
         self,
@@ -311,8 +325,10 @@ class Mt4SpreadScanner:
         now = datetime.now(timezone.utc)
         cached = self._market_cache.get(exchange_name)
         if cached and (now - cached[0]).total_seconds() < 600:
+            if exchange_name == ExchangeName.OKX:
+                self._load_markets(exchange_name, exchange)
             return cached[1]
-        raw = exchange.load_markets()
+        raw = self._load_markets(exchange_name, exchange)
         markets = {}
         for market in raw.values():
             if not market.get("swap") or market.get("quote") != "USDT" or market.get("active") is False:
@@ -320,6 +336,20 @@ class Mt4SpreadScanner:
             markets[normalized_market_symbol(market)] = market["symbol"]
         self._market_cache[exchange_name] = (now, markets)
         return markets
+
+    def _load_markets(self, exchange_name: ExchangeName, exchange) -> dict[str, Any]:
+        if exchange_name != ExchangeName.OKX:
+            return exchange.load_markets()
+        now = datetime.now(timezone.utc)
+        cached = self._okx_market_objects
+        if cached and (now - cached[0]).total_seconds() < 600:
+            exchange.set_markets(cached[1])
+            return exchange.markets
+        raw = exchange.fetch_markets({"instType": "SWAP"})
+        cleaned = [market for market in raw if market.get("id") and market.get("symbol")]
+        exchange.set_markets(cleaned)
+        self._okx_market_objects = (now, cleaned)
+        return exchange.markets
 
     def _funding(self, exchange_name: ExchangeName, exchange) -> dict[str, Decimal]:
         now = datetime.now(timezone.utc)

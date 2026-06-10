@@ -84,6 +84,20 @@ def test_mt4_quote_store_maps_google_nasdaq_symbol_to_exchange_alias(tmp_path) -
     assert opportunities[0].exchange_symbol == "GOOGLUSDT"
 
 
+def test_mt4_scanner_cleans_okx_markets_with_empty_symbols() -> None:
+    scanner = Mt4SpreadScanner()
+    first = _OkxMarketExchange()
+    markets = scanner._markets(ExchangeName.OKX, first)
+    second = _OkxMarketExchange()
+    cached_markets = scanner._markets(ExchangeName.OKX, second)
+
+    assert markets == {"AAPLUSDT": "AAPL/USDT:USDT"}
+    assert cached_markets == markets
+    assert first.fetch_count == 1
+    assert second.fetch_count == 0
+    assert second.markets == {"AAPL/USDT:USDT": {"id": "AAPL-USDT-SWAP", "symbol": "AAPL/USDT:USDT", "base": "AAPL", "quote": "USDT", "swap": True, "active": True}}
+
+
 class _Scanner(Mt4SpreadScanner):
     def _exchange(self, exchange_name):
         return _Exchange()
@@ -111,3 +125,20 @@ class _GoogleScanner(_Scanner):
 
     def _funding(self, exchange_name, exchange):
         return {"GOOGLUSDT": Decimal("0.0002")}
+
+
+class _OkxMarketExchange:
+    def __init__(self) -> None:
+        self.markets = {}
+        self.fetch_count = 0
+
+    def fetch_markets(self, params):
+        self.fetch_count += 1
+        assert params == {"instType": "SWAP"}
+        return [
+            {"id": None, "symbol": None, "swap": False, "quote": "", "active": False},
+            {"id": "AAPL-USDT-SWAP", "symbol": "AAPL/USDT:USDT", "base": "AAPL", "quote": "USDT", "swap": True, "active": True},
+        ]
+
+    def set_markets(self, markets):
+        self.markets = {market["symbol"]: market for market in markets}

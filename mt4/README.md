@@ -9,7 +9,7 @@
    - `BridgeUrl`: `https://redzhong.top/api/mt4/quote`
    - `BridgeToken`: 与服务器 `.env` 里的 `MT4_BRIDGE_TOKEN` 保持一致
    - `CommoditySymbols`: 大宗商品符号，按你的 MT4 券商实际符号填写
-   - `StockSymbols`: 美股个股符号，按你的 MT4 券商实际符号填写
+   - `StockSymbols`: 美股个股符号，默认包含 `AAPL.NAS,AMZN.NAS,BA.NYS,BABA.NYS,BIDU.NAS,C.NYS,GILD.NAS,GOOG.NAS,IBM.NYS,JD.NAS,KO.NYS,MCD.NYS,META.NAS,MSFT.NAS,NFLX.NAS,NKE.NYS,NTES.NAS,NVDA.NAS,SBUX.NAS,TSLA.NAS,V.NYS`，可按你的 MT4 券商实际符号调整
    - `PushIntervalSeconds`: 默认 1 秒
 
 注意：不同 MT4 券商的符号可能带后缀，例如 `XAUUSD.m`、`AAPL.cash`。后端会去掉非字母数字字符并转大写，但交易所合约映射仍需要确认实际名称。
