@@ -38,8 +38,8 @@ async def realtime_socket(websocket: WebSocket) -> None:
     await websocket.accept()
     try:
         while True:
-            snapshot = await asyncio.to_thread(engine.snapshot)
-            await websocket.send_text(snapshot.model_dump_json())
+            payload = await asyncio.to_thread(lambda: engine.snapshot().model_dump_json())
+            await websocket.send_text(payload)
             await asyncio.sleep(0.5)
     except WebSocketDisconnect:
         return
