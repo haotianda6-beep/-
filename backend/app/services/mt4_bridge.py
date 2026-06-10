@@ -95,8 +95,9 @@ class Mt4QuoteStore:
         return [quote for quote in (self._parse(item) for item in self._read().values()) if quote]
 
     def _quote(self, payload: Mt4QuoteIn) -> Mt4Quote:
-        symbol = normalize_mt4_symbol(payload.symbol)
-        instrument = instrument_info(symbol, payload.instrument_type)
+        raw_symbol = normalize_mt4_symbol(payload.symbol)
+        instrument = instrument_info(raw_symbol, payload.instrument_type)
+        symbol = str(instrument.get("symbol") or raw_symbol)
         tick_size = payload.tick_size if payload.tick_size > 0 else Decimal("0.01")
         overnight_long = payload.overnight_long_usdt
         overnight_short = payload.overnight_short_usdt
@@ -337,10 +338,20 @@ def normalize_mt4_symbol(symbol: str) -> str:
 
 def instrument_info(symbol: str, fallback_type: str | None = None) -> dict[str, Any]:
     normalized = normalize_mt4_symbol(symbol)
-    info = _configured_instruments().get(normalized) or DEFAULT_INSTRUMENTS.get(normalized)
+    info = _configured_instruments().get(normalized) or _default_instrument(normalized)
     if info:
         return info
-    return {"type": fallback_type or "commodity", "aliases": [normalized, f"{normalized}USDT"]}
+    return {"symbol": normalized, "type": fallback_type or "commodity", "aliases": [normalized, f"{normalized}USDT"]}
+
+
+def _default_instrument(normalized: str) -> dict[str, Any] | None:
+    direct = DEFAULT_INSTRUMENTS.get(normalized)
+    if direct:
+        return {"symbol": normalized, **direct}
+    for base in sorted(DEFAULT_INSTRUMENTS, key=len, reverse=True):
+        if normalized.startswith(base) or normalized.endswith(base):
+            return {"symbol": base, **DEFAULT_INSTRUMENTS[base]}
+    return None
 
 
 def _configured_instruments() -> dict[str, dict[str, Any]]:
@@ -357,6 +368,7 @@ def _configured_instruments() -> dict[str, dict[str, Any]]:
         normalized = normalize_mt4_symbol(symbol)
         aliases = [normalize_mt4_symbol(str(value)) for value in item.get("aliases", []) if value]
         result[normalized] = {
+            "symbol": normalize_mt4_symbol(str(item.get("symbol") or normalized)),
             "type": item.get("type") if item.get("type") in {"stock", "commodity"} else "commodity",
             "aliases": aliases or [normalized, f"{normalized}USDT"],
         }

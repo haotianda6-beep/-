@@ -56,6 +56,22 @@ def test_mt4_spread_scanner_builds_candidate_with_funding_and_overnight(tmp_path
     assert candidates
 
 
+def test_mt4_quote_store_maps_stock_symbols_with_broker_suffix(tmp_path) -> None:
+    store = Mt4QuoteStore(tmp_path / "quotes.json")
+
+    quote = store.update(
+        Mt4QuoteIn(
+            symbol="AAPL.cash",
+            bid=Decimal("100"),
+            ask=Decimal("100.1"),
+            instrument_type="stock",
+        )
+    )
+
+    assert quote.symbol == "AAPL"
+    assert store.quotes(Decimal("10"))[0].symbol == "AAPL"
+
+
 class _Scanner(Mt4SpreadScanner):
     def _exchange(self, exchange_name):
         return _Exchange()

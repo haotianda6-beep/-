@@ -43,32 +43,33 @@ void PushSymbols(string symbols, string instrumentType)
 
 void PushOne(string symbol, string instrumentType)
 {
-   if(!SymbolSelect(symbol, true))
+   string actualSymbol = ResolveSymbol(symbol);
+   if(actualSymbol == "")
    {
       Print("SymbolSelect failed: ", symbol);
       return;
    }
 
    RefreshRates();
-   double bid = MarketInfo(symbol, MODE_BID);
-   double ask = MarketInfo(symbol, MODE_ASK);
+   double bid = MarketInfo(actualSymbol, MODE_BID);
+   double ask = MarketInfo(actualSymbol, MODE_ASK);
    if(bid <= 0 || ask <= 0)
    {
-      Print("Invalid quote: ", symbol, " bid=", bid, " ask=", ask);
+      Print("Invalid quote: ", actualSymbol, " bid=", bid, " ask=", ask);
       return;
    }
 
-   double contractSize = MarketInfo(symbol, MODE_LOTSIZE);
-   double tickValue = MarketInfo(symbol, MODE_TICKVALUE);
-   double tickSize = MarketInfo(symbol, MODE_TICKSIZE);
-   double swapLong = MarketInfo(symbol, MODE_SWAPLONG);
-   double swapShort = MarketInfo(symbol, MODE_SWAPSHORT);
+   double contractSize = MarketInfo(actualSymbol, MODE_LOTSIZE);
+   double tickValue = MarketInfo(actualSymbol, MODE_TICKVALUE);
+   double tickSize = MarketInfo(actualSymbol, MODE_TICKSIZE);
+   double swapLong = MarketInfo(actualSymbol, MODE_SWAPLONG);
+   double swapShort = MarketInfo(actualSymbol, MODE_SWAPSHORT);
 
    string body = "{"
-      + "\"symbol\":\"" + JsonEscape(symbol) + "\","
+      + "\"symbol\":\"" + JsonEscape(actualSymbol) + "\","
       + "\"instrument_type\":\"" + instrumentType + "\","
-      + "\"bid\":" + DoubleToString(bid, DigitsFor(symbol)) + ","
-      + "\"ask\":" + DoubleToString(ask, DigitsFor(symbol)) + ","
+      + "\"bid\":" + DoubleToString(bid, DigitsFor(actualSymbol)) + ","
+      + "\"ask\":" + DoubleToString(ask, DigitsFor(actualSymbol)) + ","
       + "\"contract_size\":" + DoubleToString(contractSize, 8) + ","
       + "\"lots\":" + DoubleToString(LotsForSwapEstimate, 4) + ","
       + "\"tick_value\":" + DoubleToString(tickValue, 8) + ","
@@ -87,8 +88,50 @@ void PushOne(string symbol, string instrumentType)
    int status = WebRequest("POST", BridgeUrl, headers, RequestTimeoutMs, post, result, resultHeaders);
    if(status < 200 || status >= 300)
    {
-      Print("Bridge push failed: ", symbol, " status=", status, " error=", GetLastError());
+      Print("Bridge push failed: ", actualSymbol, " status=", status, " error=", GetLastError());
    }
+}
+
+string ResolveSymbol(string requested)
+{
+   if(SymbolSelect(requested, true)) return requested;
+
+   int total = SymbolsTotal(false);
+   for(int i = 0; i < total; i++)
+   {
+      string candidate = SymbolName(i, false);
+      if(SymbolMatches(requested, candidate) && SymbolSelect(candidate, true))
+      {
+         Print("Resolved symbol: ", requested, " -> ", candidate);
+         return candidate;
+      }
+   }
+   return "";
+}
+
+bool SymbolMatches(string requested, string candidate)
+{
+   string target = NormalizeSymbolName(requested);
+   string actual = NormalizeSymbolName(candidate);
+   if(actual == target) return true;
+   if(StringFind(actual, target) == 0) return true;
+   int pos = StringFind(actual, target);
+   return pos >= 0 && pos + StringLen(target) == StringLen(actual);
+}
+
+string NormalizeSymbolName(string value)
+{
+   string result = "";
+   for(int i = 0; i < StringLen(value); i++)
+   {
+      int ch = StringGetCharacter(value, i);
+      if(ch >= 97 && ch <= 122) ch -= 32;
+      if((ch >= 65 && ch <= 90) || (ch >= 48 && ch <= 57))
+      {
+         result += CharToString((uchar)ch);
+      }
+   }
+   return result;
 }
 
 int DigitsFor(string symbol)
