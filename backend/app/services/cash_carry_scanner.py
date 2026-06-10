@@ -1,0 +1,346 @@
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any
+
+from app.core.market_math import FEE_RATES, q
+from app.core.models import BotSettings, CashCarryOpportunity, DataSource, ExchangeName
+from app.core.pnl import calculate_spread_pct
+from app.services.asset_identity import MarketAsset, asset_from_market, local_identity_reasons
+from app.services.cash_carry_depth_estimator import estimate_max_safe_notional
+from app.services.exchange_factory import build_ccxt_exchange
+from app.services.live_market_types import CashCarryScan, SPOT_EXCHANGE_IDS, SWAP_EXCHANGE_IDS
+from app.services.live_read import decimal_from
+from app.services.market_format import normalize_ccxt_symbol, normalized_market_symbol, quote_volume
+
+
+@dataclass(frozen=True)
+class TradeMarket:
+    symbol: str
+    ccxt_symbol: str
+    taker_fee: Decimal
+    asset: MarketAsset
+    is_pre_market: bool = False
+    deposit_enabled: bool | None = None
+    withdraw_enabled: bool | None = None
+
+
+@dataclass
+class CashCarryExchangeData:
+    exchange: ExchangeName
+    spot_exchange: Any | None = None
+    swap_exchange: Any | None = None
+    spot_markets: dict[str, TradeMarket] = field(default_factory=dict)
+    swap_markets: dict[str, TradeMarket] = field(default_factory=dict)
+    spot_tickers: dict[str, dict[str, Any]] = field(default_factory=dict)
+    swap_tickers: dict[str, dict[str, Any]] = field(default_factory=dict)
+    funding_rates: dict[str, Decimal] = field(default_factory=dict)
+    issues: list[str] = field(default_factory=list)
+
+
+class CashCarryScanner:
+    def __init__(self) -> None:
+        self._market_cache: dict[ExchangeName, tuple[datetime, dict[str, TradeMarket], dict[str, TradeMarket]]] = {}
+        self._funding_cache: dict[ExchangeName, tuple[datetime, dict[str, Decimal]]] = {}
+
+    def scan(self, settings: BotSettings) -> CashCarryScan:
+        if not settings.cash_carry_enabled:
+            return CashCarryScan()
+        exchanges = [exchange for exchange in ExchangeName if exchange not in set(settings.exchange_blacklist)]
+        with ThreadPoolExecutor(max_workers=max(1, len(exchanges))) as executor:
+            data = list(executor.map(self._load_exchange_data, exchanges))
+        checked = [
+            item
+            for exchange_data in data
+            for item in self._exchange_opportunities(exchange_data, settings)
+        ]
+        opportunities = [item for item in checked if not item.blocked_reasons]
+        candidates = sorted(checked, key=lambda item: (len(item.blocked_reasons), -item.estimated_net_profit))[:50]
+        return CashCarryScan(
+            opportunities=sorted(opportunities, key=lambda item: item.estimated_net_profit, reverse=True),
+            candidates=candidates,
+            issues=[issue for item in data for issue in item.issues],
+        )
+
+    def _load_exchange_data(self, exchange_name: ExchangeName) -> CashCarryExchangeData:
+        result = CashCarryExchangeData(exchange=exchange_name)
+        try:
+            spot_exchange = self._build_exchange(exchange_name, SPOT_EXCHANGE_IDS[exchange_name], "spot")
+            swap_exchange = self._build_exchange(exchange_name, SWAP_EXCHANGE_IDS[exchange_name], "swap")
+            result.spot_exchange = spot_exchange
+            result.swap_exchange = swap_exchange
+            result.spot_markets, result.swap_markets = self._get_cached_markets(exchange_name, spot_exchange, swap_exchange, result.issues)
+            result.spot_tickers = self._fetch_tickers(spot_exchange, result.spot_markets, exchange_name, "现货", result.issues)
+            result.swap_tickers = self._fetch_tickers(swap_exchange, result.swap_markets, exchange_name, "合约", result.issues)
+            result.funding_rates = self._fetch_funding_rates(swap_exchange, result.swap_markets, exchange_name, result.issues)
+        except Exception as exc:  # noqa: BLE001
+            result.issues.append(f"{exchange_name}: 期现行情读取失败 {str(exc)[:220]}")
+        return result
+
+    def _build_exchange(self, exchange_name: ExchangeName, exchange_id: str, default_type: str):
+        return build_ccxt_exchange(exchange_name, exchange_id, default_type, timeout=12000)
+
+    def _get_cached_markets(self, exchange_name: ExchangeName, spot_exchange, swap_exchange, issues: list[str]):
+        now = datetime.now(timezone.utc)
+        cached = self._market_cache.get(exchange_name)
+        if cached and (now - cached[0]).total_seconds() < 600:
+            return cached[1], cached[2]
+        spots = self._extract_markets(spot_exchange.load_markets(), "spot")
+        swaps = self._extract_markets(swap_exchange.load_markets(), "swap")
+        self._apply_spot_transfer_statuses(spots, spot_exchange, exchange_name, issues)
+        self._market_cache[exchange_name] = (now, spots, swaps)
+        return spots, swaps
+
+    def market_pair(self, exchange_name: ExchangeName, symbol: str) -> tuple[TradeMarket | None, TradeMarket | None]:
+        cached = self._market_cache.get(exchange_name)
+        if not cached:
+            return None, None
+        return cached[1].get(symbol), cached[2].get(symbol)
+
+    def _extract_markets(self, markets: dict[str, Any], market_type: str) -> dict[str, TradeMarket]:
+        result: dict[str, TradeMarket] = {}
+        for market in markets.values():
+            if not market.get(market_type) or market.get("quote") != "USDT" or market.get("active") is False:
+                continue
+            if market_type == "swap" and market.get("settle") not in (None, "USDT"):
+                continue
+            symbol = normalized_market_symbol(market)
+            taker = decimal_from(market.get("taker"), "0")
+            pre_market = self._is_pre_market(market) if market_type == "swap" else False
+            result[symbol] = TradeMarket(symbol=symbol, ccxt_symbol=market["symbol"], taker_fee=taker, asset=asset_from_market(market), is_pre_market=pre_market)
+        return result
+
+    def _apply_spot_transfer_statuses(
+        self,
+        spots: dict[str, TradeMarket],
+        spot_exchange,
+        exchange_name: ExchangeName,
+        issues: list[str],
+    ) -> None:
+        if not spot_exchange.has.get("fetchCurrencies"):
+            issues.append(f"{exchange_name}: 不支持读取现货充提状态，预上市充提关闭过滤无法确认")
+            return
+        try:
+            currencies = spot_exchange.fetch_currencies()
+        except Exception as exc:  # noqa: BLE001
+            issues.append(f"{exchange_name}: 现货充提状态读取失败 {str(exc)[:180]}")
+            return
+        for symbol, market in list(spots.items()):
+            currency = currencies.get(market.asset.base)
+            if not isinstance(currency, dict):
+                continue
+            spots[symbol] = replace(
+                market,
+                deposit_enabled=self._currency_capability(currency, "deposit"),
+                withdraw_enabled=self._currency_capability(currency, "withdraw"),
+            )
+
+    def _currency_capability(self, currency: dict[str, Any], key: str) -> bool | None:
+        direct = currency.get(key)
+        if direct is not None:
+            return bool(direct)
+        networks = currency.get("networks")
+        if not isinstance(networks, dict):
+            return None
+        values = []
+        for network in networks.values():
+            if not isinstance(network, dict):
+                continue
+            active = network.get("active")
+            value = network.get(key)
+            if value is not None:
+                values.append(bool(value) and active is not False)
+        return any(values) if values else None
+
+    def _fetch_tickers(self, exchange, markets: dict[str, TradeMarket], exchange_name: ExchangeName, label: str, issues: list[str]):
+        if not exchange.has.get("fetchTickers"):
+            issues.append(f"{exchange_name}: 不支持批量读取{label} tickers")
+            return {}
+        symbols = [market.ccxt_symbol for market in markets.values()]
+        try:
+            raw = exchange.fetch_tickers(symbols)
+        except Exception:
+            try:
+                raw = exchange.fetch_tickers()
+            except Exception as exc:  # noqa: BLE001
+                issues.append(f"{exchange_name}: {label} tickers 读取失败 {str(exc)[:180]}")
+                return {}
+        return {normalize_ccxt_symbol(symbol): ticker for symbol, ticker in raw.items()}
+
+    def _fetch_funding_rates(
+        self,
+        exchange,
+        markets: dict[str, TradeMarket],
+        exchange_name: ExchangeName,
+        issues: list[str],
+    ) -> dict[str, Decimal]:
+        now = datetime.now(timezone.utc)
+        cached = self._funding_cache.get(exchange_name)
+        if cached and (now - cached[0]).total_seconds() < 60:
+            return cached[1]
+        if not exchange.has.get("fetchFundingRates"):
+            issues.append(f"{exchange_name}: 不支持批量 funding rates")
+            return {}
+        try:
+            raw = exchange.fetch_funding_rates([market.ccxt_symbol for market in markets.values()])
+        except Exception:
+            try:
+                raw = exchange.fetch_funding_rates()
+            except Exception as exc:  # noqa: BLE001
+                issues.append(f"{exchange_name}: funding rates 读取失败 {str(exc)[:180]}")
+                return {}
+        rates = self._normalize_funding_rates(raw)
+        self._funding_cache[exchange_name] = (now, rates)
+        return rates
+
+    def _normalize_funding_rates(self, raw) -> dict[str, Decimal]:
+        items = raw.values() if isinstance(raw, dict) else raw
+        rates: dict[str, Decimal] = {}
+        for item in items:
+            symbol = item.get("symbol")
+            if symbol:
+                rates[normalize_ccxt_symbol(symbol)] = decimal_from(item.get("fundingRate") or item.get("nextFundingRate"))
+        return rates
+
+    def _exchange_opportunities(self, data: CashCarryExchangeData, settings: BotSettings) -> list[CashCarryOpportunity]:
+        opportunities: list[CashCarryOpportunity] = []
+        for symbol in sorted(set(data.spot_markets) & set(data.swap_markets)):
+            if symbol in settings.symbol_blacklist:
+                continue
+            item = self._build_opportunity(symbol, data, settings)
+            if item:
+                opportunities.append(item)
+        return self._attach_depth_estimates(opportunities, data, settings)
+
+    def _build_opportunity(
+        self,
+        symbol: str,
+        data: CashCarryExchangeData,
+        settings: BotSettings,
+    ) -> CashCarryOpportunity | None:
+        spot_ticker = data.spot_tickers.get(symbol)
+        swap_ticker = data.swap_tickers.get(symbol)
+        if not spot_ticker or not swap_ticker:
+            return None
+        spot_price = decimal_from(spot_ticker.get("ask"))
+        perp_price = decimal_from(swap_ticker.get("bid"))
+        if spot_price <= 0 or perp_price <= 0:
+            return None
+        basis_pct = calculate_spread_pct(spot_price, perp_price)
+        funding_rate = data.funding_rates.get(symbol, Decimal("0"))
+        spot_volume = quote_volume(spot_ticker)
+        perp_volume = quote_volume(swap_ticker)
+        spot_fee = data.spot_markets[symbol].taker_fee or FEE_RATES[data.exchange]
+        swap_fee = data.swap_markets[symbol].taker_fee or FEE_RATES[data.exchange]
+        fees = settings.order_notional_usdt * (spot_fee + swap_fee) * Decimal("2")
+        basis_profit = settings.order_notional_usdt * basis_pct / Decimal("100")
+        funding_income = settings.order_notional_usdt * funding_rate
+        reasons = self._blocked_reasons(basis_pct, funding_rate, spot_volume, perp_volume, settings)
+        reasons.extend(local_identity_reasons(data.exchange.value, data.swap_markets[symbol].asset, data.spot_markets[symbol].asset))
+        if self._pre_market_spot_transfer_closed(data.swap_markets[symbol], data.spot_markets[symbol]):
+            reasons.append("预上市合约且现货充提均关闭，禁止自动开仓")
+        return CashCarryOpportunity(
+            exchange=data.exchange,
+            symbol=symbol,
+            spot_price=q(spot_price),
+            perp_price=q(perp_price),
+            basis_pct=q(basis_pct),
+            funding_rate_pct=q(funding_rate * Decimal("100")),
+            quantity=q(settings.order_notional_usdt / spot_price, "0.000001"),
+            spot_volume_24h_usdt=q(spot_volume, "0.01"),
+            perp_volume_24h_usdt=q(perp_volume, "0.01"),
+            estimated_basis_profit=q(basis_profit),
+            estimated_funding_income=q(funding_income),
+            estimated_open_close_fee=q(fees),
+            estimated_net_profit=q(basis_profit + funding_income - fees),
+            notional_usdt=q(settings.order_notional_usdt, "0.01"),
+            margin_required_usdt=q(settings.order_notional_usdt / settings.default_leverage if settings.default_leverage > 0 else settings.order_notional_usdt, "0.01"),
+            leverage=settings.default_leverage,
+            blocked_reasons=reasons,
+            data_source=DataSource.LIVE,
+            updated_at=datetime.now(timezone.utc),
+        )
+
+    def _blocked_reasons(
+        self,
+        basis_pct: Decimal,
+        funding_rate: Decimal,
+        spot_volume: Decimal,
+        perp_volume: Decimal,
+        settings: BotSettings,
+    ) -> list[str]:
+        reasons: list[str] = []
+        if basis_pct < settings.cash_carry_min_basis_pct:
+            reasons.append(f"合约溢价未达 {settings.cash_carry_min_basis_pct}%")
+        funding_rate_pct = funding_rate * Decimal("100")
+        if funding_rate <= 0:
+            reasons.append("资金费率不是正数，空头不能收资金费")
+        elif funding_rate_pct < settings.cash_carry_min_funding_rate_pct:
+            reasons.append(f"资金费率低于 {settings.cash_carry_min_funding_rate_pct}%")
+        min_volume = min(spot_volume, perp_volume)
+        if min_volume < settings.cash_carry_min_volume_usdt:
+            reasons.append(f"现货/合约最低24h成交量低于 {settings.cash_carry_min_volume_usdt}U")
+        return reasons
+
+    def _attach_depth_estimates(
+        self,
+        items: list[CashCarryOpportunity],
+        data: CashCarryExchangeData,
+        settings: BotSettings,
+    ) -> list[CashCarryOpportunity]:
+        if not data.spot_exchange or not data.swap_exchange:
+            return items
+        ready = [item for item in items if not item.blocked_reasons]
+        top_keys = {
+            item.symbol
+            for item in sorted(ready, key=lambda row: -row.estimated_net_profit)[:5]
+        }
+        if not top_keys:
+            return items
+        return [
+            self._with_depth_estimate(item, data, settings) if item.symbol in top_keys else item
+            for item in items
+        ]
+
+    def _with_depth_estimate(
+        self,
+        item: CashCarryOpportunity,
+        data: CashCarryExchangeData,
+        settings: BotSettings,
+    ) -> CashCarryOpportunity:
+        spot_market = data.spot_markets.get(item.symbol)
+        swap_market = data.swap_markets.get(item.symbol)
+        if not spot_market or not swap_market:
+            return item
+        borrow_rate = (item.estimated_borrow_cost or Decimal("0")) / settings.order_notional_usdt if settings.order_notional_usdt > 0 else Decimal("0")
+        estimate = estimate_max_safe_notional(
+            data.spot_exchange,
+            data.swap_exchange,
+            spot_market.ccxt_symbol,
+            swap_market.ccxt_symbol,
+            self._depth_side(),
+            settings,
+            spot_market.taker_fee or FEE_RATES[data.exchange],
+            swap_market.taker_fee or FEE_RATES[data.exchange],
+            data.funding_rates.get(item.symbol, Decimal("0")),
+            borrow_rate,
+            item.borrow_available_qty,
+        )
+        if estimate is None:
+            return item
+        return item.model_copy(update={"max_safe_notional_usdt": q(estimate, "0.01")})
+
+    def _depth_side(self) -> str:
+        return "forward"
+
+    def _is_pre_market(self, market: dict[str, Any]) -> bool:
+        info = market.get("info") if isinstance(market.get("info"), dict) else {}
+        return bool(market.get("isPreMarket") or market.get("preMarket") or info.get("is_pre_market") or info.get("isPreMarket"))
+
+    def _pre_market_spot_transfer_closed(self, swap_market: TradeMarket, spot_market: TradeMarket) -> bool:
+        return (
+            swap_market.is_pre_market
+            and spot_market.deposit_enabled is False
+            and spot_market.withdraw_enabled is False
+        )

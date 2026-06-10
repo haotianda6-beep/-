@@ -1,0 +1,18 @@
+{
+  "XAUUSD": {
+    "type": "commodity",
+    "aliases": ["XAUUSDT", "GOLDUSDT", "PAXGUSDT"]
+  },
+  "USOIL": {
+    "type": "commodity",
+    "aliases": ["USOILUSDT", "WTIUSDT", "OILUSDT"]
+  },
+  "AAPL": {
+    "type": "stock",
+    "aliases": ["AAPLUSDT"]
+  },
+  "NVDA": {
+    "type": "stock",
+    "aliases": ["NVDAUSDT"]
+  }
+}
