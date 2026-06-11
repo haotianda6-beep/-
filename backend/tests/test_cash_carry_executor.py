@@ -1,9 +1,12 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
+import pytest
+
 from app.core.models import BotSettings, CashCarryOpportunity, CashCarryPositionRow, DataSource, ExchangeName
 from app.services.cash_carry_executor import CashCarryExecutor
 from app.services.order_sizing import contract_order_amount
+from app.services.reverse_execution_models import ExecutionStep
 
 
 def test_cash_carry_executor_blocks_until_trade_subswitch_is_enabled(tmp_path) -> None:
@@ -21,8 +24,8 @@ def test_cash_carry_executor_blocks_until_trade_subswitch_is_enabled(tmp_path) -
     assert "正向期现自动下单未开启" in result.reason
     assert [step.name for step in result.steps] == [
         "transfer_usdt",
-        "buy_spot",
         "set_perp_leverage",
+        "buy_spot",
         "open_perp_short",
     ]
 
@@ -50,7 +53,7 @@ def test_cash_carry_executor_skips_existing_ready_position_and_checks_next(tmp_p
 
     assert result is not None
     assert result.status == "blocked_by_safety_gate"
-    assert "XYZUSDT" in result.steps[1].detail
+    assert "XYZUSDT" in result.steps[2].detail
 
 
 def test_cash_carry_executor_does_not_duplicate_existing_ready_position(tmp_path) -> None:
@@ -60,6 +63,29 @@ def test_cash_carry_executor_does_not_duplicate_existing_ready_position(tmp_path
     settings = BotSettings(manual_confirm_required=False, cash_carry_auto_open_enabled=True, cash_carry_auto_trade_enabled=False)
 
     assert executor.evaluate_open([_opportunity("ABCUSDT", "9")], settings) is None
+
+
+def test_cash_carry_executor_sets_bitget_isolated_leverage_for_both_sides(tmp_path) -> None:
+    exchange = _FakeBitgetLeverage(short_leverage=Decimal("5"))
+    result = CashCarryExecutor(tmp_path / "state.json")._set_leverage(exchange, "ABC/USDT:USDT", Decimal("5"), "isolated")
+
+    assert [call["holdSide"] for call in exchange.calls] == ["long", "short"]
+    assert result["short"]["leverage"] == 5.0
+
+
+def test_cash_carry_executor_rejects_bitget_leverage_mismatch(tmp_path) -> None:
+    step = ExecutionStep("set_perp_leverage", "done", "设置合约杠杆")
+
+    with pytest.raises(ValueError, match="实际short杠杆"):
+        CashCarryExecutor(tmp_path / "state.json")._verify_leverage(
+            _FakeBitgetLeverage(short_leverage=Decimal("10")),
+            "ABC/USDT:USDT",
+            Decimal("5"),
+            "short",
+            step,
+        )
+
+    assert step.status == "failed"
 
 
 def test_cash_carry_fixed_usdt_take_profit_has_close_priority(tmp_path) -> None:
@@ -243,6 +269,22 @@ def _state_with_position(tmp_path, status: str = "mismatch"):
         encoding="utf-8",
     )
     return state
+
+
+class _FakeBitgetLeverage:
+    id = "bitget"
+
+    def __init__(self, short_leverage: Decimal) -> None:
+        self.short_leverage = short_leverage
+        self.calls = []
+
+    def set_leverage(self, leverage, symbol, params=None):
+        call = {"leverage": leverage, "symbol": symbol, **(params or {})}
+        self.calls.append(call)
+        return call
+
+    def fetch_leverage(self, symbol):
+        return {"symbol": symbol, "shortLeverage": self.short_leverage, "longLeverage": Decimal("5")}
 
 
 class _FakeGate:

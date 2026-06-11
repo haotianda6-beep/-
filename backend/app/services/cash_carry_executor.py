@@ -106,13 +106,14 @@ class CashCarryExecutor:
             if not guard.ok:
                 return self.state.remember(ExecutionResult(str(uuid.uuid4()), "blocked_by_depth", guard.reason, steps))
             self._maybe_transfer(spot, item, settings, steps[0])
-            spot_order_raw = self._run(steps[1], lambda: spot_market_buy(spot, spot_symbol, settings.order_notional_usdt, item.quantity), True)
+            self._run(steps[1], lambda: self._set_leverage(swap, swap_symbol, settings.default_leverage, settings.margin_mode), True)
+            self._verify_leverage(swap, swap_symbol, settings.default_leverage, "short", steps[1])
+            spot_order_raw = self._run(steps[2], lambda: spot_market_buy(spot, spot_symbol, settings.order_notional_usdt, item.quantity), True)
             spot_order = fetch_order_snapshot(spot, spot_symbol, spot_order_raw)
             base_qty = filled_base_quantity(spot, spot_symbol, spot_order, item.quantity)
             spot_entry_price = order_average_price(spot_order, item.spot_price)
             spot_order_id = self._order_id(spot_order)
             contract_qty = contract_order_amount(swap, swap_symbol, base_qty)
-            self._run(steps[2], lambda: self._set_leverage(swap, swap_symbol, settings.default_leverage), True)
             perp_order_raw = self._run(
                 steps[3],
                 lambda: swap.create_order(swap_symbol, "market", "sell", contract_qty, None, {"reduceOnly": False, "marginMode": settings.margin_mode}),
@@ -224,8 +225,8 @@ class CashCarryExecutor:
     def _open_plan(self, item: CashCarryOpportunity, settings: BotSettings) -> list[ExecutionStep]:
         return [
             ExecutionStep("transfer_usdt", "pending", f"按需划转 USDT，单笔名义 {settings.order_notional_usdt}"),
-            ExecutionStep("buy_spot", "pending", f"买入现货 {item.symbol}，数量 {item.quantity}"),
             ExecutionStep("set_perp_leverage", "pending", f"设置合约杠杆 {settings.default_leverage}x"),
+            ExecutionStep("buy_spot", "pending", f"买入现货 {item.symbol}，数量 {item.quantity}"),
             ExecutionStep("open_perp_short", "pending", f"做空合约 {item.symbol}，数量 {item.quantity}"),
         ]
 
@@ -276,8 +277,36 @@ class CashCarryExecutor:
         exchange_id = SPOT_EXCHANGE_IDS[exchange_name] if default_type == "spot" else SWAP_EXCHANGE_IDS[exchange_name]
         return build_ccxt_exchange(exchange_name, exchange_id, default_type, timeout=12000)
 
-    def _set_leverage(self, exchange, symbol: str, leverage: Decimal):
-        return exchange.set_leverage(float(leverage), symbol) if hasattr(exchange, "set_leverage") else {"skipped": True}
+    def _set_leverage(self, exchange, symbol: str, leverage: Decimal, margin_mode: str | None = None):
+        if not hasattr(exchange, "set_leverage"):
+            return {"skipped": True}
+        if getattr(exchange, "id", "") == "bitget" and margin_mode == "isolated":
+            return {
+                "long": exchange.set_leverage(float(leverage), symbol, {"holdSide": "long"}),
+                "short": exchange.set_leverage(float(leverage), symbol, {"holdSide": "short"}),
+            }
+        return exchange.set_leverage(float(leverage), symbol)
+
+    def _verify_leverage(self, exchange, symbol: str, expected: Decimal, side: str, step: ExecutionStep) -> None:
+        if getattr(exchange, "id", "") != "bitget" or not hasattr(exchange, "fetch_leverage"):
+            return
+        raw = exchange.fetch_leverage(symbol)
+        actual = self._leverage_value(raw, side)
+        if actual is None:
+            return
+        if actual != expected:
+            step.status = "failed"
+            step.raw = {"expected": str(expected), "actual": str(actual), "leverage": raw}
+            raise ValueError(f"BITGET {symbol} 实际{side}杠杆 {actual}x 与参数 {expected}x 不一致，已阻止开仓")
+
+    def _leverage_value(self, raw: dict[str, Any], side: str) -> Decimal | None:
+        keys = ("shortLeverage", "isolatedShortLever") if side == "short" else ("longLeverage", "isolatedLongLever")
+        info = raw.get("info") if isinstance(raw.get("info"), dict) else {}
+        for key in keys:
+            value = raw.get(key) if key in raw else info.get(key)
+            if value not in (None, ""):
+                return Decimal(str(value))
+        return None
 
     def has_active_records(self) -> bool: return bool(self.state.active_keys())
 
