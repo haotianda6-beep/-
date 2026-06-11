@@ -58,6 +58,7 @@ class _OpeningSpot:
 
 class _OpeningSwap:
     has = {"fetchOrder": True}
+    id = "gateio"
 
     def load_markets(self):
         return None
@@ -77,8 +78,8 @@ class _OpeningSwap:
     def fetch_order(self, order_id, symbol):
         return {"id": order_id, "average": "101.25", "amount": "0.997506"}
 
-    def set_leverage(self, leverage, symbol):
-        return {"leverage": leverage, "symbol": symbol}
+    def set_leverage(self, leverage, symbol, params=None):
+        return {"leverage": leverage, "symbol": symbol, "params": params or {}}
 
 
 class _OpeningExecutor(CashCarryExecutor):

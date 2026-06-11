@@ -91,20 +91,27 @@ class ReverseCashCarryExecutor:
         try:
             self._maybe_transfer(spot, item, settings, steps[0])
             try:
-                self._run(steps[1], lambda: spot.borrow_cross_margin(base, qty), settings.reverse_cash_carry_auto_borrow_enabled)
+                self._run(steps[1], lambda: self._set_leverage(swap, swap_symbol, settings.default_leverage, settings.margin_mode), True)
+                self._verify_leverage(swap, swap_symbol, settings.default_leverage, "long", settings.margin_mode, steps[1])
             except Exception as exc:  # noqa: BLE001
                 reason = self._sanitize(str(exc))
                 steps[1].status = "failed"
                 steps[1].raw = {"error": reason}
+                return self._remember(ExecutionResult(str(uuid.uuid4()), "failed", reason, steps))
+            try:
+                self._run(steps[2], lambda: spot.borrow_cross_margin(base, qty), settings.reverse_cash_carry_auto_borrow_enabled)
+            except Exception as exc:  # noqa: BLE001
+                reason = self._sanitize(str(exc))
+                steps[2].status = "failed"
+                steps[2].raw = {"error": reason}
                 mark_borrow_pool_block(item.exchange, item.symbol, reason)
                 return self._remember(ExecutionResult(str(uuid.uuid4()), "failed", reason, steps))
             spot_order = self._run(
-                steps[2],
+                steps[3],
                 lambda: spot.create_order(spot_symbol, "market", "sell", qty, None, {"marginMode": "cross"}),
                 True,
             )
             spot_order_id = self._order_id(spot_order)
-            self._run(steps[3], lambda: self._set_leverage(swap, swap_symbol, settings.default_leverage), True)
             contract_qty = contract_order_amount(swap, swap_symbol, item.quantity)
             perp_order = self._run(
                 steps[4],
@@ -156,9 +163,9 @@ class ReverseCashCarryExecutor:
     def _open_plan(self, item: CashCarryOpportunity, settings: BotSettings) -> list[ExecutionStep]:
         return [
             ExecutionStep("transfer_collateral", "pending", f"按需划转 USDT 到现货杠杆/合约账户，名义本金 {item.estimated_net_profit} 净利预估"),
+            ExecutionStep("set_perp_leverage", "pending", f"设置合约杠杆 {settings.default_leverage}x"),
             ExecutionStep("borrow_spot", "pending", f"借入 {item.quantity} {self._base(item.symbol)}"),
             ExecutionStep("sell_borrowed_spot", "pending", f"市价卖出现货 {item.symbol}，数量 {item.quantity}"),
-            ExecutionStep("set_perp_leverage", "pending", f"设置合约杠杆 {settings.default_leverage}x"),
             ExecutionStep("open_perp_long", "pending", f"市价开合约多单 {item.symbol}，数量 {item.quantity}"),
         ]
 
@@ -236,10 +243,102 @@ class ReverseCashCarryExecutor:
         step.raw = result if isinstance(result, dict) else {"result": str(result)}
         return result
 
-    def _set_leverage(self, exchange, symbol: str, leverage: Decimal):
-        if hasattr(exchange, "set_leverage"):
-            return exchange.set_leverage(float(leverage), symbol)
-        return {"skipped": "exchange does not expose set_leverage"}
+    def _set_leverage(self, exchange, symbol: str, leverage: Decimal, margin_mode: str | None = None):
+        if not hasattr(exchange, "set_leverage"):
+            return {"skipped": True}
+        exchange_id = getattr(exchange, "id", "")
+        margin_result = self._set_margin_mode(exchange, symbol, margin_mode, leverage)
+        if exchange_id == "bitget" and margin_mode == "isolated":
+            return {
+                "margin_mode": margin_result,
+                "long": exchange.set_leverage(float(leverage), symbol, {"holdSide": "long"}),
+                "short": exchange.set_leverage(float(leverage), symbol, {"holdSide": "short"}),
+            }
+        return {
+            "margin_mode": margin_result,
+            "leverage": exchange.set_leverage(float(leverage), symbol, self._leverage_params(exchange_id, margin_mode)),
+        }
+
+    def _set_margin_mode(self, exchange, symbol: str, margin_mode: str | None, leverage: Decimal):
+        if not margin_mode or not hasattr(exchange, "set_margin_mode"):
+            return {"skipped": True}
+        exchange_id = getattr(exchange, "id", "")
+        if exchange_id in {"okx", "gateio", "bitget"}:
+            return {"skipped": True}
+        params = {"leverage": str(leverage)} if exchange_id == "bybit" else {}
+        try:
+            return exchange.set_margin_mode(margin_mode, symbol, params)
+        except Exception as exc:  # noqa: BLE001
+            text = str(exc).lower()
+            if "no need" in text or "already" in text or "not modified" in text:
+                return {"skipped": "already_set"}
+            raise
+
+    def _leverage_params(self, exchange_id: str, margin_mode: str | None) -> dict[str, Any]:
+        if exchange_id == "okx":
+            params = {"marginMode": margin_mode or "cross"}
+            if margin_mode == "isolated":
+                params["posSide"] = "net"
+            return params
+        if exchange_id == "gateio" and margin_mode:
+            return {"marginMode": margin_mode}
+        return {}
+
+    def _verify_leverage(self, exchange, symbol: str, expected: Decimal, side: str, margin_mode: str | None, step: ExecutionStep) -> None:
+        if not hasattr(exchange, "set_leverage"):
+            return
+        raw = self._fetch_leverage_snapshot(exchange, symbol, margin_mode)
+        actual = self._leverage_value(raw, side, margin_mode) or self._leverage_value(step.raw or {}, side, margin_mode)
+        if actual is None:
+            step.status = "failed"
+            step.raw = {"expected": str(expected), "leverage": step.raw, "verification": raw}
+            raise ValueError(f"{str(getattr(exchange, 'id', '')).upper()} {symbol} 未能确认实际{side}杠杆，已阻止开仓")
+        if actual != expected:
+            step.status = "failed"
+            step.raw = {"expected": str(expected), "actual": str(actual), "leverage": step.raw, "verification": raw}
+            raise ValueError(f"{str(getattr(exchange, 'id', '')).upper()} {symbol} 实际{side}杠杆 {actual}x 与参数 {expected}x 不一致，已阻止开仓")
+        if isinstance(step.raw, dict):
+            step.raw = {**step.raw, "verified_leverage": str(actual), "verification": raw}
+
+    def _fetch_leverage_snapshot(self, exchange, symbol: str, margin_mode: str | None):
+        if not hasattr(exchange, "fetch_leverage"):
+            return {}
+        try:
+            if getattr(exchange, "id", "") == "okx" and margin_mode:
+                return exchange.fetch_leverage(symbol, {"marginMode": margin_mode})
+            return exchange.fetch_leverage(symbol)
+        except Exception:
+            return {}
+
+    def _leverage_value(self, raw: Any, side: str, margin_mode: str | None = None) -> Decimal | None:
+        keys = ("shortLeverage", "isolatedShortLever") if side == "short" else ("longLeverage", "isolatedLongLever")
+        cross_keys = ("crossMarginLeverage", "crossedMarginLeverage", "cross_leverage_limit")
+        keys = (*keys, *cross_keys, "leverage") if margin_mode == "cross" else (*keys, "leverage", *cross_keys)
+        for key in keys:
+            value = self._find_key(raw, key)
+            if value not in (None, ""):
+                return Decimal(str(value))
+        return None
+
+    def _find_key(self, raw: Any, key: str) -> Any:
+        if isinstance(raw, dict):
+            if key in raw:
+                value = raw[key]
+                if not isinstance(value, (dict, list)):
+                    return value
+                found = self._find_key(value, key)
+                if found not in (None, ""):
+                    return found
+            for value in raw.values():
+                found = self._find_key(value, key)
+                if found not in (None, ""):
+                    return found
+        if isinstance(raw, list):
+            for value in raw:
+                found = self._find_key(value, key)
+                if found not in (None, ""):
+                    return found
+        return None
 
     def _exchange(self, exchange_name: ExchangeName, default_type: str):
         exchange_name = ExchangeName(exchange_name)

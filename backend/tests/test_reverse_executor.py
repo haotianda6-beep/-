@@ -21,9 +21,9 @@ def test_reverse_executor_blocks_real_calls_when_manual_confirm_is_required(tmp_
     assert "参数要求人工确认" in result.reason
     assert [step.name for step in result.steps] == [
         "transfer_collateral",
+        "set_perp_leverage",
         "borrow_spot",
         "sell_borrowed_spot",
-        "set_perp_leverage",
         "open_perp_long",
     ]
 
@@ -152,12 +152,30 @@ def test_reverse_executor_marks_borrow_failure_as_available_zero(tmp_path, monke
 
     assert result is not None
     assert result.status == "failed"
-    assert result.steps[1].status == "failed"
+    assert result.steps[2].status == "failed"
     assert executor.spot.orders == []
     assert executor.swap.orders == []
     block = active_borrow_pool_block(ExchangeName.BITGET, "SENTUSDT")
     assert block is not None
     assert block.available_qty == 0
+
+
+def test_reverse_executor_blocks_before_borrow_when_leverage_mismatch(tmp_path) -> None:
+    executor = _LeverageMismatchExecutor(tmp_path / "state.json")
+    settings = BotSettings(
+        manual_confirm_required=False,
+        reverse_cash_carry_auto_open_enabled=True,
+        reverse_cash_carry_auto_borrow_enabled=True,
+    )
+
+    result = executor.evaluate_open([_opportunity(ExchangeName.BITGET, "SENTUSDT")], settings)
+
+    assert result is not None
+    assert result.status == "failed"
+    assert result.steps[1].status == "failed"
+    assert executor.spot.orders == []
+    assert executor.spot.borrowed == []
+    assert executor.swap.orders == []
 
 
 def _opportunity(exchange: ExchangeName = ExchangeName.BITGET, symbol: str = "ABCUSDT", net: str = "0.8") -> CashCarryOpportunity:
@@ -210,14 +228,22 @@ class _BorrowFailExecutor(_RecordingReverseExecutor):
         self.spot = _BorrowFailSpot()
 
 
+class _LeverageMismatchExecutor(_RecordingReverseExecutor):
+    def __init__(self, state_path) -> None:
+        super().__init__(state_path)
+        self.swap = _MismatchLeverageSwap()
+
+
 class _FakeSpot:
     def __init__(self) -> None:
         self.orders = []
+        self.borrowed = []
 
     def transfer(self, *args, **kwargs):
         raise ValueError('bybit {"retMsg":"server err : fromAccount can not be toAccount"}')
 
     def borrow_cross_margin(self, code, qty):
+        self.borrowed.append((code, qty))
         return {"borrowed": qty, "code": code}
 
     def create_order(self, symbol, order_type, side, amount, price=None, params=None):
@@ -254,8 +280,8 @@ class _FakeSwap:
     def __init__(self) -> None:
         self.orders = []
 
-    def set_leverage(self, leverage, symbol):
-        return {"leverage": leverage, "symbol": symbol}
+    def set_leverage(self, leverage, symbol, params=None):
+        return {"leverage": leverage, "symbol": symbol, "params": params or {}}
 
     def load_markets(self):
         return None
@@ -269,3 +295,10 @@ class _FakeSwap:
     def create_order(self, symbol, order_type, side, amount, price=None, params=None):
         self.orders.append({"symbol": symbol, "side": side, "amount": amount})
         return {"id": "swap-1", "symbol": symbol, "side": side, "amount": amount}
+
+
+class _MismatchLeverageSwap(_FakeSwap):
+    id = "bitget"
+
+    def fetch_leverage(self, symbol):
+        return {"symbol": symbol, "longLeverage": Decimal("10"), "shortLeverage": Decimal("10")}

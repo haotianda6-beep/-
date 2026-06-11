@@ -82,10 +82,66 @@ def test_cash_carry_executor_rejects_bitget_leverage_mismatch(tmp_path) -> None:
             "ABC/USDT:USDT",
             Decimal("5"),
             "short",
+            "isolated",
             step,
         )
 
     assert step.status == "failed"
+
+
+def test_cash_carry_executor_passes_okx_margin_mode_to_leverage(tmp_path) -> None:
+    exchange = _FakeOkxLeverage()
+
+    result = CashCarryExecutor(tmp_path / "state.json")._set_leverage(exchange, "ABC/USDT:USDT", Decimal("5"), "isolated")
+
+    assert result["leverage"]["params"] == {"marginMode": "isolated", "posSide": "net"}
+
+
+def test_cash_carry_executor_verifies_gate_leverage_from_set_response(tmp_path) -> None:
+    step = ExecutionStep("set_perp_leverage", "done", "设置合约杠杆")
+    step.raw = {"leverage": {"leverage": "5"}}
+
+    CashCarryExecutor(tmp_path / "state.json")._verify_leverage(
+        _FakeGateLeverage(),
+        "ABC/USDT:USDT",
+        Decimal("5"),
+        "short",
+        "isolated",
+        step,
+    )
+
+    assert step.status == "done"
+
+
+def test_cash_carry_executor_verifies_gate_cross_leverage_limit(tmp_path) -> None:
+    step = ExecutionStep("set_perp_leverage", "done", "设置合约杠杆")
+    step.raw = {"leverage": {"leverage": "0", "cross_leverage_limit": "5"}}
+
+    CashCarryExecutor(tmp_path / "state.json")._verify_leverage(
+        _FakeGateLeverage(),
+        "ABC/USDT:USDT",
+        Decimal("5"),
+        "short",
+        "cross",
+        step,
+    )
+
+    assert step.status == "done"
+
+
+def test_cash_carry_executor_blocks_when_leverage_cannot_be_verified(tmp_path) -> None:
+    step = ExecutionStep("set_perp_leverage", "done", "设置合约杠杆")
+    step.raw = {"leverage": {"ok": True}}
+
+    with pytest.raises(ValueError, match="未能确认实际short杠杆"):
+        CashCarryExecutor(tmp_path / "state.json")._verify_leverage(
+            _FakeGateLeverage(),
+            "ABC/USDT:USDT",
+            Decimal("5"),
+            "short",
+            "isolated",
+            step,
+        )
 
 
 def test_cash_carry_fixed_usdt_take_profit_has_close_priority(tmp_path) -> None:
@@ -285,6 +341,20 @@ class _FakeBitgetLeverage:
 
     def fetch_leverage(self, symbol):
         return {"symbol": symbol, "shortLeverage": self.short_leverage, "longLeverage": Decimal("5")}
+
+
+class _FakeOkxLeverage:
+    id = "okx"
+
+    def set_leverage(self, leverage, symbol, params=None):
+        return {"leverage": leverage, "symbol": symbol, "params": params or {}}
+
+
+class _FakeGateLeverage:
+    id = "gateio"
+
+    def set_leverage(self, leverage, symbol, params=None):
+        return {"leverage": str(leverage), "symbol": symbol, "params": params or {}}
 
 
 class _FakeGate:

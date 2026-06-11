@@ -106,7 +106,7 @@ class CashCarryExecutor:
                 return self.state.remember(ExecutionResult(str(uuid.uuid4()), "blocked_by_depth", guard.reason, steps))
             self._maybe_transfer(spot, item, settings, steps[0])
             self._run(steps[1], lambda: self._set_leverage(swap, swap_symbol, settings.default_leverage, settings.margin_mode), True)
-            self._verify_leverage(swap, swap_symbol, settings.default_leverage, "short", steps[1])
+            self._verify_leverage(swap, swap_symbol, settings.default_leverage, "short", settings.margin_mode, steps[1])
             spot_order_raw = self._run(steps[2], lambda: spot_market_buy(spot, spot_symbol, settings.order_notional_usdt, item.quantity), True)
             spot_order = fetch_order_snapshot(spot, spot_symbol, spot_order_raw)
             base_qty = filled_base_quantity(spot, spot_symbol, spot_order, item.quantity)
@@ -337,32 +337,114 @@ class CashCarryExecutor:
     def _set_leverage(self, exchange, symbol: str, leverage: Decimal, margin_mode: str | None = None):
         if not hasattr(exchange, "set_leverage"):
             return {"skipped": True}
-        if getattr(exchange, "id", "") == "bitget" and margin_mode == "isolated":
+        exchange_id = getattr(exchange, "id", "")
+        margin_result = self._set_margin_mode(exchange, symbol, margin_mode, leverage)
+        if exchange_id == "bitget" and margin_mode == "isolated":
             return {
+                "margin_mode": margin_result,
                 "long": exchange.set_leverage(float(leverage), symbol, {"holdSide": "long"}),
                 "short": exchange.set_leverage(float(leverage), symbol, {"holdSide": "short"}),
             }
-        return exchange.set_leverage(float(leverage), symbol)
+        return {
+            "margin_mode": margin_result,
+            "leverage": exchange.set_leverage(float(leverage), symbol, self._leverage_params(exchange_id, margin_mode)),
+        }
 
-    def _verify_leverage(self, exchange, symbol: str, expected: Decimal, side: str, step: ExecutionStep) -> None:
-        if getattr(exchange, "id", "") != "bitget" or not hasattr(exchange, "fetch_leverage"):
+    def _set_margin_mode(self, exchange, symbol: str, margin_mode: str | None, leverage: Decimal):
+        if not margin_mode or not hasattr(exchange, "set_margin_mode"):
+            return {"skipped": True}
+        exchange_id = getattr(exchange, "id", "")
+        if exchange_id in {"okx", "gateio", "bitget"}:
+            return {"skipped": True}
+        params = {"leverage": str(leverage)} if exchange_id == "bybit" else {}
+        try:
+            return exchange.set_margin_mode(margin_mode, symbol, params)
+        except Exception as exc:  # noqa: BLE001 - repeated margin-mode setting is safe to ignore.
+            text = str(exc).lower()
+            if "no need" in text or "already" in text or "not modified" in text:
+                return {"skipped": "already_set"}
+            raise
+
+    def _leverage_params(self, exchange_id: str, margin_mode: str | None) -> dict[str, Any]:
+        if exchange_id == "okx":
+            params = {"marginMode": margin_mode or "cross"}
+            if margin_mode == "isolated":
+                params["posSide"] = "net"
+            return params
+        if exchange_id == "gateio" and margin_mode:
+            return {"marginMode": margin_mode}
+        return {}
+
+    def _verify_leverage(self, exchange, symbol: str, expected: Decimal, side: str, margin_mode: str | None, step: ExecutionStep) -> None:
+        if not hasattr(exchange, "set_leverage"):
             return
-        raw = exchange.fetch_leverage(symbol)
-        actual = self._leverage_value(raw, side)
+        raw = self._fetch_leverage_snapshot(exchange, symbol, margin_mode, step)
+        actual = self._leverage_value(raw, side, margin_mode) or self._leverage_value(step.raw or {}, side, margin_mode)
         if actual is None:
-            return
+            step.status = "failed"
+            step.raw = {"expected": str(expected), "leverage": step.raw, "verification": raw}
+            raise ValueError(f"{str(getattr(exchange, 'id', '')).upper()} {symbol} 未能确认实际{side}杠杆，已阻止开仓")
         if actual != expected:
             step.status = "failed"
-            step.raw = {"expected": str(expected), "actual": str(actual), "leverage": raw}
-            raise ValueError(f"BITGET {symbol} 实际{side}杠杆 {actual}x 与参数 {expected}x 不一致，已阻止开仓")
+            step.raw = {"expected": str(expected), "actual": str(actual), "leverage": step.raw, "verification": raw}
+            raise ValueError(f"{str(getattr(exchange, 'id', '')).upper()} {symbol} 实际{side}杠杆 {actual}x 与参数 {expected}x 不一致，已阻止开仓")
+        actual_margin = self._margin_mode_value(raw)
+        if margin_mode and actual_margin and actual_margin != margin_mode:
+            step.status = "failed"
+            step.raw = {"expected_margin_mode": margin_mode, "actual_margin_mode": actual_margin, "leverage": step.raw, "verification": raw}
+            raise ValueError(f"{str(getattr(exchange, 'id', '')).upper()} {symbol} 实际保证金模式 {actual_margin} 与参数 {margin_mode} 不一致，已阻止开仓")
+        if isinstance(step.raw, dict):
+            step.raw = {**step.raw, "verified_leverage": str(actual), "verification": raw}
 
-    def _leverage_value(self, raw: dict[str, Any], side: str) -> Decimal | None:
+    def _fetch_leverage_snapshot(self, exchange, symbol: str, margin_mode: str | None, step: ExecutionStep):
+        if not hasattr(exchange, "fetch_leverage"):
+            return {}
+        try:
+            if getattr(exchange, "id", "") == "okx" and margin_mode:
+                return exchange.fetch_leverage(symbol, {"marginMode": margin_mode})
+            return exchange.fetch_leverage(symbol)
+        except Exception:
+            return {}
+
+    def _leverage_value(self, raw: dict[str, Any], side: str, margin_mode: str | None = None) -> Decimal | None:
         keys = ("shortLeverage", "isolatedShortLever") if side == "short" else ("longLeverage", "isolatedLongLever")
-        info = raw.get("info") if isinstance(raw.get("info"), dict) else {}
+        cross_keys = ("crossMarginLeverage", "crossedMarginLeverage", "cross_leverage_limit")
+        keys = (*keys, *cross_keys, "leverage") if margin_mode == "cross" else (*keys, "leverage", *cross_keys)
         for key in keys:
-            value = raw.get(key) if key in raw else info.get(key)
+            value = self._find_key(raw, key)
             if value not in (None, ""):
                 return Decimal(str(value))
+        return None
+
+    def _margin_mode_value(self, raw: dict[str, Any]) -> str | None:
+        value = self._find_key(raw, "marginMode") or self._find_key(raw, "marginType") or self._find_key(raw, "mgnMode")
+        if value in (None, ""):
+            return None
+        normalized = str(value).lower()
+        if normalized in {"crossed", "cross_margin"}:
+            return "cross"
+        if normalized in {"regular_margin"}:
+            return "cross"
+        return "isolated" if normalized == "isolated" else normalized
+
+    def _find_key(self, raw: Any, key: str) -> Any:
+        if isinstance(raw, dict):
+            if key in raw:
+                value = raw[key]
+                if not isinstance(value, (dict, list)):
+                    return value
+                found = self._find_key(value, key)
+                if found not in (None, ""):
+                    return found
+            for value in raw.values():
+                found = self._find_key(value, key)
+                if found not in (None, ""):
+                    return found
+        if isinstance(raw, list):
+            for value in raw:
+                found = self._find_key(value, key)
+                if found not in (None, ""):
+                    return found
         return None
 
     def has_active_records(self) -> bool: return bool(self.state.active_keys())
