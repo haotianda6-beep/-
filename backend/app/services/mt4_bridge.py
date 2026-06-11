@@ -192,6 +192,11 @@ class Mt4SpreadScanner:
         self._funding_cache: dict[ExchangeName, tuple[datetime, dict[str, Decimal]]] = {}
         self._okx_market_objects: tuple[datetime, list[dict[str, Any]]] | None = None
 
+    def clear_caches(self) -> None:
+        self._market_cache = {}
+        self._funding_cache = {}
+        self._okx_market_objects = None
+
     def scan(self, settings: BotSettings) -> tuple[list[Mt4SpreadOpportunity], list[Mt4SpreadOpportunity], list[str]]:
         if not settings.mt4_spread_enabled:
             return [], [], []

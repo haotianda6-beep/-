@@ -18,6 +18,10 @@ class ReverseCashCarryScanner(CashCarryScanner):
         super().__init__()
         self.borrow_checker = borrow_checker or BorrowChecker()
 
+    def clear_caches(self) -> None:
+        super().clear_caches()
+        self.borrow_checker.clear_caches()
+
     def scan(self, settings: BotSettings) -> CashCarryScan:
         if not settings.reverse_cash_carry_enabled:
             return CashCarryScan()

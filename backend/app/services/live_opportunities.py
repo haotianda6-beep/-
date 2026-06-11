@@ -21,6 +21,11 @@ class LiveOpportunityScanner:
         self._currency_cache: dict[ExchangeName, tuple[datetime, dict[str, TransferNetworks], bool]] = {}
         self._funding_cache: dict[ExchangeName, tuple[datetime, dict[str, Decimal]]] = {}
 
+    def clear_caches(self) -> None:
+        self._market_cache = {}
+        self._currency_cache = {}
+        self._funding_cache = {}
+
     def scan(self, settings: BotSettings) -> LiveOpportunityScan:
         exchanges = list(ExchangeName)
         with ThreadPoolExecutor(max_workers=min(3, len(exchanges))) as executor:

@@ -20,6 +20,11 @@ class CashCarryPositionBuilder:
         self._contract_size_cache: dict[tuple[ExchangeName, str], tuple[float, Decimal]] = {}
         self._exit_price_cache: dict[tuple[ExchangeName, str, str], tuple[float, Decimal]] = {}
 
+    def clear_caches(self) -> None:
+        self._spot_balance_cache = {}
+        self._contract_size_cache = {}
+        self._exit_price_cache = {}
+
     def build(self, positions: list[PositionSnapshot], prices: list[CashCarryOpportunity], settings: BotSettings) -> list[CashCarryPositionRow]:
         rows = []
         price_map = {(ExchangeName(item.exchange), item.symbol): item for item in prices}

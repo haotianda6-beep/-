@@ -1,4 +1,6 @@
+import gc
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -23,6 +25,10 @@ FAST_REFRESH_SECONDS = 1.0
 FULL_SCAN_INTERVAL_SECONDS = 300.0
 ACCOUNT_REFRESH_SECONDS = 30.0
 MT4_SCAN_SECONDS = 5.0
+MEMORY_GUARD_SECONDS = 60.0
+MEMORY_CLEANUP_RSS_MB = 1800.0
+MEMORY_RESTART_RSS_MB = 2150.0
+MEMORY_RESTART_GRACE_CYCLES = 3
 STRATEGY_CROSS = "cross_spread"
 STRATEGY_CASH = "cash_carry"
 STRATEGY_REVERSE = "reverse_cash_carry"
@@ -75,9 +81,11 @@ class LiveRuntimeCache:
         self._mt4_spread_issues = ["MT4 价差扫描后台加载中"]
         self._settings = BotSettings()
         self._lock = threading.Lock()
+        self._start_lock = threading.Lock()
         self._execution_lock = threading.Lock()
         self._full_scan_slots = threading.BoundedSemaphore(1)
         self._mt4_scan_slots = threading.BoundedSemaphore(1)
+        self._memory_restart_pressure = 0
         self._started = False
 
     def get(self, settings: BotSettings) -> LiveRuntimeSnapshot:
@@ -97,12 +105,16 @@ class LiveRuntimeCache:
     def _ensure_started(self) -> None:
         if self._started:
             return
-        self._started = True
-        threading.Thread(target=self._account_loop, daemon=True, name="live-account-loop").start()
-        threading.Thread(target=self._scan_loop, args=(5.0,), daemon=True, name="live-opportunity-loop").start()
-        threading.Thread(target=self._cash_carry_loop, args=(20.0,), daemon=True, name="cash-carry-loop").start()
-        threading.Thread(target=self._reverse_cash_carry_loop, args=(35.0,), daemon=True, name="reverse-cash-carry-loop").start()
-        threading.Thread(target=self._mt4_spread_loop, args=(10.0,), daemon=True, name="mt4-spread-loop").start()
+        with self._start_lock:
+            if self._started:
+                return
+            self._started = True
+            threading.Thread(target=self._account_loop, daemon=True, name="live-account-loop").start()
+            threading.Thread(target=self._scan_loop, args=(5.0,), daemon=True, name="live-opportunity-loop").start()
+            threading.Thread(target=self._cash_carry_loop, args=(20.0,), daemon=True, name="cash-carry-loop").start()
+            threading.Thread(target=self._reverse_cash_carry_loop, args=(35.0,), daemon=True, name="reverse-cash-carry-loop").start()
+            threading.Thread(target=self._mt4_spread_loop, args=(10.0,), daemon=True, name="mt4-spread-loop").start()
+            threading.Thread(target=self._memory_guard_loop, daemon=True, name="runtime-memory-guard").start()
 
     def _account_loop(self) -> None:
         while True:
@@ -200,6 +212,65 @@ class LiveRuntimeCache:
                 self._mt4_spread_candidates = candidates
                 self._mt4_spread_issues = issues
             time.sleep(MT4_SCAN_SECONDS)
+
+    def _memory_guard_loop(self) -> None:
+        while True:
+            time.sleep(MEMORY_GUARD_SECONDS)
+            rss_mb = self._process_rss_mb()
+            if rss_mb is None:
+                continue
+            if rss_mb < MEMORY_CLEANUP_RSS_MB:
+                self._memory_restart_pressure = 0
+                continue
+            before = rss_mb
+            self._clear_runtime_caches()
+            collected = gc.collect()
+            after = self._process_rss_mb() or before
+            logger.warning(
+                "runtime memory cleanup: rss %.0fMB -> %.0fMB, collected=%s",
+                before,
+                after,
+                collected,
+            )
+            if after >= MEMORY_RESTART_RSS_MB:
+                self._memory_restart_pressure += 1
+            else:
+                self._memory_restart_pressure = 0
+                continue
+            if self._memory_restart_pressure < MEMORY_RESTART_GRACE_CYCLES:
+                continue
+            if not self._execution_lock.acquire(blocking=False):
+                logger.warning("runtime memory restart delayed: execution lock is busy")
+                continue
+            logger.error("runtime memory above %.0fMB after cleanup; exiting for systemd restart", after)
+            os._exit(75)
+
+    def _clear_runtime_caches(self) -> None:
+        cache_owners = (
+            self.scanner,
+            self.cash_carry_scanner,
+            self.reverse_cash_carry_scanner,
+            self.mt4_spread_scanner,
+            self.refresher,
+            self.cash_position_builder,
+        )
+        for owner in cache_owners:
+            clear = getattr(owner, "clear_caches", None)
+            if callable(clear):
+                clear()
+        self.ticker_cache.clear_caches(max_age_seconds=30)
+
+    def _process_rss_mb(self) -> float | None:
+        try:
+            with open("/proc/self/status", encoding="utf-8") as handle:
+                for line in handle:
+                    if line.startswith("VmRSS:"):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            return int(parts[1]) / 1024
+        except OSError:
+            return None
+        return None
 
     def _run_full_scan(self, action, fallback):
         return self._run_guarded_scan(self._full_scan_slots, action, fallback)

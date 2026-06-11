@@ -19,6 +19,9 @@ class FastOpportunityRefresher:
         self._market_cache: dict[str, tuple[datetime, dict[str, SwapMarket]]] = {}
         self.ticker_cache = ticker_cache
 
+    def clear_caches(self) -> None:
+        self._market_cache = {}
+
     def refresh(self, scan: LiveOpportunityScan, settings: BotSettings) -> LiveOpportunityScan:
         tracked = list(scan.opportunities) + list(scan.candidates)
         if not tracked:

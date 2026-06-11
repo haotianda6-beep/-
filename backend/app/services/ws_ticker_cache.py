@@ -46,6 +46,19 @@ class WSTickerCache:
             return None
         return ticker
 
+    def clear_caches(self, max_age_seconds: float | None = None) -> None:
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            if max_age_seconds is None:
+                self._tickers = {}
+            else:
+                self._tickers = {
+                    key: item
+                    for key, item in self._tickers.items()
+                    if (now - item[0]).total_seconds() <= max_age_seconds
+                }
+            self._issues = {}
+
     def issues(self) -> list[str]:
         with self._lock:
             return [issue for issue in self._issues.values() if issue]

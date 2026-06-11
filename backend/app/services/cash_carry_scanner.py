@@ -44,6 +44,10 @@ class CashCarryScanner:
         self._market_cache: dict[ExchangeName, tuple[datetime, dict[str, TradeMarket], dict[str, TradeMarket]]] = {}
         self._funding_cache: dict[ExchangeName, tuple[datetime, dict[str, Decimal]]] = {}
 
+    def clear_caches(self) -> None:
+        self._market_cache = {}
+        self._funding_cache = {}
+
     def scan(self, settings: BotSettings) -> CashCarryScan:
         if not settings.cash_carry_enabled:
             return CashCarryScan()

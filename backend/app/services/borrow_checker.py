@@ -29,6 +29,9 @@ class BorrowChecker:
     def __init__(self) -> None:
         self._cache: dict[tuple[ExchangeName, str], tuple[datetime, BorrowCheck]] = {}
 
+    def clear_caches(self) -> None:
+        self._cache = {}
+
     def check(
         self,
         exchange_name: ExchangeName,
