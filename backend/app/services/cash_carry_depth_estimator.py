@@ -1,10 +1,6 @@
 from decimal import Decimal
-from typing import Literal
 
 from app.core.models import BotSettings
-
-
-Side = Literal["forward", "reverse"]
 
 
 def estimate_max_safe_notional(
@@ -12,13 +8,10 @@ def estimate_max_safe_notional(
     swap,
     spot_symbol: str,
     swap_symbol: str,
-    side: Side,
     settings: BotSettings,
     spot_fee: Decimal,
     swap_fee: Decimal,
     funding_rate: Decimal,
-    borrow_cost_rate: Decimal = Decimal("0"),
-    borrow_available_qty: Decimal | None = None,
 ) -> Decimal | None:
     try:
         spot_book = spot.fetch_order_book(spot_symbol, limit=50)
@@ -30,35 +23,19 @@ def estimate_max_safe_notional(
         return None
     max_slippage = settings.max_slippage_pct
     min_net = settings.min_funding_net_usdt
-    if side == "reverse":
-        max_notional = _reverse_depth_notional(spot_book, swap_book, contract_size, borrow_available_qty)
-        check = lambda notional: _reverse_ok(  # noqa: E731
-            spot_book,
-            swap_book,
-            contract_size,
-            notional,
-            max_slippage,
-            settings.reverse_cash_carry_min_discount_pct,
-            min_net,
-            spot_fee,
-            swap_fee,
-            funding_rate,
-            borrow_cost_rate,
-        )
-    else:
-        max_notional = _forward_depth_notional(spot_book, swap_book, contract_size)
-        check = lambda notional: _forward_ok(  # noqa: E731
-            spot_book,
-            swap_book,
-            contract_size,
-            notional,
-            max_slippage,
-            settings.cash_carry_min_basis_pct,
-            min_net,
-            spot_fee,
-            swap_fee,
-            funding_rate,
-        )
+    max_notional = _forward_depth_notional(spot_book, swap_book, contract_size)
+    check = lambda notional: _forward_ok(  # noqa: E731
+        spot_book,
+        swap_book,
+        contract_size,
+        notional,
+        max_slippage,
+        settings.cash_carry_min_basis_pct,
+        min_net,
+        spot_fee,
+        swap_fee,
+        funding_rate,
+    )
     if max_notional <= 0 or not check(min(settings.order_notional_usdt, max_notional)):
         return Decimal("0")
     if check(max_notional):
@@ -107,62 +84,11 @@ def _forward_ok(
     return net_profit >= min_net_profit
 
 
-def _reverse_ok(
-    spot_book: dict,
-    swap_book: dict,
-    contract_size: Decimal,
-    notional: Decimal,
-    max_slippage_pct: Decimal,
-    min_discount_pct: Decimal,
-    min_net_profit: Decimal,
-    spot_fee: Decimal,
-    swap_fee: Decimal,
-    funding_rate: Decimal,
-    borrow_cost_rate: Decimal,
-) -> bool:
-    top_spot = _top_price(spot_book.get("bids") or [])
-    top_swap = _top_price(swap_book.get("asks") or [])
-    if top_spot <= 0 or top_swap <= 0:
-        return False
-    base_qty = notional / top_spot
-    _, spot_avg = _sell_vwap_base(spot_book.get("bids") or [], base_qty, Decimal("1"))
-    _, swap_avg = _buy_vwap_base(swap_book.get("asks") or [], base_qty, contract_size)
-    if spot_avg <= 0 or swap_avg <= 0:
-        return False
-    discount_pct = (spot_avg - swap_avg) / spot_avg * Decimal("100")
-    if discount_pct < min_discount_pct:
-        return False
-    spot_slippage = (top_spot - spot_avg) / top_spot * Decimal("100")
-    swap_slippage = (swap_avg - top_swap) / top_swap * Decimal("100")
-    if spot_slippage > max_slippage_pct or swap_slippage > max_slippage_pct:
-        return False
-    basis_profit = (spot_avg - swap_avg) * base_qty
-    fees = (base_qty * spot_avg * spot_fee + base_qty * swap_avg * swap_fee) * Decimal("2")
-    funding_income = notional * -funding_rate
-    net_profit = basis_profit + funding_income - fees - notional * borrow_cost_rate
-    return net_profit >= min_net_profit
-
-
 def _forward_depth_notional(spot_book: dict, swap_book: dict, contract_size: Decimal) -> Decimal:
     quote = sum(Decimal(str(price)) * Decimal(str(amount)) for price, amount, *_ in spot_book.get("asks") or [])
     swap_base = sum(Decimal(str(amount)) * contract_size for _price, amount, *_ in swap_book.get("bids") or [])
     top_spot = _top_price(spot_book.get("asks") or [])
     return min(quote, swap_base * top_spot) if top_spot > 0 else Decimal("0")
-
-
-def _reverse_depth_notional(
-    spot_book: dict,
-    swap_book: dict,
-    contract_size: Decimal,
-    borrow_available_qty: Decimal | None,
-) -> Decimal:
-    spot_base = sum(Decimal(str(amount)) for _price, amount, *_ in spot_book.get("bids") or [])
-    swap_base = sum(Decimal(str(amount)) * contract_size for _price, amount, *_ in swap_book.get("asks") or [])
-    base = min(spot_base, swap_base)
-    if borrow_available_qty is not None:
-        base = min(base, borrow_available_qty)
-    top_spot = _top_price(spot_book.get("bids") or [])
-    return base * top_spot if top_spot > 0 else Decimal("0")
 
 
 def _buy_vwap_from_quote(levels: list, quote_notional: Decimal, unit_size: Decimal) -> tuple[Decimal, Decimal]:

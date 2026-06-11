@@ -14,7 +14,7 @@ def test_ai_monitor_does_not_reuse_cache_when_signature_changes(monkeypatch) -> 
     monitor._cache_at = now
     monitor._cache_signature = "old-signature"
 
-    insight = monitor.insight([], [], [], [], True, cash_carry_positions=[], strategy_switches={})
+    insight = monitor.insight([], [], [], True, cash_carry_positions=[], strategy_switches={})
 
     assert insight.content == "DeepSeek 风控分析后台生成中。"
     for _ in range(20):
@@ -26,14 +26,14 @@ def test_ai_monitor_does_not_reuse_cache_when_signature_changes(monkeypatch) -> 
 
 def test_ai_signature_ignores_small_price_tick_changes() -> None:
     monitor = DeepSeekMonitor()
-    first = monitor._signature([], [], [], [], {"cash_carry_positions": [_cash_position("3.84", "-0.51")], "strategy_switches": {}})
-    second = monitor._signature([], [], [], [], {"cash_carry_positions": [_cash_position("3.83", "-0.48")], "strategy_switches": {}})
+    first = monitor._signature([], [], [], {"cash_carry_positions": [_cash_position("3.84", "-0.51")], "strategy_switches": {}})
+    second = monitor._signature([], [], [], {"cash_carry_positions": [_cash_position("3.83", "-0.48")], "strategy_switches": {}})
 
     assert first == second
 
 
 class _InstantMonitor(DeepSeekMonitor):
-    def _refresh(self, balances, positions, opportunities, risk_events, extra, signature) -> None:
+    def _refresh(self, balances, positions, risk_events, extra, signature) -> None:
         now = datetime.now(timezone.utc)
         with self._lock:
             self._cache = AIInsight(provider="deepseek", model="deepseek-chat", status="ready", content=f"sig:{signature}", updated_at=now)

@@ -1,8 +1,8 @@
-import { ArrowDownUp, Boxes, Landmark, LayoutDashboard } from "lucide-react";
+import { Landmark, LayoutDashboard } from "lucide-react";
 import { money, valueTone } from "../lib/format";
 import type { RealtimeSnapshot } from "../types/api";
 
-type ModuleId = "perp-spread" | "cash-carry" | "reverse-cash-carry" | "mt4-spread";
+type ModuleId = "cash-carry" | "mt4-spread";
 
 type Props = {
   snapshot: RealtimeSnapshot;
@@ -10,28 +10,12 @@ type Props = {
 };
 
 export function HomePage({ snapshot, onOpen }: Props) {
-  const perpProfit = sumProfit(snapshot.opportunities);
   const cashProfit = sumProfit(snapshot.cash_carry_opportunities);
-  const reverseProfit = sumProfit(snapshot.reverse_cash_carry_opportunities);
   const mt4Profit = sumProfit(snapshot.mt4_spread_opportunities);
   const cashRunning = snapshot.settings.cash_carry_enabled;
-  const reverseRunning = snapshot.settings.reverse_cash_carry_enabled;
   const mt4Running = snapshot.settings.mt4_spread_enabled;
   return (
     <section className="module-grid">
-      <button className="module-card" onClick={() => onOpen("perp-spread")}>
-        <div className="module-head">
-          <ArrowDownUp size={18} />
-          <span>{snapshot.settings.auto_open_enabled ? "自动运行" : "监控中"}</span>
-        </div>
-        <h2>五所永续价差套利</h2>
-        <div className="module-metrics">
-          <span>可开仓 <strong>{snapshot.opportunities.length}</strong></span>
-          <span>候选 <strong>{(snapshot.opportunity_candidates ?? []).length}</strong></span>
-        </div>
-        <div className={`module-profit ${valueTone(perpProfit)}`}>预估盈利 {money(perpProfit, 4)} USDT</div>
-      </button>
-
       <button className="module-card" onClick={() => onOpen("cash-carry")}>
         <div className="module-head">
           <Landmark size={18} />
@@ -43,19 +27,6 @@ export function HomePage({ snapshot, onOpen }: Props) {
           <span>候选 <strong>{snapshot.cash_carry_candidates.length}</strong></span>
         </div>
         <div className={`module-profit ${valueTone(cashProfit)}`}>预估盈利 {money(cashProfit, 4)} USDT</div>
-      </button>
-
-      <button className="module-card" onClick={() => onOpen("reverse-cash-carry")}>
-        <div className="module-head">
-          <Boxes size={18} />
-          <span>{reverseRunning ? (snapshot.settings.reverse_cash_carry_auto_open_enabled ? "自动运行" : "监控中") : "已关闭"}</span>
-        </div>
-        <h2>各所期现反向套利</h2>
-        <div className="module-metrics">
-          <span>可开仓 <strong>{snapshot.reverse_cash_carry_opportunities.length}</strong></span>
-          <span>候选 <strong>{snapshot.reverse_cash_carry_candidates.length}</strong></span>
-        </div>
-        <div className={`module-profit ${valueTone(reverseProfit)}`}>预估盈利 {money(reverseProfit, 4)} USDT</div>
       </button>
 
       <button className="module-card" onClick={() => onOpen("mt4-spread")}>

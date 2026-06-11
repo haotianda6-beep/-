@@ -6,7 +6,7 @@ import pytest
 from app.core.models import BotSettings, CashCarryOpportunity, CashCarryPositionRow, DataSource, ExchangeName
 from app.services.cash_carry_executor import CashCarryExecutor
 from app.services.order_sizing import contract_order_amount
-from app.services.reverse_execution_models import ExecutionStep
+from app.services.execution_models import ExecutionStep
 
 
 def test_cash_carry_executor_blocks_until_trade_subswitch_is_enabled(tmp_path) -> None:

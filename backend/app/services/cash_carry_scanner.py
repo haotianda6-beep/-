@@ -317,26 +317,19 @@ class CashCarryScanner:
         swap_market = data.swap_markets.get(item.symbol)
         if not spot_market or not swap_market:
             return item
-        borrow_rate = (item.estimated_borrow_cost or Decimal("0")) / settings.order_notional_usdt if settings.order_notional_usdt > 0 else Decimal("0")
         estimate = estimate_max_safe_notional(
             data.spot_exchange,
             data.swap_exchange,
             spot_market.ccxt_symbol,
             swap_market.ccxt_symbol,
-            self._depth_side(),
             settings,
             spot_market.taker_fee or FEE_RATES[data.exchange],
             swap_market.taker_fee or FEE_RATES[data.exchange],
             data.funding_rates.get(item.symbol, Decimal("0")),
-            borrow_rate,
-            item.borrow_available_qty,
         )
         if estimate is None:
             return item
         return item.model_copy(update={"max_safe_notional_usdt": q(estimate, "0.01")})
-
-    def _depth_side(self) -> str:
-        return "forward"
 
     def _is_pre_market(self, market: dict[str, Any]) -> bool:
         info = market.get("info") if isinstance(market.get("info"), dict) else {}

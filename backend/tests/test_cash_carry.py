@@ -68,7 +68,7 @@ def test_cash_carry_fast_refresh_uses_ws_prices() -> None:
     scanner = CashCarryScanner()
     item = scanner._build_opportunity("ABCUSDT", _data("101", "0.0002"), BotSettings(order_notional_usdt=Decimal("100")))
 
-    refreshed = CashCarryFastRefresher(_ticker_cache(), "forward").refresh(CashCarryScan(candidates=[item]), BotSettings(order_notional_usdt=Decimal("100")))
+    refreshed = CashCarryFastRefresher(_ticker_cache()).refresh(CashCarryScan(candidates=[item]), BotSettings(order_notional_usdt=Decimal("100")))
 
     assert refreshed.opportunities
     assert refreshed.opportunities[0].basis_pct == Decimal("1.5000")

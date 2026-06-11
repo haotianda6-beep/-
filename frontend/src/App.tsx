@@ -3,11 +3,8 @@ import { Activity, History, KeyRound, ListFilter, Settings } from "lucide-react"
 import { ApiCredentialsPage } from "./components/ApiCredentialsPage";
 import { AiPanel } from "./components/AiPanel";
 import { CashCarry, CashCarryDashboard } from "./components/CashCarry";
-import { Dashboard } from "./components/Dashboard";
 import { HomePage } from "./components/HomePage";
 import { Mt4Spread, Mt4SpreadDashboard } from "./components/Mt4Spread";
-import { Opportunities } from "./components/Opportunities";
-import { ReverseCashCarry, ReverseCashCarryDashboard } from "./components/ReverseCashCarry";
 import { RiskPanel } from "./components/RiskPanel";
 import { SettingsPage } from "./components/SettingsPage";
 import { Trades } from "./components/Trades";
@@ -15,7 +12,7 @@ import { createRealtimeSocket, fetchSnapshot } from "./lib/api";
 import type { AIInsight, RealtimeSnapshot, RiskEvent, TradeHistory } from "./types/api";
 
 type Tab = "dashboard" | "opportunities" | "trades";
-type Module = "home" | "perp-spread" | "cash-carry" | "reverse-cash-carry" | "mt4-spread" | "settings" | "api-credentials";
+type Module = "home" | "cash-carry" | "mt4-spread" | "settings" | "api-credentials";
 
 const tabs: Array<{ id: Tab; label: string; icon: typeof Activity }> = [
   { id: "dashboard", label: "仪表盘", icon: Activity },
@@ -79,7 +76,7 @@ export function App() {
             <KeyRound size={17} />
             <span>API 管理</span>
           </button>
-          {(activeModule === "perp-spread" || activeModule === "cash-carry" || activeModule === "reverse-cash-carry" || activeModule === "mt4-spread") && tabs.map((tab) => {
+          {(activeModule === "cash-carry" || activeModule === "mt4-spread") && tabs.map((tab) => {
             const Icon = tab.icon;
             return (
               <button key={tab.id} className={activeTab === tab.id ? "active" : ""} onClick={() => setActiveTab(tab.id)} title={tab.label}>
@@ -102,18 +99,6 @@ export function App() {
               }}
             />
           )}
-          {activeModule === "perp-spread" && activeTab === "dashboard" && <Dashboard snapshot={snapshot} />}
-          {activeModule === "perp-spread" && activeTab === "opportunities" && (
-            <Opportunities opportunities={snapshot.opportunities} candidates={snapshot.opportunity_candidates ?? []} />
-          )}
-          {activeModule === "perp-spread" && activeTab === "trades" && (
-            <Trades
-              trades={filterTrades(snapshot.trades, "perp_spread")}
-              strategy="perp_spread"
-              title="五所永续价差套利做单历史"
-              emptyText="五所永续价差套利还没有经过交易所成交回执核验的真实历史单。"
-            />
-          )}
           {activeModule === "settings" && (
             <SettingsPage
               settings={snapshot.settings}
@@ -134,21 +119,6 @@ export function App() {
               strategy="cash_carry"
               title="各所期现正向套利做单历史"
               emptyText="各所期现正向套利还没有经过交易所成交回执核验的真实历史单。"
-            />
-          )}
-          {activeModule === "reverse-cash-carry" && activeTab === "dashboard" && <ReverseCashCarryDashboard snapshot={snapshot} />}
-          {activeModule === "reverse-cash-carry" && activeTab === "opportunities" && (
-            <ReverseCashCarry
-              opportunities={snapshot.reverse_cash_carry_opportunities ?? []}
-              candidates={snapshot.reverse_cash_carry_candidates ?? []}
-            />
-          )}
-          {activeModule === "reverse-cash-carry" && activeTab === "trades" && (
-            <Trades
-              trades={filterTrades(snapshot.trades, "reverse_cash_carry")}
-              strategy="reverse_cash_carry"
-              title="各所期现反向套利做单历史"
-              emptyText="各所期现反向套利还没有经过交易所成交回执核验的真实历史单。"
             />
           )}
           {activeModule === "mt4-spread" && activeTab === "dashboard" && <Mt4SpreadDashboard snapshot={snapshot} />}
@@ -177,9 +147,7 @@ export function App() {
 }
 
 function titleFor(module: Module): string {
-  if (module === "perp-spread") return "五所永续价差套利执行台";
   if (module === "cash-carry") return "各所期现正向套利";
-  if (module === "reverse-cash-carry") return "各所期现反向套利";
   if (module === "mt4-spread") return "MT4 与五所合约价差套利";
   if (module === "settings") return "全局参数设置";
   if (module === "api-credentials") return "API 管理";

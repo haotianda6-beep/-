@@ -7,7 +7,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 STATE_FILES = (
     ("cash-carry", "正向期现执行器", PROJECT_ROOT / "config" / "cash_carry_execution_state.json"),
-    ("reverse-cash-carry", "反向期现执行器", PROJECT_ROOT / "config" / "reverse_execution_state.json"),
 )
 
 
@@ -43,10 +42,8 @@ def _last_result(path: Path) -> dict[str, Any] | None:
 def _localized_reason(reason: str) -> str:
     text = reason[:500]
     lower = text.lower()
-    if "34022030" in lower or "borrowing demand is high" in lower or "fund pool" in lower:
-        return "BYBIT 借币资金池不足，交易所暂时没有可借库存；已进入冷却，等待资金池恢复后再重试。错误码 34022030。"
     if "fromtypespot.wallet.fromtype.empty" in lower or "totypespot.wallet.totype.empty" in lower:
-        return "BITGET 划转账户类型为空；系统已改为使用 Bitget 支持的账户类型。正向使用 swap -> spot，反向使用 spot -> cross。若仍失败，请确认对应账户 USDT 可划转。"
+        return "BITGET 划转账户类型为空；系统已改为使用 Bitget 支持的账户类型。若仍失败，请确认对应账户 USDT 可划转。"
     if "maximum transferable amount" in lower:
         return "BITGET 现货账户可划转 USDT 不足；系统已改为反向开仓前先从合约账户补到现货，再划转到跨保证金。若仍失败，请确认合约账户可划转余额。"
     if "fromaccount can not be toaccount" in lower:

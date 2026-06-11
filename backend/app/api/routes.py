@@ -23,30 +23,10 @@ async def get_snapshot() -> RealtimeSnapshot:
     return await _snapshot()
 
 
-@router.get("/dashboard")
-async def get_dashboard():
-    settings = await run_in_threadpool(engine.settings_store.load)
-    if await run_in_threadpool(engine.live_read.live_data_enabled):
-        return []
-    return await run_in_threadpool(engine.get_dashboard, settings)
-
-
-@router.get("/opportunities")
-async def get_opportunities():
-    settings, runtime = await _runtime()
-    return runtime.scan.opportunities if runtime else await run_in_threadpool(engine.get_opportunities, settings)
-
-
 @router.get("/cash-carry/opportunities")
 async def get_cash_carry_opportunities():
     _, runtime = await _runtime()
     return runtime.cash_carry.opportunities if runtime else []
-
-
-@router.get("/reverse-cash-carry/opportunities")
-async def get_reverse_cash_carry_opportunities():
-    _, runtime = await _runtime()
-    return runtime.reverse_cash_carry.opportunities if runtime else []
 
 
 @router.get("/mt4-spread/opportunities")

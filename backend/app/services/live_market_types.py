@@ -1,10 +1,6 @@
 from dataclasses import dataclass, field
-from decimal import Decimal
-from typing import Any
 
-from app.core.models import CashCarryOpportunity, ExchangeName, Opportunity, OpportunityCandidate
-from app.services.asset_identity import MarketAsset
-from app.services.market_checks import TransferNetworks
+from app.core.models import CashCarryOpportunity, ExchangeName
 
 
 SWAP_EXCHANGE_IDS = {
@@ -22,34 +18,6 @@ SPOT_EXCHANGE_IDS = {
     ExchangeName.BITGET: "bitget",
     ExchangeName.BYBIT: "bybit",
 }
-
-
-@dataclass(frozen=True)
-class SwapMarket:
-    symbol: str
-    ccxt_symbol: str
-    taker_fee: Decimal
-    asset: MarketAsset
-
-
-@dataclass
-class ExchangeMarketData:
-    exchange: ExchangeName
-    swap_exchange: Any | None = None
-    swaps: dict[str, SwapMarket] = field(default_factory=dict)
-    spot_markets: dict[str, MarketAsset] = field(default_factory=dict)
-    transfer_networks: dict[str, TransferNetworks] = field(default_factory=dict)
-    transfer_query_ok: bool = False
-    tickers: dict[str, dict[str, Any]] = field(default_factory=dict)
-    funding_rates: dict[str, Decimal] = field(default_factory=dict)
-    issues: list[str] = field(default_factory=list)
-
-
-@dataclass
-class LiveOpportunityScan:
-    opportunities: list[Opportunity] = field(default_factory=list)
-    candidates: list[OpportunityCandidate] = field(default_factory=list)
-    issues: list[str] = field(default_factory=list)
 
 
 @dataclass

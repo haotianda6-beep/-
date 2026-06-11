@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from app.services.live_read import decimal_from
-from app.services.reverse_execution_models import ExecutionStep
+from app.services.execution_models import ExecutionStep
 
 
 def transfer_usdt_to_spot(exchange, amount: Decimal, step: ExecutionStep, enabled: bool = True) -> None:

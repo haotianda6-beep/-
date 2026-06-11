@@ -6,7 +6,7 @@ from typing import Any
 
 from app.core.models import ExchangeName
 from app.services.cash_carry_execution_models import CashCarryPosition
-from app.services.reverse_execution_models import ExecutionResult
+from app.services.execution_models import ExecutionResult
 
 
 class CashCarryStateStore:

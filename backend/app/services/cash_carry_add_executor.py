@@ -7,7 +7,7 @@ from app.core.models import BotSettings, CashCarryOpportunity, CashCarryPosition
 from app.services.cash_carry_add_policy import CashCarryAddDecision, cash_carry_add_decision
 from app.services.cash_carry_execution_models import CashCarryPosition
 from app.services.order_sizing import contract_order_amount, fetch_order_snapshot, filled_base_quantity, order_average_price, spot_market_buy
-from app.services.reverse_execution_models import ExecutionResult, ExecutionStep
+from app.services.execution_models import ExecutionResult, ExecutionStep
 
 
 def evaluate_cash_carry_add(

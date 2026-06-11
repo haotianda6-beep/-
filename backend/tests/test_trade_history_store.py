@@ -53,63 +53,6 @@ def test_trade_history_store_reads_verified_cash_carry_history(tmp_path) -> None
     assert rows[0].reconcile_status == "verified"
 
 
-def test_trade_history_store_reads_cross_and_reverse_closed_rows(tmp_path) -> None:
-    config = tmp_path / "config"
-    config.mkdir()
-    (config / "cross_spread_execution_state.json").write_text(
-        json.dumps(
-            {
-                "positions": [
-                    {
-                        "id": "cross-1",
-                        "symbol": "ABCUSDT",
-                        "long_exchange": "BINANCE",
-                        "short_exchange": "OKX",
-                        "quantity": "1",
-                        "long_entry_price": "100",
-                        "short_entry_price": "103",
-                        "opened_at": "2026-06-09T00:00:00+00:00",
-                        "closed_at": "2026-06-09T01:00:00+00:00",
-                        "close_reason": "价差收敛",
-                        "status": "closed",
-                    }
-                ]
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    (config / "reverse_execution_state.json").write_text(
-        json.dumps(
-            {
-                "positions": [
-                    {
-                        "id": "reverse-1",
-                        "exchange": "BYBIT",
-                        "symbol": "XYZUSDT",
-                        "base_asset": "XYZ",
-                        "quantity": "2",
-                        "borrowed_quantity": "2",
-                        "spot_entry_price": "10",
-                        "perp_entry_price": "9.8",
-                        "opened_at": "2026-06-09T02:00:00+00:00",
-                        "closed_at": "2026-06-09T03:00:00+00:00",
-                        "status": "closed",
-                    }
-                ]
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-
-    rows = TradeHistoryStore(Path(tmp_path)).load()
-    strategies = {row.strategy_type for row in rows}
-
-    assert strategies == {"perp_spread", "reverse_cash_carry"}
-    assert all(row.reconcile_status == "pending" for row in rows)
-
-
 def test_trade_history_store_keeps_unreconciled_cash_carry_closed_rows(tmp_path) -> None:
     config = tmp_path / "config"
     config.mkdir()
