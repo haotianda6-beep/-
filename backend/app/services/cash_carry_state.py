@@ -43,7 +43,7 @@ class CashCarryStateStore:
                     item.update(extra)
         self.write(state)
 
-    def mark_status(self, position_id: str, status: str, reason: str = "") -> None:
+    def mark_status(self, position_id: str, status: str, reason: str = "", extra: dict[str, Any] | None = None) -> None:
         state = self.read()
         for item in state.get("positions", []):
             if item.get("id") == position_id:
@@ -52,6 +52,8 @@ class CashCarryStateStore:
                     item["close_reason"] = reason
                 elif status == "open":
                     item.pop("close_reason", None)
+                if extra:
+                    item.update(extra)
         self.write(state)
 
     def recently_closed_keys(self, cooldown_seconds: int, now: datetime | None = None) -> set[tuple[ExchangeName, str]]:

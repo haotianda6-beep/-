@@ -146,3 +146,56 @@ def test_trade_history_store_keeps_unreconciled_cash_carry_closed_rows(tmp_path)
     assert rows[0].symbol == "AIAUSDT"
     assert rows[0].reconcile_status == "pending"
     assert rows[0].close_reason == "合约腿已平，现货单腿已人工卖出"
+
+
+def test_trade_history_store_shows_cash_carry_liquidation_mismatch(tmp_path) -> None:
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "cash_carry_execution_state.json").write_text(
+        json.dumps(
+            {
+                "positions": [
+                    {
+                        "id": "cash-liquidated",
+                        "exchange": "BITGET",
+                        "symbol": "SKYAIUSDT",
+                        "base_asset": "SKYAI",
+                        "quantity": "1633",
+                        "spot_entry_price": "0.1832",
+                        "perp_entry_price": "0.1849",
+                        "opened_at": "2026-06-11T04:18:43+00:00",
+                        "close_reason": "BITGET SKYAIUSDT 合约腿已被交易所强平，现货仍持有，已标记 mismatch",
+                        "status": "mismatch",
+                        "history": {
+                            "closed_at": "2026-06-11T06:06:32+00:00",
+                            "quantity": "1633",
+                            "long_open_price": "0.1832",
+                            "long_close_price": None,
+                            "short_open_price": "0.1849",
+                            "short_close_price": "0.20326",
+                            "actual_fee": "0.4",
+                            "total_pnl": "-29.994",
+                            "long_pnl": "0",
+                            "short_pnl": "-29.994",
+                            "funding_net": "0",
+                            "actual_net_profit": "-30.394",
+                            "long_order_ids": ["spot-open"],
+                            "short_order_ids": ["perp-open", "force-close"],
+                            "reconcile_status": "verified",
+                        },
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    rows = TradeHistoryStore(Path(tmp_path)).load()
+
+    assert len(rows) == 1
+    assert rows[0].symbol == "SKYAIUSDT"
+    assert rows[0].closed_at.isoformat() == "2026-06-11T06:06:32+00:00"
+    assert rows[0].long_close_price is None
+    assert rows[0].actual_net_profit == Decimal("-30.394")
+    assert rows[0].reconcile_status == "verified"

@@ -31,12 +31,17 @@ class TradeHistoryStore:
     def _cash_carry_rows(self) -> list[TradeHistory]:
         rows = []
         for item in self._state_positions("cash_carry_execution_state.json"):
-            if item.get("status") != "closed" or not item.get("closed_at"):
+            if not self._cash_history_visible(item):
                 continue
             row = self._cash_row(item)
             if row:
                 rows.append(row)
         return rows
+
+    def _cash_history_visible(self, item: dict[str, Any]) -> bool:
+        if item.get("status") == "closed" and item.get("closed_at"):
+            return True
+        return item.get("status") == "mismatch" and isinstance(item.get("history"), dict) and item["history"].get("closed_at")
 
     def _reverse_cash_carry_rows(self) -> list[TradeHistory]:
         rows = []
@@ -75,7 +80,7 @@ class TradeHistoryStore:
                 symbol=item["symbol"],
                 quantity=self._decimal(history.get("quantity") or item["quantity"]),
                 opened_at=self._datetime(history.get("opened_at") or item["opened_at"]),
-                closed_at=self._datetime(item["closed_at"]),
+                closed_at=self._datetime(history.get("closed_at") or item.get("closed_at")) if history.get("closed_at") or item.get("closed_at") else None,
                 long_exchange=long_exchange,
                 short_exchange=short_exchange,
                 long_open_price=self._decimal(history.get("long_open_price") or item["long_entry_price"]),
@@ -117,7 +122,7 @@ class TradeHistoryStore:
                 symbol=item["symbol"],
                 quantity=quantity,
                 opened_at=self._datetime(history.get("opened_at") or item["opened_at"]),
-                closed_at=self._datetime(item["closed_at"]),
+                closed_at=self._datetime(history.get("closed_at") or item.get("closed_at")) if history.get("closed_at") or item.get("closed_at") else None,
                 long_exchange=exchange,
                 short_exchange=exchange,
                 long_open_price=long_open,

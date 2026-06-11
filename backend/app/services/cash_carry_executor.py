@@ -11,7 +11,7 @@ from app.services.cash_carry_add_executor import evaluate_cash_carry_add
 from app.services.cash_carry_close_policy import cash_carry_close_decision
 from app.services.cash_carry_execution_guard import forward_close_depth_guard, forward_open_depth_guard
 from app.services.cash_carry_execution_models import CashCarryPosition
-from app.services.cash_carry_reconciler import build_cash_carry_history
+from app.services.cash_carry_reconciler import build_cash_carry_external_perp_close_history, build_cash_carry_history
 from app.services.cash_carry_state import CashCarryStateStore
 from app.services.cash_carry_transfer import transfer_usdt_to_spot
 from app.services.exchange_factory import build_ccxt_exchange, sanitize_exchange_error
@@ -75,8 +75,8 @@ class CashCarryExecutor:
             live = live_by_key.get((record.exchange, record.symbol))
             if not live:
                 if record.status == "open":
-                    reason = f"{record.exchange} {record.symbol} 本地有开仓记录，但实盘合约仓位为空，已标记 mismatch"
-                    self.state.mark_status(record.id, "mismatch", reason)
+                    reason, extra = self._missing_live_perp_status(record)
+                    self.state.mark_status(record.id, "mismatch", reason, extra)
                     return self.state.remember(ExecutionResult(record.id, "failed", reason, []))
                 continue
             if record.status == "mismatch" and live.status == "matched":
@@ -195,6 +195,31 @@ class CashCarryExecutor:
             return self.state.remember(ExecutionResult(record.id, "close_submitted", f"已提交正向期现平仓流程{suffix}", steps))
         except Exception as exc:  # noqa: BLE001
             return self.state.remember(ExecutionResult(record.id, "failed", self._sanitize(str(exc)), steps))
+
+    def _missing_live_perp_status(self, record: CashCarryPosition) -> tuple[str, dict[str, Any]]:
+        reason = f"{record.exchange} {record.symbol} 本地有开仓记录，但实盘合约仓位为空，已标记 mismatch"
+        extra: dict[str, Any] = {}
+        try:
+            spot = self._exchange(record.exchange, "spot")
+            swap = self._exchange(record.exchange, "swap")
+            spot_symbol = f"{record.base_asset}/USDT"
+            swap_symbol = f"{record.base_asset}/USDT:USDT"
+            history = build_cash_carry_external_perp_close_history(spot, swap, record, spot_symbol, swap_symbol)
+            if not history:
+                return reason, extra
+            is_liquidation = history.get("external_close_type") == "liquidation"
+            action = "交易所强平" if is_liquidation else "外部平仓"
+            reason = f"{record.exchange} {record.symbol} 合约腿已被{action}，现货仍持有，已标记 mismatch"
+            extra = {
+                "history": history,
+                "closed_at": history.get("closed_at"),
+                "close_perp_order_id": history.get("close_perp_order_id"),
+                "perp_close_price": history.get("short_close_price"),
+                "spot_close_price": None,
+            }
+        except Exception as exc:  # noqa: BLE001 - keep live monitor running even if reconciliation fails.
+            reason = f"{reason}；强平对账失败 {self._sanitize(str(exc))}"
+        return reason, extra
 
     def _open_plan(self, item: CashCarryOpportunity, settings: BotSettings) -> list[ExecutionStep]:
         return [
