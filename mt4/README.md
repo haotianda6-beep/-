@@ -8,7 +8,7 @@
 5. EA 参数：
    - `BridgeUrl`: `https://redzhong.top/api/mt4/quote`
    - `BridgeToken`: 与服务器 `.env` 里的 `MT4_BRIDGE_TOKEN` 保持一致
-   - `CommoditySymbols`: 大宗商品符号，按你的 MT4 券商实际符号填写
+   - `CommoditySymbols`: 大宗商品符号，默认包含 `XAUUSD,XAGUSD,XBRUSD,XTIUSD,NATGAS`。其中 `XBRUSD` 按 Brent 原油映射到交易所 `BZUSDT`，`XTIUSD` 按 WTI 原油映射到交易所 `CLUSDT`；如券商符号不同，按你的 MT4 实际符号填写
    - `StockSymbols`: 美股个股符号，默认包含 `AAPL.NAS,AMZN.NAS,BA.NYS,BABA.NYS,BIDU.NAS,C.NYS,GILD.NAS,GOOG.NAS,IBM.NYS,JD.NAS,KO.NYS,MCD.NYS,META.NAS,MSFT.NAS,NFLX.NAS,NKE.NYS,NTES.NAS,NVDA.NAS,SBUX.NAS,TSLA.NAS,V.NYS`，可按你的 MT4 券商实际符号调整
    - `PushIntervalSeconds`: 默认 1 秒
 

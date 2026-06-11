@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from app.core.models import BotSettings, ExchangeName
-from app.services.mt4_bridge import Mt4QuoteIn, Mt4QuoteStore, Mt4SpreadScanner
+from app.services.mt4_bridge import Mt4QuoteIn, Mt4QuoteStore, Mt4SpreadScanner, instrument_info
 
 
 def test_mt4_quote_store_persists_quote_and_estimates_overnight(tmp_path) -> None:
@@ -153,6 +153,35 @@ def test_mt4_quote_store_maps_google_nasdaq_symbol_to_exchange_alias(tmp_path) -
     assert opportunities[0].exchange_symbol == "GOOGLUSDT"
 
 
+def test_mt4_quote_store_maps_crude_oil_symbols_with_broker_suffix(tmp_path) -> None:
+    store = Mt4QuoteStore(tmp_path / "quotes.json")
+
+    xti = store.update(Mt4QuoteIn(symbol="XTIUSD.pro", bid=Decimal("70"), ask=Decimal("70.1"), contract_size=Decimal("1000")))
+    xbr = store.update(Mt4QuoteIn(symbol="XBRUSD#", bid=Decimal("80"), ask=Decimal("80.1"), contract_size=Decimal("1000")))
+
+    assert xti.symbol == "XTIUSD"
+    assert xbr.symbol == "XBRUSD"
+    assert xti.contract_size == Decimal("1000")
+    assert instrument_info("XTIUSD")["aliases"][0] == "CLUSDT"
+    assert instrument_info("XBRUSD")["aliases"][0] == "BZUSDT"
+
+
+def test_mt4_scanner_batches_exchange_tickers_for_matched_symbols(tmp_path) -> None:
+    store = Mt4QuoteStore(tmp_path / "quotes.json")
+    store.update(Mt4QuoteIn(symbol="XTIUSD", bid=Decimal("70"), ask=Decimal("70.1"), contract_size=Decimal("1000")))
+    store.update(Mt4QuoteIn(symbol="XBRUSD", bid=Decimal("80"), ask=Decimal("80.1"), contract_size=Decimal("1000")))
+    scanner = _BatchScanner(store)
+    settings = BotSettings(mt4_notional_usdt=Decimal("100"), mt4_min_spread_pct=Decimal("0.5"))
+
+    opportunities, _candidates, issues = scanner.scan(settings)
+
+    assert issues == []
+    assert {item.instrument for item in opportunities} == {"XTIUSD", "XBRUSD"}
+    assert {item.exchange_symbol for item in opportunities} == {"CLUSDT", "BZUSDT"}
+    assert scanner.exchange.fetch_tickers_count == 1
+    assert scanner.exchange.fetch_ticker_count == 0
+
+
 def test_mt4_scanner_cleans_okx_markets_with_empty_symbols() -> None:
     scanner = Mt4SpreadScanner()
     first = _OkxMarketExchange()
@@ -207,6 +236,41 @@ class _GoldScanner(_Scanner):
 
     def _funding(self, exchange_name, exchange):
         return {"XAUUSDT": Decimal("0")}
+
+
+class _BatchScanner(_Scanner):
+    def __init__(self, quote_store):
+        super().__init__(quote_store)
+        self.exchange = _BatchExchange()
+
+    def _exchange(self, exchange_name):
+        return self.exchange
+
+    def _markets(self, exchange_name, exchange):
+        return {"CLUSDT": "CL/USDT:USDT", "BZUSDT": "BZ/USDT:USDT"}
+
+    def _funding(self, exchange_name, exchange):
+        return {"CLUSDT": Decimal("0"), "BZUSDT": Decimal("0")}
+
+
+class _BatchExchange:
+    has = {"fetchTickers": True}
+
+    def __init__(self) -> None:
+        self.fetch_tickers_count = 0
+        self.fetch_ticker_count = 0
+
+    def fetch_tickers(self, symbols):
+        self.fetch_tickers_count += 1
+        assert set(symbols) == {"CL/USDT:USDT", "BZ/USDT:USDT"}
+        return {
+            "CL/USDT:USDT": {"symbol": "CL/USDT:USDT", "bid": "72", "ask": "72.1"},
+            "BZ/USDT:USDT": {"symbol": "BZ/USDT:USDT", "bid": "82", "ask": "82.1"},
+        }
+
+    def fetch_ticker(self, symbol):
+        self.fetch_ticker_count += 1
+        return {"bid": "0", "ask": "0"}
 
 
 class _OkxMarketExchange:

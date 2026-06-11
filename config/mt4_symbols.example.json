@@ -5,7 +5,19 @@
   },
   "USOIL": {
     "type": "commodity",
-    "aliases": ["USOILUSDT", "WTIUSDT", "OILUSDT"]
+    "aliases": ["CLUSDT", "WTIUSDT", "USOILUSDT", "XTIUSDT", "OILUSDT"]
+  },
+  "UKOIL": {
+    "type": "commodity",
+    "aliases": ["BZUSDT", "BRENTUSDT", "UKOILUSDT", "XBRUSDT", "BRNUSDT", "BRENTOILUSDT"]
+  },
+  "XTIUSD": {
+    "type": "commodity",
+    "aliases": ["CLUSDT", "WTIUSDT", "USOILUSDT", "XTIUSDT", "OILUSDT"]
+  },
+  "XBRUSD": {
+    "type": "commodity",
+    "aliases": ["BZUSDT", "BRENTUSDT", "UKOILUSDT", "XBRUSDT", "BRNUSDT", "BRENTOILUSDT"]
   },
   "AAPL": {
     "type": "stock",

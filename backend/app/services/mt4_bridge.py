@@ -21,11 +21,15 @@ QUOTE_PATH = PROJECT_ROOT / "config" / "mt4_quotes.json"
 SYMBOL_CONFIG_PATH = PROJECT_ROOT / "config" / "mt4_symbols.json"
 
 
+AMBIGUOUS_COMMODITY_ALIASES = {"OILUSDT", "BRNUSDT"}
+COMMODITY_MARKET_HINTS = {"COMMODITY", "TRADIFI", "CFD"}
 DEFAULT_INSTRUMENTS: dict[str, dict[str, Any]] = {
     "XAUUSD": {"type": "commodity", "aliases": ["XAUUSDT", "GOLDUSDT", "PAXGUSDT"]},
     "XAGUSD": {"type": "commodity", "aliases": ["XAGUSDT", "SILVERUSDT"]},
-    "USOIL": {"type": "commodity", "aliases": ["USOILUSDT", "WTIUSDT", "OILUSDT"]},
-    "UKOIL": {"type": "commodity", "aliases": ["UKOILUSDT", "BRENTUSDT"]},
+    "XTIUSD": {"type": "commodity", "aliases": ["CLUSDT", "WTIUSDT", "USOILUSDT", "XTIUSDT", "OILUSDT"]},
+    "XBRUSD": {"type": "commodity", "aliases": ["BZUSDT", "BRENTUSDT", "UKOILUSDT", "XBRUSDT", "BRNUSDT", "BRENTOILUSDT"]},
+    "USOIL": {"type": "commodity", "aliases": ["CLUSDT", "WTIUSDT", "USOILUSDT", "XTIUSDT", "OILUSDT"]},
+    "UKOIL": {"type": "commodity", "aliases": ["BZUSDT", "BRENTUSDT", "UKOILUSDT", "XBRUSDT", "BRNUSDT", "BRENTOILUSDT"]},
     "NATGAS": {"type": "commodity", "aliases": ["NATGASUSDT", "NGUSDT"]},
     "AAPL": {"type": "stock", "aliases": ["AAPLUSDT"]},
     "AMZN": {"type": "stock", "aliases": ["AMZNUSDT"]},
@@ -226,18 +230,64 @@ class Mt4SpreadScanner:
             issues.append(f"{exchange}: MT4 对比合约行情读取失败 {str(exc)[:180]}")
             return []
 
-        rows: list[Mt4SpreadOpportunity] = []
+        matched: list[tuple[Mt4Quote, str]] = []
         for quote in quotes:
             symbol = self._mapped_symbol(quote.symbol, markets)
             if not symbol:
                 continue
-            try:
-                ticker = instance.fetch_ticker(markets[symbol])
-            except Exception as exc:  # noqa: BLE001
-                issues.append(f"{exchange} {quote.symbol}: MT4 对比合约行情读取失败 {str(exc)[:160]}")
+            matched.append((quote, symbol))
+        tickers = self._tickers(instance, markets, [symbol for _quote, symbol in matched])
+        rows: list[Mt4SpreadOpportunity] = []
+        for quote, symbol in matched:
+            ticker = tickers.get(symbol)
+            if not ticker:
+                issues.append(f"{exchange} {quote.symbol}: MT4 对比合约行情未返回 {symbol}")
                 continue
             rows.append(self._row(exchange, quote, symbol, ticker, funding.get(symbol, Decimal("0")), settings))
         return rows
+
+    def _tickers(self, exchange, markets: dict[str, str], symbols: list[str]) -> dict[str, dict[str, Any]]:
+        unique_symbols = sorted({symbol for symbol in symbols if symbol in markets})
+        if not unique_symbols:
+            return {}
+        result: dict[str, dict[str, Any]] = {}
+        ccxt_symbols = [markets[symbol] for symbol in unique_symbols]
+        if (getattr(exchange, "has", {}) or {}).get("fetchTickers"):
+            try:
+                result.update(self._normalize_tickers(exchange.fetch_tickers(ccxt_symbols), markets, unique_symbols))
+            except Exception:
+                result = {}
+        for symbol in unique_symbols:
+            if symbol in result:
+                continue
+            try:
+                result[symbol] = exchange.fetch_ticker(markets[symbol])
+            except Exception:
+                continue
+        return result
+
+    def _normalize_tickers(self, raw: Any, markets: dict[str, str], symbols: list[str]) -> dict[str, dict[str, Any]]:
+        reverse: dict[str, str] = {}
+        for symbol in symbols:
+            ccxt_symbol = markets[symbol]
+            reverse[symbol] = symbol
+            reverse[ccxt_symbol] = symbol
+            reverse[normalize_ccxt_symbol(ccxt_symbol)] = symbol
+        if isinstance(raw, dict):
+            items = raw.items()
+        elif isinstance(raw, list):
+            items = ((item.get("symbol"), item) for item in raw if isinstance(item, dict))
+        else:
+            return {}
+        result: dict[str, dict[str, Any]] = {}
+        for key, ticker in items:
+            if not isinstance(ticker, dict):
+                continue
+            raw_symbol = str(ticker.get("symbol") or key or "")
+            symbol = reverse.get(str(key)) or reverse.get(normalize_ccxt_symbol(str(key))) or reverse.get(raw_symbol) or reverse.get(normalize_ccxt_symbol(raw_symbol))
+            if symbol:
+                result[symbol] = ticker
+        return result
 
     def _row(
         self,
@@ -354,9 +404,29 @@ class Mt4SpreadScanner:
         for market in raw.values():
             if not market.get("swap") or market.get("quote") != "USDT" or market.get("active") is False:
                 continue
-            markets[normalized_market_symbol(market)] = market["symbol"]
+            symbol = normalized_market_symbol(market)
+            if not self._market_identity_allowed(symbol, market):
+                continue
+            markets[symbol] = market["symbol"]
         self._market_cache[exchange_name] = (now, markets)
         return markets
+
+    def _market_identity_allowed(self, symbol: str, market: dict[str, Any]) -> bool:
+        if symbol not in AMBIGUOUS_COMMODITY_ALIASES:
+            return True
+        info = market.get("info") if isinstance(market.get("info"), dict) else {}
+        values = [
+            market.get("category"),
+            market.get("underlyingType"),
+            market.get("productType"),
+            market.get("symbolType"),
+            info.get("category"),
+            info.get("underlyingType"),
+            info.get("productType"),
+            info.get("symbolType"),
+        ]
+        text = " ".join(str(value).upper() for value in values if value)
+        return any(hint in text for hint in COMMODITY_MARKET_HINTS)
 
     def _load_markets(self, exchange_name: ExchangeName, exchange) -> dict[str, Any]:
         if exchange_name != ExchangeName.OKX:
