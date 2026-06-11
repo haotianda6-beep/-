@@ -1,3 +1,4 @@
+import inspect
 from typing import Any
 
 import ccxt
@@ -48,3 +49,24 @@ def _apply_exchange_modes(exchange, exchange_name: ExchangeName, use_testnet: bo
         exchange.headers = {**getattr(exchange, "headers", {}), "x-simulated-trading": "1"}
     if exchange_name == ExchangeName.BITGET and use_demo:
         exchange.options = {**getattr(exchange, "options", {}), "defaultType": exchange.options.get("defaultType", "swap")}
+    if exchange_name == ExchangeName.OKX:
+        _patch_okx_empty_market_rows(exchange)
+
+
+def _patch_okx_empty_market_rows(exchange) -> None:
+    if getattr(exchange, "_perp_arb_okx_market_patch", False):
+        return
+    original_fetch_markets = exchange.fetch_markets
+
+    def valid_markets(markets):
+        return [market for market in markets if market.get("id") and market.get("symbol")]
+
+    if inspect.iscoroutinefunction(original_fetch_markets):
+        async def fetch_markets(params=None):
+            return valid_markets(await original_fetch_markets(params or {}))
+    else:
+        def fetch_markets(params=None):
+            return valid_markets(original_fetch_markets(params or {}))
+
+    exchange.fetch_markets = fetch_markets
+    exchange._perp_arb_okx_market_patch = True
