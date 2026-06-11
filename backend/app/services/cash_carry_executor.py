@@ -16,6 +16,7 @@ from app.services.cash_carry_state import CashCarryStateStore
 from app.services.cash_carry_transfer import transfer_usdt_to_spot
 from app.services.exchange_factory import build_ccxt_exchange, sanitize_exchange_error
 from app.services.live_market_types import SPOT_EXCHANGE_IDS, SWAP_EXCHANGE_IDS
+from app.services.live_read import decimal_from
 from app.services.order_sizing import contract_order_amount, fetch_order_snapshot, filled_base_quantity, order_average_price, spot_market_buy
 from app.services.reverse_execution_models import ExecutionResult, ExecutionStep
 
@@ -74,10 +75,8 @@ class CashCarryExecutor:
         for record in self.state.load_positions(include_non_open=True):
             live = live_by_key.get((record.exchange, record.symbol))
             if not live:
-                if record.status == "open":
-                    reason, extra = self._missing_live_perp_status(record)
-                    self.state.mark_status(record.id, "mismatch", reason, extra)
-                    return self.state.remember(ExecutionResult(record.id, "failed", reason, []))
+                if record.status in {"open", "mismatch"}:
+                    return self._handle_missing_live_perp(record, settings)
                 continue
             if record.status == "mismatch" and live.status == "matched":
                 self.state.mark_status(record.id, "open")
@@ -197,6 +196,16 @@ class CashCarryExecutor:
         except Exception as exc:  # noqa: BLE001
             return self.state.remember(ExecutionResult(record.id, "failed", self._sanitize(str(exc)), steps))
 
+    def _handle_missing_live_perp(self, record: CashCarryPosition, settings: BotSettings) -> ExecutionResult:
+        reason, extra = self._missing_live_perp_status(record)
+        self.state.mark_status(record.id, "mismatch", reason, extra)
+        history = extra.get("history") if isinstance(extra.get("history"), dict) else {}
+        if not settings.cash_carry_auto_close_enabled:
+            return self.state.remember(ExecutionResult(record.id, "failed", reason, []))
+        if not history:
+            return self.state.remember(ExecutionResult(record.id, "failed", reason, []))
+        return self._execute_orphan_spot_close(record, settings, reason, history)
+
     def _missing_live_perp_status(self, record: CashCarryPosition) -> tuple[str, dict[str, Any]]:
         reason = f"{record.exchange} {record.symbol} 本地有开仓记录，但实盘合约仓位为空，已标记 mismatch"
         extra: dict[str, Any] = {}
@@ -221,6 +230,54 @@ class CashCarryExecutor:
         except Exception as exc:  # noqa: BLE001 - keep live monitor running even if reconciliation fails.
             reason = f"{reason}；强平对账失败 {self._sanitize(str(exc))}"
         return reason, extra
+
+    def _execute_orphan_spot_close(
+        self,
+        record: CashCarryPosition,
+        settings: BotSettings,
+        reason: str,
+        external_history: dict[str, Any],
+    ) -> ExecutionResult:
+        spot = self._exchange(record.exchange, "spot")
+        swap = self._exchange(record.exchange, "swap")
+        spot_symbol = f"{record.base_asset}/USDT"
+        swap_symbol = f"{record.base_asset}/USDT:USDT"
+        steps = [ExecutionStep("sell_orphan_spot", "pending", f"{reason}，自动卖出现货孤腿 {record.symbol}")]
+        gate_reasons = self._safety_gate(settings, opening=False, protective=True)
+        if gate_reasons:
+            return self.state.remember(ExecutionResult(record.id, "blocked_by_safety_gate", " / ".join(gate_reasons), steps))
+        try:
+            spot_qty = min(self._spot_free_quantity(spot, record.base_asset), record.quantity)
+            if spot_qty <= self._dust_quantity(record.quantity):
+                return self.state.remember(ExecutionResult(record.id, "failed", f"{reason}；现货可卖数量为 0，需人工核对", steps))
+            spot_order = self._run(steps[0], lambda: spot.create_order(spot_symbol, "market", "sell", float(spot_qty)), True)
+            spot_order = fetch_order_snapshot(spot, spot_symbol, spot_order)
+            close_spot_order_id = self._order_id(spot_order)
+            close_perp_order_id = external_history.get("close_perp_order_id") or (external_history.get("short_order_ids") or [None])[-1]
+            history = self._orphan_close_history(spot, swap, record, spot_symbol, swap_symbol, close_spot_order_id, close_perp_order_id)
+            close_fields = {
+                "close_spot_order_id": close_spot_order_id,
+                "close_perp_order_id": close_perp_order_id,
+                "spot_close_price": self._order_price(spot_order),
+                "perp_close_price": history.get("short_close_price") or external_history.get("short_close_price"),
+                "close_spot_raw": spot_order if isinstance(spot_order, dict) else None,
+                "history": history or external_history,
+            }
+            self.state.mark_closed(record.id, f"{reason}；系统已自动卖出现货孤腿", close_fields)
+            return self.state.remember(ExecutionResult(record.id, "close_submitted", f"{reason}；系统已自动卖出现货孤腿", steps))
+        except Exception as exc:  # noqa: BLE001
+            return self.state.remember(ExecutionResult(record.id, "failed", f"{reason}；自动卖出现货孤腿失败 {self._sanitize(str(exc))}", steps))
+
+    def _orphan_close_history(self, spot, swap, record: CashCarryPosition, spot_symbol: str, swap_symbol: str, close_spot_order_id: str | None, close_perp_order_id: str | None) -> dict[str, Any]:
+        return build_cash_carry_history(spot, swap, record, spot_symbol, swap_symbol, close_spot_order_id, close_perp_order_id)
+
+    def _spot_free_quantity(self, exchange, base_asset: str) -> Decimal:
+        balance = exchange.fetch_balance({"type": "spot"})
+        item = balance.get(base_asset, {}) if isinstance(balance, dict) else {}
+        return decimal_from(item.get("free") or item.get("total"))
+
+    def _dust_quantity(self, quantity: Decimal) -> Decimal:
+        return max(Decimal("0.000001"), abs(quantity) * Decimal("0.000001"))
 
     def _open_plan(self, item: CashCarryOpportunity, settings: BotSettings) -> list[ExecutionStep]:
         return [
@@ -257,7 +314,7 @@ class CashCarryExecutor:
         step.raw = result if isinstance(result, dict) else {"result": str(result)}
         return result
 
-    def _safety_gate(self, settings: BotSettings, opening: bool) -> list[str]:
+    def _safety_gate(self, settings: BotSettings, opening: bool, protective: bool = False) -> list[str]:
         load_dotenv(ENV_PATH, override=False)
         reasons = []
         if not env_bool("TRADING_ENABLED"):
@@ -266,7 +323,7 @@ class CashCarryExecutor:
             reasons.append("ORDER_EXECUTION_ENABLED 未开启")
         if env_bool("API_READ_ONLY_MODE", default=True):
             reasons.append("API_READ_ONLY_MODE 仍为只读")
-        if settings.manual_confirm_required:
+        if settings.manual_confirm_required and not protective:
             reasons.append("参数要求人工确认")
         if opening and not settings.cash_carry_auto_trade_enabled:
             reasons.append("正向期现自动下单未开启")
