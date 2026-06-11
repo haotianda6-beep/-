@@ -94,6 +94,19 @@ def test_reverse_fast_refresh_applies_borrow_pool_block_without_ws_prices(tmp_pa
     assert "借币资金池不足" in " / ".join(refreshed.candidates[0].blocked_reasons)
 
 
+def test_reverse_fast_refresh_dedupes_rate_limit_block_reason(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("app.services.borrow_pool_blocklist.DEFAULT_PATH", tmp_path / "borrow_pool_blocks.json")
+    mark_borrow_pool_block(ExchangeName.BINANCE, "ABCUSDT", 'bybit {"retCode":10006,"retMsg":"Too many visits. Exceeded the API Rate Limit."}')
+    reason = "交易所 API 限频，系统已短暂冷却该机会；不是可借数量为 0，稍后会自动重试。"
+    scanner = ReverseCashCarryScanner(_borrow_checker())
+    item = scanner._build_opportunity("ABCUSDT", _data("99", "-0.0002"), BotSettings(order_notional_usdt=Decimal("100")))
+    item = item.model_copy(update={"blocked_reasons": [reason, reason], "borrow_check_status": "blocked"})
+
+    refreshed = CashCarryFastRefresher(_empty_ticker_cache(), "reverse").refresh(CashCarryScan(candidates=[item]), BotSettings(order_notional_usdt=Decimal("100")))
+
+    assert refreshed.candidates[0].blocked_reasons.count(reason) == 1
+
+
 def test_reverse_cash_carry_hides_borrow_pool_shortage_from_opportunities(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("app.services.borrow_pool_blocklist.DEFAULT_PATH", tmp_path / "borrow_pool_blocks.json")
     mark_borrow_pool_block(ExchangeName.BINANCE, "ABCUSDT", "Borrowing demand is high")

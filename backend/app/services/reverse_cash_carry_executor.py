@@ -1,7 +1,7 @@
 import json
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 from app.core.env import ENV_PATH, env_bool
 from app.core.models import BotSettings, CashCarryOpportunity, ExchangeName
-from app.services.borrow_pool_blocklist import active_borrow_pool_reason, mark_borrow_pool_block
+from app.services.borrow_pool_blocklist import active_borrow_pool_reason, is_rate_limit_error, mark_borrow_pool_block
 from app.services.exchange_factory import build_ccxt_exchange, sanitize_exchange_error
 from app.services.live_market_types import SPOT_EXCHANGE_IDS, SWAP_EXCHANGE_IDS
 from app.services.live_read import decimal_from
@@ -85,7 +85,8 @@ class ReverseCashCarryExecutor:
         base = self._base(item.symbol)
         spot_symbol = f"{base}/USDT"
         swap_symbol = f"{base}/USDT:USDT"
-        qty = float(item.quantity)
+        borrow_quantity = self._execution_quantity(spot, spot_symbol, item.quantity)
+        qty = float(borrow_quantity)
         spot_order_id = None
         perp_order_id = None
         try:
@@ -99,12 +100,11 @@ class ReverseCashCarryExecutor:
                 steps[1].raw = {"error": reason}
                 return self._remember(ExecutionResult(str(uuid.uuid4()), "failed", reason, steps))
             try:
-                self._run(steps[2], lambda: spot.borrow_cross_margin(base, qty), settings.reverse_cash_carry_auto_borrow_enabled)
+                borrow_quantity = self._borrow_spot_with_retry(spot, base, borrow_quantity, settings, steps[2])
+                qty = float(borrow_quantity)
             except Exception as exc:  # noqa: BLE001
                 reason = self._sanitize(str(exc))
-                steps[2].status = "failed"
-                steps[2].raw = {"error": reason}
-                mark_borrow_pool_block(item.exchange, item.symbol, reason)
+                mark_borrow_pool_block(item.exchange, item.symbol, reason, seconds=60 if is_rate_limit_error(reason) else 900)
                 return self._remember(ExecutionResult(str(uuid.uuid4()), "failed", reason, steps))
             spot_order = self._run(
                 steps[3],
@@ -112,7 +112,7 @@ class ReverseCashCarryExecutor:
                 True,
             )
             spot_order_id = self._order_id(spot_order)
-            contract_qty = contract_order_amount(swap, swap_symbol, item.quantity)
+            contract_qty = contract_order_amount(swap, swap_symbol, borrow_quantity)
             perp_order = self._run(
                 steps[4],
                 lambda: swap.create_order(swap_symbol, "market", "buy", contract_qty, None, {"reduceOnly": False, "marginMode": settings.margin_mode}),
@@ -124,8 +124,8 @@ class ReverseCashCarryExecutor:
                 exchange=item.exchange,
                 symbol=item.symbol,
                 base_asset=base,
-                quantity=item.quantity,
-                borrowed_quantity=item.quantity,
+                quantity=borrow_quantity,
+                borrowed_quantity=borrow_quantity,
                 spot_entry_price=item.spot_price,
                 perp_entry_price=item.perp_price,
                 spot_order_id=spot_order_id,
@@ -243,6 +243,51 @@ class ReverseCashCarryExecutor:
         step.raw = result if isinstance(result, dict) else {"result": str(result)}
         return result
 
+    def _execution_quantity(self, exchange, symbol: str, quantity: Decimal) -> Decimal:
+        if not hasattr(exchange, "amount_to_precision"):
+            return quantity
+        try:
+            return Decimal(str(exchange.amount_to_precision(symbol, float(quantity))))
+        except Exception:
+            return quantity
+
+    def _borrow_spot_with_retry(self, spot, base: str, quantity: Decimal, settings: BotSettings, step: ExecutionStep) -> Decimal:
+        if not settings.reverse_cash_carry_auto_borrow_enabled:
+            step.status = "skipped"
+            step.detail += "；对应自动开关关闭"
+            return quantity
+        try:
+            step.raw = {"quantity": str(quantity), "result": spot.borrow_cross_margin(base, float(quantity))}
+            step.status = "done"
+            return quantity
+        except Exception as exc:  # noqa: BLE001
+            reason = self._sanitize(str(exc))
+            retry_quantity = self._borrow_precision_retry_quantity(quantity, reason)
+            if retry_quantity is None:
+                step.status = "failed"
+                step.raw = {"quantity": str(quantity), "error": reason}
+                raise ValueError(reason)
+        try:
+            result = spot.borrow_cross_margin(base, float(retry_quantity))
+        except Exception as exc:  # noqa: BLE001
+            retry_reason = self._sanitize(str(exc))
+            step.status = "failed"
+            step.raw = {"quantity": str(quantity), "initial_error": reason, "retry_quantity": str(retry_quantity), "error": retry_reason}
+            raise ValueError(retry_reason)
+        step.status = "done"
+        step.detail += f"；借币精度调整为 {retry_quantity}"
+        step.raw = {"quantity": str(quantity), "initial_error": reason, "adjusted_quantity": str(retry_quantity), "result": result}
+        return retry_quantity
+
+    def _borrow_precision_retry_quantity(self, quantity: Decimal, reason: str) -> Decimal | None:
+        text = reason.lower()
+        if "precision" not in text and "integer multiple" not in text:
+            return None
+        retry = quantity.to_integral_value(rounding=ROUND_DOWN)
+        if retry <= 0 or retry == quantity:
+            return None
+        return retry
+
     def _set_leverage(self, exchange, symbol: str, leverage: Decimal, margin_mode: str | None = None):
         if not hasattr(exchange, "set_leverage"):
             return {"skipped": True}
@@ -251,13 +296,21 @@ class ReverseCashCarryExecutor:
         if exchange_id == "bitget" and margin_mode == "isolated":
             return {
                 "margin_mode": margin_result,
-                "long": exchange.set_leverage(float(leverage), symbol, {"holdSide": "long"}),
-                "short": exchange.set_leverage(float(leverage), symbol, {"holdSide": "short"}),
+                "long": self._set_leverage_once(exchange, leverage, symbol, {"holdSide": "long"}),
+                "short": self._set_leverage_once(exchange, leverage, symbol, {"holdSide": "short"}),
             }
         return {
             "margin_mode": margin_result,
-            "leverage": exchange.set_leverage(float(leverage), symbol, self._leverage_params(exchange_id, margin_mode)),
+            "leverage": self._set_leverage_once(exchange, leverage, symbol, self._leverage_params(exchange_id, margin_mode)),
         }
+
+    def _set_leverage_once(self, exchange, leverage: Decimal, symbol: str, params: dict[str, Any]):
+        try:
+            return exchange.set_leverage(float(leverage), symbol, params)
+        except Exception as exc:  # noqa: BLE001
+            if self._already_set_error(exc):
+                return {"skipped": "already_set", "message": self._sanitize(str(exc))}
+            raise
 
     def _set_margin_mode(self, exchange, symbol: str, margin_mode: str | None, leverage: Decimal):
         if not margin_mode or not hasattr(exchange, "set_margin_mode"):
@@ -273,6 +326,10 @@ class ReverseCashCarryExecutor:
             if "no need" in text or "already" in text or "not modified" in text:
                 return {"skipped": "already_set"}
             raise
+
+    def _already_set_error(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        return "no need" in text or "already" in text or "not modified" in text
 
     def _leverage_params(self, exchange_id: str, margin_mode: str | None) -> dict[str, Any]:
         if exchange_id == "okx":

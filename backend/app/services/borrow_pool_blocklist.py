@@ -10,6 +10,7 @@ from app.core.models import ExchangeName
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_PATH = PROJECT_ROOT / "config" / "borrow_pool_blocks.json"
 POOL_PATTERNS = ("34022030", "fund pool", "Borrowing demand is high")
+RATE_LIMIT_PATTERNS = ("10006", "too many visits", "rate limit")
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,10 @@ class BorrowPoolBlock:
 
 def is_borrow_pool_error(message: str) -> bool:
     return any(pattern.lower() in message.lower() for pattern in POOL_PATTERNS)
+
+
+def is_rate_limit_error(message: str) -> bool:
+    return any(pattern.lower() in message.lower() for pattern in RATE_LIMIT_PATTERNS)
 
 
 def mark_borrow_pool_block(exchange: ExchangeName, symbol: str, reason: str, seconds: int = 900, path: Path | None = None) -> None:
@@ -85,6 +90,8 @@ def _write(path: Path, state: dict) -> None:
 
 
 def _display_reason(reason: str) -> str:
+    if is_rate_limit_error(reason):
+        return "交易所 API 限频，系统已短暂冷却该机会；不是可借数量为 0，稍后会自动重试。"
     if is_borrow_pool_error(reason):
         return "借币资金池不足，交易所暂时没有可借库存；已按可借数量 0 处理，冷却期内不作为可开仓机会。"
     return "实盘借币失败，已按可借数量 0 处理；冷却期内不作为可开仓机会。"

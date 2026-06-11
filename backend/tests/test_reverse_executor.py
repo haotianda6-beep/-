@@ -178,6 +178,50 @@ def test_reverse_executor_blocks_before_borrow_when_leverage_mismatch(tmp_path) 
     assert executor.swap.orders == []
 
 
+def test_reverse_executor_treats_bybit_leverage_not_modified_as_already_set(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("app.services.borrow_pool_blocklist.DEFAULT_PATH", tmp_path / "borrow_pool_blocks.json")
+    executor = _AlreadySetLeverageExecutor(tmp_path / "state.json")
+    settings = BotSettings(
+        default_leverage=Decimal("5"),
+        manual_confirm_required=False,
+        reverse_cash_carry_auto_open_enabled=True,
+        reverse_cash_carry_auto_borrow_enabled=True,
+    )
+
+    result = executor.evaluate_open([_opportunity(ExchangeName.BYBIT, "IDUSDT")], settings)
+
+    assert result is not None
+    assert result.status == "open_submitted"
+    assert result.steps[1].status == "done"
+    assert result.steps[1].raw["leverage"]["skipped"] == "already_set"
+    assert executor.spot.borrowed
+    assert executor.spot.orders
+    assert executor.swap.orders
+
+
+def test_reverse_executor_retries_bybit_borrow_with_integer_quantity(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("app.services.borrow_pool_blocklist.DEFAULT_PATH", tmp_path / "borrow_pool_blocks.json")
+    executor = _BorrowPrecisionExecutor(tmp_path / "state.json")
+    settings = BotSettings(
+        default_leverage=Decimal("5"),
+        manual_confirm_required=False,
+        reverse_cash_carry_auto_open_enabled=True,
+        reverse_cash_carry_auto_borrow_enabled=True,
+    )
+    item = _opportunity(ExchangeName.BYBIT, "IDUSDT").model_copy(update={"quantity": Decimal("15351.550507")})
+
+    result = executor.evaluate_open([item], settings)
+
+    assert result is not None
+    assert result.status == "open_submitted"
+    assert executor.spot.borrowed == [("ID", 15351.0)]
+    assert executor.spot.orders[0]["amount"] == 15351.0
+    assert executor.swap.orders[0]["amount"] == 15351.0
+    assert result.position is not None
+    assert result.position.quantity == Decimal("15351")
+    assert result.steps[2].raw["adjusted_quantity"] == "15351"
+
+
 def _opportunity(exchange: ExchangeName = ExchangeName.BITGET, symbol: str = "ABCUSDT", net: str = "0.8") -> CashCarryOpportunity:
     return CashCarryOpportunity(
         exchange=exchange,
@@ -234,6 +278,19 @@ class _LeverageMismatchExecutor(_RecordingReverseExecutor):
         self.swap = _MismatchLeverageSwap()
 
 
+class _AlreadySetLeverageExecutor(_RecordingReverseExecutor):
+    def __init__(self, state_path) -> None:
+        super().__init__(state_path)
+        self.swap = _AlreadySetLeverageSwap()
+
+
+class _BorrowPrecisionExecutor(_RecordingReverseExecutor):
+    def __init__(self, state_path) -> None:
+        super().__init__(state_path)
+        self.spot = _BorrowPrecisionSpot()
+        self.swap = _AlreadySetLeverageSwap()
+
+
 class _FakeSpot:
     def __init__(self) -> None:
         self.orders = []
@@ -249,6 +306,16 @@ class _FakeSpot:
     def create_order(self, symbol, order_type, side, amount, price=None, params=None):
         self.orders.append({"symbol": symbol, "side": side, "amount": amount})
         return {"id": "spot-1", "symbol": symbol, "side": side, "amount": amount}
+
+
+class _BorrowPrecisionSpot(_FakeSpot):
+    def amount_to_precision(self, symbol, amount):
+        return "15351.55"
+
+    def borrow_cross_margin(self, code, qty):
+        if qty != int(qty):
+            raise ValueError('bybit {"retCode":34022033,"retMsg":"Borrowing precision must be an integer multiple."}')
+        return super().borrow_cross_margin(code, qty)
 
 
 class _BorrowFailSpot(_FakeSpot):
@@ -302,3 +369,13 @@ class _MismatchLeverageSwap(_FakeSwap):
 
     def fetch_leverage(self, symbol):
         return {"symbol": symbol, "longLeverage": Decimal("10"), "shortLeverage": Decimal("10")}
+
+
+class _AlreadySetLeverageSwap(_FakeSwap):
+    id = "bybit"
+
+    def set_leverage(self, leverage, symbol, params=None):
+        raise ValueError('bybit {"retCode":110043,"retMsg":"leverage not modified"}')
+
+    def fetch_leverage(self, symbol):
+        return {"symbol": symbol, "longLeverage": Decimal("5"), "shortLeverage": Decimal("5")}

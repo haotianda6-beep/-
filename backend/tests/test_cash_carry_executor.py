@@ -144,6 +144,18 @@ def test_cash_carry_executor_blocks_when_leverage_cannot_be_verified(tmp_path) -
         )
 
 
+def test_cash_carry_executor_treats_leverage_not_modified_as_already_set(tmp_path) -> None:
+    exchange = _FakeAlreadySetLeverage()
+    step = ExecutionStep("set_perp_leverage", "done", "设置合约杠杆")
+    executor = CashCarryExecutor(tmp_path / "state.json")
+
+    step.raw = executor._set_leverage(exchange, "ABC/USDT:USDT", Decimal("5"), "isolated")
+    executor._verify_leverage(exchange, "ABC/USDT:USDT", Decimal("5"), "short", "isolated", step)
+
+    assert step.status == "done"
+    assert step.raw["leverage"]["skipped"] == "already_set"
+
+
 def test_cash_carry_fixed_usdt_take_profit_has_close_priority(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = CashCarryExecutor(state)
@@ -355,6 +367,16 @@ class _FakeGateLeverage:
 
     def set_leverage(self, leverage, symbol, params=None):
         return {"leverage": str(leverage), "symbol": symbol, "params": params or {}}
+
+
+class _FakeAlreadySetLeverage:
+    id = "bybit"
+
+    def set_leverage(self, leverage, symbol, params=None):
+        raise ValueError('bybit {"retCode":110043,"retMsg":"leverage not modified"}')
+
+    def fetch_leverage(self, symbol):
+        return {"symbol": symbol, "longLeverage": Decimal("5"), "shortLeverage": Decimal("5")}
 
 
 class _FakeGate:

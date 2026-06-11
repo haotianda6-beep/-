@@ -342,13 +342,21 @@ class CashCarryExecutor:
         if exchange_id == "bitget" and margin_mode == "isolated":
             return {
                 "margin_mode": margin_result,
-                "long": exchange.set_leverage(float(leverage), symbol, {"holdSide": "long"}),
-                "short": exchange.set_leverage(float(leverage), symbol, {"holdSide": "short"}),
+                "long": self._set_leverage_once(exchange, leverage, symbol, {"holdSide": "long"}),
+                "short": self._set_leverage_once(exchange, leverage, symbol, {"holdSide": "short"}),
             }
         return {
             "margin_mode": margin_result,
-            "leverage": exchange.set_leverage(float(leverage), symbol, self._leverage_params(exchange_id, margin_mode)),
+            "leverage": self._set_leverage_once(exchange, leverage, symbol, self._leverage_params(exchange_id, margin_mode)),
         }
+
+    def _set_leverage_once(self, exchange, leverage: Decimal, symbol: str, params: dict[str, Any]):
+        try:
+            return exchange.set_leverage(float(leverage), symbol, params)
+        except Exception as exc:  # noqa: BLE001
+            if self._already_set_error(exc):
+                return {"skipped": "already_set", "message": self._sanitize(str(exc))}
+            raise
 
     def _set_margin_mode(self, exchange, symbol: str, margin_mode: str | None, leverage: Decimal):
         if not margin_mode or not hasattr(exchange, "set_margin_mode"):
@@ -364,6 +372,10 @@ class CashCarryExecutor:
             if "no need" in text or "already" in text or "not modified" in text:
                 return {"skipped": "already_set"}
             raise
+
+    def _already_set_error(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        return "no need" in text or "already" in text or "not modified" in text
 
     def _leverage_params(self, exchange_id: str, margin_mode: str | None) -> dict[str, Any]:
         if exchange_id == "okx":

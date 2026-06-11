@@ -128,6 +128,19 @@ def test_expired_borrow_pool_failure_is_not_reported_as_current_risk(tmp_path, m
     assert all("借币资金池不足" not in item.detail for item in events)
 
 
+def test_execution_rate_limit_reason_is_localized(tmp_path, monkeypatch) -> None:
+    store = SettingsStore(tmp_path / "settings.json")
+    engine = ArbitrageEngine(store)
+    monkeypatch.setattr(
+        "app.services.arbitrage_engine.recent_execution_results",
+        lambda: [{"strategy_id": "reverse-cash-carry", "title": "反向期现执行器", "status": "failed", "reason": 'bybit {"retCode":10006,"retMsg":"Too many visits. Exceeded the API Rate Limit."}', "at": datetime.now(timezone.utc).isoformat()}],
+    )
+
+    events = engine.get_risk_events(BotSettings())
+
+    assert any(item.detail == "交易所 API 限频，系统已短暂冷却并等待自动重试。" for item in events)
+
+
 def _market_data(exchange: ExchangeName, price_key: str, price: str, swap_asset: MarketAsset) -> ExchangeMarketData:
     return ExchangeMarketData(
         exchange=exchange,

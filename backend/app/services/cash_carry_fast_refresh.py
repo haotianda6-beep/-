@@ -69,6 +69,7 @@ class CashCarryFastRefresher:
                 "borrow_check_status": "blocked",
                 "borrow_available_qty": q(borrow_block.available_qty, "0.000001"),
             })
+        updates["blocked_reasons"] = self._dedupe(reasons)
         if reasons == item.blocked_reasons:
             return item
         return item.model_copy(update=updates)
@@ -105,7 +106,7 @@ class CashCarryFastRefresher:
             "notional_usdt": q(settings.order_notional_usdt, "0.01"),
             "margin_required_usdt": q(settings.order_notional_usdt / settings.default_leverage if settings.default_leverage > 0 else settings.order_notional_usdt, "0.01"),
             "leverage": settings.default_leverage,
-            "blocked_reasons": reasons,
+            "blocked_reasons": self._dedupe(reasons),
             "updated_at": datetime.now(timezone.utc),
         })
 
@@ -142,7 +143,7 @@ class CashCarryFastRefresher:
             "notional_usdt": q(settings.order_notional_usdt, "0.01"),
             "margin_required_usdt": q(settings.order_notional_usdt / settings.default_leverage if settings.default_leverage > 0 else settings.order_notional_usdt, "0.01"),
             "leverage": settings.default_leverage,
-            "blocked_reasons": reasons,
+            "blocked_reasons": self._dedupe(reasons),
             "updated_at": datetime.now(timezone.utc),
         }
         borrow_block = active_borrow_pool_block(ExchangeName(item.exchange), item.symbol)
@@ -178,7 +179,7 @@ class CashCarryFastRefresher:
             reasons.append(f"资金费率低于 {settings.cash_carry_min_funding_rate_pct}%")
         if min(spot_volume, perp_volume) < settings.cash_carry_min_volume_usdt:
             reasons.append(f"现货/合约最低24h成交量低于 {settings.cash_carry_min_volume_usdt}U")
-        return reasons
+        return self._dedupe(reasons)
 
     def _reverse_reasons(
         self,
@@ -191,7 +192,7 @@ class CashCarryFastRefresher:
         settings: BotSettings,
     ) -> list[str]:
         current = item.blocked_reasons
-        prefixes = ("合约折价未达", "负资金费率低于", "资金费率不是负数", "现货/合约最低24h成交量低于", "扣除借币成本后净利不为正", "借币资金池不足", "实盘借币失败")
+        prefixes = ("合约折价未达", "负资金费率低于", "资金费率不是负数", "现货/合约最低24h成交量低于", "扣除借币成本后净利不为正", "借币资金池不足", "实盘借币失败", "交易所 API 限频")
         reasons = self._preserved(current, prefixes)
         borrow_block = active_borrow_pool_block(ExchangeName(item.exchange), item.symbol)
         if borrow_block:
@@ -208,7 +209,17 @@ class CashCarryFastRefresher:
             reasons.append("借币校验未完成，等待全量扫描")
         if item.borrow_check_status == "ok" and net_profit <= 0:
             reasons.append("扣除借币成本后净利不为正")
-        return reasons
+        return self._dedupe(reasons)
 
     def _preserved(self, current: list[str], dynamic_prefixes: tuple[str, ...]) -> list[str]:
         return [reason for reason in current if not any(reason.startswith(prefix) for prefix in dynamic_prefixes)]
+
+    def _dedupe(self, reasons: list[str]) -> list[str]:
+        result = []
+        seen = set()
+        for reason in reasons:
+            if reason in seen:
+                continue
+            seen.add(reason)
+            result.append(reason)
+        return result

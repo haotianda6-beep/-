@@ -229,7 +229,7 @@ class ArbitrageEngine:
                 continue
             if self._stale_execution_result(result, cash_carry_positions or []):
                 continue
-            events.append(RiskEvent(id=f"execution-{result['strategy_id']}", severity="warning", title=f"{result['title']}未完成", detail=result["reason"], action="按失败原因补齐交易所 API 权限、账户资金或关闭对应自动步骤后再重试。", created_at=now))
+            events.append(RiskEvent(id=f"execution-{result['strategy_id']}", severity="warning", title=f"{result['title']}未完成", detail=self._friendly_execution_reason(result["reason"]), action="按失败原因补齐交易所 API 权限、账户资金或关闭对应自动步骤后再重试。", created_at=now))
         if settings.reverse_cash_carry_enabled:
             events.append(RiskEvent(id="reverse-borrow-check-enabled", severity="info", title="反向期现借币校验已启用", detail="候选会读取可借数量、借币利率并扣减预估借币成本；接口权限或交易所未返回时会阻断开仓。", action="以候选行的借币字段和不能开仓原因为准，实盘前仍需小额人工核验。", created_at=now))
         ai = ai_status()
@@ -266,6 +266,16 @@ class ArbitrageEngine:
         except ValueError:
             return False
         return datetime.now(timezone.utc) - happened_at > timedelta(minutes=20)
+
+    def _friendly_execution_reason(self, reason: str) -> str:
+        text = reason.lower()
+        if "10006" in text or "too many visits" in text or "rate limit" in text:
+            return "交易所 API 限频，系统已短暂冷却并等待自动重试。"
+        if "34022033" in text or "borrowing precision" in text or "integer multiple" in text:
+            return "借币数量精度不符合交易所要求，系统会按允许步长向下调整数量后重试。"
+        if "110043" in text or "leverage not modified" in text:
+            return "交易所提示杠杆已是目标值，系统会继续做实际杠杆校验。"
+        return reason
 
     def _strategy_switches(self, settings: BotSettings) -> dict[str, object]:
         switches = {"cross_auto_open": settings.auto_open_enabled, "cross_auto_close": settings.auto_close_enabled, "cash_carry_auto_open": settings.cash_carry_auto_open_enabled, "cash_carry_auto_trade": settings.cash_carry_auto_trade_enabled, "cash_carry_auto_close": settings.cash_carry_auto_close_enabled, "reverse_cash_carry_auto_open": settings.reverse_cash_carry_auto_open_enabled, "reverse_cash_carry_auto_close": settings.reverse_cash_carry_auto_close_enabled, "mt4_spread_enabled": settings.mt4_spread_enabled, "manual_confirm_required": settings.manual_confirm_required}
