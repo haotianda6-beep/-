@@ -157,6 +157,7 @@ class RuntimeConfig(BaseModel):
     binance_api_configured: bool
     config_files: list[str]
     mt4_script_path: str
+    binance_leverage: int
     open_min_edge: Decimal
     close_max_spread: Decimal
     min_locked_edge: Decimal
@@ -174,6 +175,7 @@ class RuntimeConfig(BaseModel):
 
 
 class RuntimeConfigUpdate(BaseModel):
+    binance_leverage: int | None = None
     open_min_edge: Decimal | None = None
     close_max_spread: Decimal | None = None
     min_locked_edge: Decimal | None = None
@@ -222,6 +224,13 @@ class RuntimeConfigUpdate(BaseModel):
     def non_negative_int(cls, value: int | None) -> int | None:
         if value is not None and value < 0:
             raise ValueError("不能小于 0")
+        return value
+
+    @field_validator("binance_leverage")
+    @classmethod
+    def valid_leverage(cls, value: int | None) -> int | None:
+        if value is not None and (value < 1 or value > 125):
+            raise ValueError("杠杆必须在 1 到 125 之间")
         return value
 
 

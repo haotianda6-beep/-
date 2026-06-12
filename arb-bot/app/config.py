@@ -13,6 +13,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[2]
 LOCAL_ENV_PATH = APP_DIR / ".env"
 PROJECT_ENV_PATH = PROJECT_DIR / ".env"
 CONFIG_FIELD_TO_ENV = {
+    "binance_leverage": "BINANCE_LEVERAGE",
     "open_min_edge": "OPEN_MIN_EDGE",
     "close_max_spread": "CLOSE_MAX_SPREAD",
     "min_locked_edge": "MIN_LOCKED_EDGE",
@@ -55,6 +56,7 @@ class Settings(BaseSettings):
     binance_tick_size: Decimal = Field(default=Decimal("0.01"), alias="BINANCE_TICK_SIZE")
     binance_qty_step: Decimal = Field(default=Decimal("0.001"), alias="BINANCE_QTY_STEP")
     binance_min_qty: Decimal = Field(default=Decimal("0.001"), alias="BINANCE_MIN_QTY")
+    binance_leverage: int = Field(default=20, alias="BINANCE_LEVERAGE")
 
     mt4_bridge_token: SecretStr | None = Field(default=None, alias="MT4_BRIDGE_TOKEN")
     open_min_edge: Decimal = Field(default=Decimal("1.50"), alias="OPEN_MIN_EDGE")
@@ -88,6 +90,13 @@ class Settings(BaseSettings):
     def positive_decimal(cls, value: Decimal) -> Decimal:
         if value <= 0:
             raise ValueError("numeric risk and sizing values must be positive")
+        return value
+
+    @field_validator("binance_leverage")
+    @classmethod
+    def valid_leverage(cls, value: int) -> int:
+        if value < 1 or value > 125:
+            raise ValueError("binance leverage must be between 1 and 125")
         return value
 
     @property

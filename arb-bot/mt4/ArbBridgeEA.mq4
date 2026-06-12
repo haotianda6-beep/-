@@ -3,7 +3,7 @@
 input string BridgeBaseUrl = "http://127.0.0.1:8011";
 input string BridgeToken = "";
 input string TradeSymbol = "XAUUSD";
-input int PollMs = 100;
+input int PollMs = 50;
 input int MagicNumber = 260612;
 input double DefaultLots = 0.01;
 

@@ -245,6 +245,7 @@ class BinanceFuturesClient(BinanceBaseClient):
     async def start(self) -> None:
         await self._load_exchange_info()
         await self._load_commission_rate()
+        await self._configure_leverage()
         await self._detect_position_mode()
         self._tasks.append(asyncio.create_task(self._book_ticker_loop()))
         logger.info(
@@ -300,6 +301,14 @@ class BinanceFuturesClient(BinanceBaseClient):
                 raise
             self.maker_fee_rate = self.settings.binance_maker_fee_rate
             logger.warning("Binance commissionRate unavailable; using env maker fee")
+
+    async def _configure_leverage(self) -> None:
+        await self._signed(
+            "POST",
+            "/fapi/v1/leverage",
+            {"symbol": self.settings.binance_symbol, "leverage": self.settings.binance_leverage},
+        )
+        logger.info("Binance leverage configured symbol=%s leverage=%sx", self.settings.binance_symbol, self.settings.binance_leverage)
 
     async def _detect_position_mode(self) -> None:
         data = await self._signed("GET", "/fapi/v1/positionSide/dual", {})

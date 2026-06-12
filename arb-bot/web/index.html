@@ -23,7 +23,7 @@
       }
 
       main {
-        width: min(1440px, calc(100vw - 32px));
+        width: min(1280px, calc(100vw - 32px));
         margin: 0 auto;
         padding: 20px 0 28px;
       }
@@ -78,7 +78,7 @@
 
       .layout {
         display: grid;
-        grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.65fr);
+        grid-template-columns: minmax(0, 1fr) 380px;
         gap: 12px;
       }
 
@@ -87,7 +87,7 @@
       }
 
       .metric {
-        min-height: 82px;
+        min-height: 74px;
         padding: 12px;
       }
 
@@ -99,7 +99,7 @@
 
       .value {
         margin-top: 8px;
-        font-size: 21px;
+        font-size: 18px;
         font-weight: 760;
         color: #111827;
         word-break: break-word;
@@ -167,7 +167,7 @@
 
       th,
       td {
-        padding: 9px 8px;
+        padding: 7px 8px;
         border-bottom: 1px solid #e5edf5;
         text-align: left;
         white-space: nowrap;
@@ -258,9 +258,43 @@
         margin-top: 12px;
       }
 
+      .compact-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .compact-row {
+        display: grid;
+        grid-template-columns: 88px minmax(0, 1fr);
+        gap: 10px;
+        align-items: center;
+        min-height: 28px;
+        border-bottom: 1px solid #e8eef6;
+        padding-bottom: 7px;
+      }
+
+      .compact-row:last-child {
+        border-bottom: 0;
+        padding-bottom: 0;
+      }
+
+      .compact-row strong {
+        color: #111827;
+        font-size: 13px;
+      }
+
+      .compact-row span {
+        min-width: 0;
+        color: #637187;
+        font-size: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
       .log {
-        min-height: 64px;
-        max-height: 180px;
+        min-height: 54px;
+        max-height: 84px;
         overflow: auto;
         padding: 10px;
         border-radius: 6px;
@@ -345,55 +379,57 @@
       <section class="layout mt">
         <div class="stack">
           <div class="panel">
-            <h2>实时快照</h2>
-            <table>
-              <thead>
-                <tr>
-                  <th>项目</th>
-                  <th>买一价</th>
-                  <th>卖一价</th>
-                  <th>更新时间</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>币安</td>
-                  <td id="bBid">-</td>
-                  <td id="bAsk">-</td>
-                  <td id="bAge">-</td>
-                </tr>
-                <tr>
-                  <td>MT4</td>
-                  <td id="mBid">-</td>
-                  <td id="mAsk">-</td>
-                  <td id="mAge">-</td>
-                </tr>
-              </tbody>
-            </table>
+            <h2>盘口</h2>
+            <div class="compact-list">
+              <div class="compact-row">
+                <strong>币安</strong>
+                <span id="binanceLine">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>MT4</strong>
+                <span id="mt4Line">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>当前价差</strong>
+                <span id="spreadLine">-</span>
+              </div>
+            </div>
           </div>
 
           <div class="panel">
             <h2>当前持仓</h2>
-            <table>
-              <thead>
-                <tr>
-                  <th>方向</th>
-                  <th>数量（盎司）</th>
-                  <th>币安开仓价</th>
-                  <th>MT4 开仓价</th>
-                  <th>配对编号</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td id="pairDirection">-</td>
-                  <td id="pairQty">-</td>
-                  <td id="pairBinance">-</td>
-                  <td id="pairMt4">-</td>
-                  <td id="pairId">-</td>
-                </tr>
-              </tbody>
-            </table>
+            <div class="compact-list">
+              <div class="compact-row">
+                <strong>方向</strong>
+                <span id="pairDirection">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>数量</strong>
+                <span id="pairQty">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>开仓价</strong>
+                <span id="pairEntryLine">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>编号</strong>
+                <span id="pairId">-</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>流程</h2>
+            <div class="compact-list">
+              <div class="compact-row">
+                <strong>开仓</strong>
+                <span>币安挂限价单，成交后 MT4 立刻市价对冲</span>
+              </div>
+              <div class="compact-row">
+                <strong>平仓</strong>
+                <span>币安挂限价平仓，全部成交后 MT4 立刻市价离场</span>
+              </div>
+            </div>
           </div>
 
           <div class="panel">
@@ -404,74 +440,24 @@
 
         <aside class="stack">
           <div class="panel">
-            <h2>模拟行情</h2>
-            <div class="form-grid">
-              <label>
-                <span class="label">币安买一价</span>
-                <input id="paperBid" value="2001" inputmode="decimal" />
-              </label>
-              <label>
-                <span class="label">币安卖一价</span>
-                <input id="paperAsk" value="2002" inputmode="decimal" />
-              </label>
-              <label>
-                <span class="label">MT4 买一价</span>
-                <input id="mt4Bid" value="1999" inputmode="decimal" />
-              </label>
-              <label>
-                <span class="label">MT4 卖一价</span>
-                <input id="mt4Ask" value="2000" inputmode="decimal" />
-              </label>
-            </div>
-            <div class="actions">
-              <button id="sendPaperBtn">推送行情</button>
-              <button class="secondary" id="resumeBtn">恢复</button>
-            </div>
-          </div>
-
-          <div class="panel">
-            <h2>MT4 命令</h2>
-            <table>
-              <tbody>
-                <tr>
-                  <th>动作</th>
-                  <td id="cmdAction">-</td>
-                </tr>
-                <tr>
-                  <th>手数</th>
-                  <td id="cmdLots">-</td>
-                </tr>
-                <tr>
-                  <th>允许价格</th>
-                  <td id="cmdLimit">-</td>
-                </tr>
-              </tbody>
-            </table>
-            <div class="actions">
-              <button id="pollCmdBtn">拉取命令</button>
-              <button class="secondary" id="reportOkBtn">回报成功</button>
-            </div>
-          </div>
-
-          <div class="panel">
             <h2>参数设置</h2>
             <table>
               <tbody>
-                <tr>
-                  <th>币安密钥</th>
-                  <td id="apiConfigured">-</td>
-                </tr>
-                <tr>
-                  <th>配置文件</th>
-                  <td id="configFiles">-</td>
-                </tr>
                 <tr>
                   <th>MT4 脚本</th>
                   <td><a class="download-link" href="ea/ArbBridgeEA.mq4" download>下载完整脚本</a></td>
                 </tr>
                 <tr>
-                  <th>服务器路径</th>
-                  <td id="mt4ScriptPath">-</td>
+                  <th>币安杠杆</th>
+                  <td><div class="input-row"><input id="cfgBinanceLeverage" inputmode="numeric" /><small>倍</small></div></td>
+                </tr>
+                <tr>
+                  <th>币安下单数量</th>
+                  <td><div class="input-row"><input id="cfgTargetOz" inputmode="decimal" /><small>XAU</small></div></td>
+                </tr>
+                <tr>
+                  <th>MT4 对冲数量</th>
+                  <td id="mt4HedgeQty">自动等于币安数量</td>
                 </tr>
                 <tr>
                   <th>开仓最小价差</th>
@@ -486,12 +472,8 @@
                   <td><div class="input-row"><input id="cfgMinLockedEdge" inputmode="decimal" /><small>美元</small></div></td>
                 </tr>
                 <tr>
-                  <th>目标数量</th>
-                  <td><div class="input-row"><input id="cfgTargetOz" inputmode="decimal" /><small>盎司</small></div></td>
-                </tr>
-                <tr>
-                  <th>MT4 每手盎司</th>
-                  <td><div class="input-row"><input id="cfgMt4LotSize" inputmode="decimal" /><small>盎司</small></div></td>
+                  <th>MT4 合约规格</th>
+                  <td><div class="input-row"><input id="cfgMt4LotSize" inputmode="decimal" /><small>XAU/手</small></div></td>
                 </tr>
                 <tr>
                   <th>挂单最长等待</th>
@@ -547,10 +529,11 @@
       let lastConfig = null;
       let configDirty = false;
       const configFields = [
+        ["cfgBinanceLeverage", "binance_leverage", "number"],
+        ["cfgTargetOz", "target_oz", "number"],
         ["cfgOpenMinEdge", "open_min_edge", "number"],
         ["cfgCloseMaxSpread", "close_max_spread", "number"],
         ["cfgMinLockedEdge", "min_locked_edge", "number"],
-        ["cfgTargetOz", "target_oz", "number"],
         ["cfgMt4LotSize", "mt4_lot_size_oz", "number"],
         ["cfgMaxOrderAge", "max_order_age_ms", "number"],
         ["cfgMaxQuoteAge", "max_quote_age_ms", "number"],
@@ -630,18 +613,14 @@
         $("mt4Quote").textContent = m ? `${fmt(m.bid)} / ${fmt(m.ask)}` : "-";
         $("binanceMeta").textContent = b ? `延迟 ${age(b.timestamp_ms)}` : "等待报价";
         $("mt4Meta").textContent = m ? `延迟 ${age(m.timestamp_ms)}` : "等待报价";
-        $("bBid").textContent = b ? fmt(b.bid) : "-";
-        $("bAsk").textContent = b ? fmt(b.ask) : "-";
-        $("bAge").textContent = b ? age(b.timestamp_ms) : "-";
-        $("mBid").textContent = m ? fmt(m.bid) : "-";
-        $("mAsk").textContent = m ? fmt(m.ask) : "-";
-        $("mAge").textContent = m ? age(m.timestamp_ms) : "-";
+        $("binanceLine").textContent = b ? `买 ${fmt(b.bid)} / 卖 ${fmt(b.ask)} / ${age(b.timestamp_ms)}` : "等待报价";
+        $("mt4Line").textContent = m ? `买 ${fmt(m.bid)} / 卖 ${fmt(m.ask)} / ${age(m.timestamp_ms)}` : "等待报价";
+        $("spreadLine").textContent = b && m ? `开仓差 ${fmt(Number(b.ask) - Number(m.ask))} 美元；反向差 ${fmt(Number(m.bid) - Number(b.bid))} 美元` : "-";
 
         const pair = data.open_pair;
         $("pairDirection").textContent = pair ? translateDirection(pair.direction) : "-";
-        $("pairQty").textContent = pair ? fmt(pair.quantity_oz) : "-";
-        $("pairBinance").textContent = pair ? fmt(pair.binance_entry_price) : "-";
-        $("pairMt4").textContent = pair ? fmt(pair.mt4_entry_price) : "-";
+        $("pairQty").textContent = pair ? `${fmt(pair.quantity_oz)} XAU` : "-";
+        $("pairEntryLine").textContent = pair ? `币安 ${fmt(pair.binance_entry_price)} / MT4 ${fmt(pair.mt4_entry_price)}` : "-";
         $("pairId").textContent = pair?.pair_id || "-";
         renderConfig(data.config);
       }
@@ -649,9 +628,7 @@
       function renderConfig(config) {
         if (!config) return;
         lastConfig = config;
-        $("apiConfigured").textContent = config.binance_api_configured ? "已读取服务器币安密钥" : "未配置币安密钥";
-        $("configFiles").textContent = config.config_files?.length ? config.config_files.join("，") : "未找到配置文件";
-        $("mt4ScriptPath").textContent = config.mt4_script_path || "-";
+        $("mt4HedgeQty").textContent = `${fmt(config.target_oz)} XAU，自动折算 ${fmt(Number(config.target_oz) / Number(config.mt4_lot_size_oz))} 手`;
         if (!configDirty) fillConfigInputs(config);
       }
 
@@ -812,10 +789,10 @@
       }
 
       $("refreshBtn").addEventListener("click", loadStatus);
-      $("sendPaperBtn").addEventListener("click", () => sendPaperQuotes().catch((error) => appendLog(translateError(error.message))));
-      $("pollCmdBtn").addEventListener("click", () => pollCommand().catch((error) => appendLog(translateError(error.message))));
-      $("reportOkBtn").addEventListener("click", () => reportOk().catch((error) => appendLog(translateError(error.message))));
-      $("resumeBtn").addEventListener("click", () => api("control/resume", { method: "POST" }).then(loadStatus).catch((error) => appendLog(translateError(error.message))));
+      if ($("sendPaperBtn")) $("sendPaperBtn").addEventListener("click", () => sendPaperQuotes().catch((error) => appendLog(translateError(error.message))));
+      if ($("pollCmdBtn")) $("pollCmdBtn").addEventListener("click", () => pollCommand().catch((error) => appendLog(translateError(error.message))));
+      if ($("reportOkBtn")) $("reportOkBtn").addEventListener("click", () => reportOk().catch((error) => appendLog(translateError(error.message))));
+      if ($("resumeBtn")) $("resumeBtn").addEventListener("click", () => api("control/resume", { method: "POST" }).then(loadStatus).catch((error) => appendLog(translateError(error.message))));
       $("saveConfigBtn").addEventListener("click", () => saveConfig().catch((error) => appendLog(translateError(error.message))));
       $("resetConfigBtn").addEventListener("click", resetConfigForm);
       for (const [id] of configFields) {

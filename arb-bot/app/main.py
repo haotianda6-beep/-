@@ -160,6 +160,7 @@ def _runtime_config() -> RuntimeConfig:
         binance_api_configured=bool(settings.binance_api_key and settings.binance_api_secret),
         config_files=[str(path) for path in existing_env_paths()],
         mt4_script_path=str((MT4_DIR / "ArbBridgeEA.mq4").resolve()),
+        binance_leverage=settings.binance_leverage,
         open_min_edge=settings.open_min_edge,
         close_max_spread=settings.close_max_spread,
         min_locked_edge=settings.min_locked_edge,
