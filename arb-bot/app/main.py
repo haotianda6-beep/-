@@ -6,7 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from app.binance_client import BinanceFuturesClient, PaperBinanceClient
 from app.config import Settings, existing_env_paths, load_settings
@@ -31,6 +31,7 @@ strategy = StrategyEngine(settings, binance_client, mt4_bridge, risk, storage)
 app = FastAPI(title="黄金价差执行器", version="0.1.0")
 _loop_task: asyncio.Task | None = None
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
+MT4_DIR = Path(__file__).resolve().parents[1] / "mt4"
 
 
 @app.on_event("startup")
@@ -64,6 +65,11 @@ async def health() -> dict:
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
     return HTMLResponse((WEB_DIR / "index.html").read_text(encoding="utf-8"))
+
+
+@app.get("/ea/ArbBridgeEA.mq4")
+async def download_ea() -> FileResponse:
+    return FileResponse(MT4_DIR / "ArbBridgeEA.mq4", filename="ArbBridgeEA.mq4", media_type="text/plain")
 
 
 @app.get("/status", response_model=EngineStatus)
@@ -144,7 +150,7 @@ def _runtime_config() -> RuntimeConfig:
     return RuntimeConfig(
         binance_api_configured=bool(settings.binance_api_key and settings.binance_api_secret),
         config_files=[str(path) for path in existing_env_paths()],
-        mt4_script_path=str((WEB_DIR.parents[0] / "mt4" / "ArbBridgeEA.mq4").resolve()),
+        mt4_script_path=str((MT4_DIR / "ArbBridgeEA.mq4").resolve()),
         open_min_edge=settings.open_min_edge,
         close_max_spread=settings.close_max_spread,
         min_locked_edge=settings.min_locked_edge,

@@ -212,6 +212,16 @@
         cursor: not-allowed;
       }
 
+      .download-link {
+        color: #1f66d1;
+        font-weight: 750;
+        text-decoration: none;
+      }
+
+      .download-link:hover {
+        text-decoration: underline;
+      }
+
       .form-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -434,6 +444,10 @@
                 </tr>
                 <tr>
                   <th>MT4 脚本</th>
+                  <td><a class="download-link" href="ea/ArbBridgeEA.mq4" download>下载完整脚本</a></td>
+                </tr>
+                <tr>
+                  <th>服务器路径</th>
                   <td id="mt4ScriptPath">-</td>
                 </tr>
                 <tr>

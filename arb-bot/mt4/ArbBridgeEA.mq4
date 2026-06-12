@@ -9,6 +9,19 @@ input double DefaultLots = 0.01;
 
 datetime lastTickSent = 0;
 
+void PostTick();
+void ExecuteMarket(string commandId, string symbol, int type, double lots, int slippage, double maxPrice, double minPrice);
+void ExecuteClose(string commandId, int ticket, double lots, int slippage);
+void PostReport(string commandId, string status, string action, int ticket, double fillPrice, double lots, int errorCode, string message);
+string PositionsJson();
+string HttpGet(string path);
+string HttpPost(string path, string body);
+string JsonString(string json, string key);
+double JsonDouble(string json, string key, double fallback);
+string JsonEscape(string value);
+string UrlEncode(string value);
+string OrderActionName(int type);
+
 int OnInit()
 {
    EventSetMillisecondTimer(PollMs);
@@ -81,11 +94,11 @@ void ExecuteMarket(string commandId, string symbol, int type, double lots, int s
    if (ticket < 0)
    {
       int err = GetLastError();
-      PostReport(commandId, "error", (type == OP_BUY ? "BUY" : "SELL"), -1, 0, lots, err, "OrderSend failed");
+      PostReport(commandId, "error", OrderActionName(type), -1, 0, lots, err, "OrderSend failed");
       ResetLastError();
       return;
    }
-   PostReport(commandId, "ok", (type == OP_BUY ? "BUY" : "SELL"), ticket, price, lots, 0, "filled");
+   PostReport(commandId, "ok", OrderActionName(type), ticket, price, lots, 0, "filled");
 }
 
 void ExecuteClose(string commandId, int ticket, double lots, int slippage)
@@ -227,3 +240,8 @@ string UrlEncode(string value)
    return out;
 }
 
+string OrderActionName(int type)
+{
+   if (type == OP_BUY) return "BUY";
+   return "SELL";
+}
