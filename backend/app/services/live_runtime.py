@@ -5,6 +5,7 @@ import threading
 import time
 from dataclasses import dataclass
 
+from app.core.credential_utils import env_bool
 from app.core.models import BotSettings, ExchangeName
 from app.services.cash_carry_executor import CashCarryExecutor
 from app.services.cash_carry_fast_refresh import CashCarryFastRefresher
@@ -87,8 +88,10 @@ class LiveRuntimeCache:
                 return
             self._started = True
             threading.Thread(target=self._account_loop, daemon=True, name="live-account-loop").start()
-            threading.Thread(target=self._cash_carry_loop, args=(20.0,), daemon=True, name="cash-carry-loop").start()
-            threading.Thread(target=self._mt4_spread_loop, args=(10.0,), daemon=True, name="mt4-spread-loop").start()
+            if _cash_carry_runtime_enabled():
+                threading.Thread(target=self._cash_carry_loop, args=(20.0,), daemon=True, name="cash-carry-loop").start()
+            if _mt4_spread_runtime_enabled():
+                threading.Thread(target=self._mt4_spread_loop, args=(10.0,), daemon=True, name="mt4-spread-loop").start()
             threading.Thread(target=self._memory_guard_loop, daemon=True, name="runtime-memory-guard").start()
 
     def _account_loop(self) -> None:
@@ -116,6 +119,7 @@ class LiveRuntimeCache:
                 if completed:
                     last_full_scan = time.monotonic()
                     self._subscribe_cash_carry(result, self.cash_carry_scanner)
+                    self._drop_full_scan_caches()
             else:
                 with self._lock:
                     current = self._cash_carry
@@ -198,6 +202,12 @@ class LiveRuntimeCache:
         except OSError:
             return None
         return None
+
+    def _drop_full_scan_caches(self) -> None:
+        if not env_bool("MAIN_DASHBOARD_DROP_SCAN_CACHES", default=True):
+            return
+        self.cash_carry_scanner.clear_caches()
+        gc.collect()
 
     def _run_full_scan(self, action, fallback):
         return self._run_guarded_scan(self._full_scan_slots, action, fallback)
@@ -288,3 +298,12 @@ class LiveRuntimeCache:
 
     def _tracked_live_position_keys(self) -> set[tuple[ExchangeName, str]]:
         return set(self.cash_carry_executor.state.active_keys())
+
+
+def _cash_carry_runtime_enabled() -> bool:
+    return env_bool("MAIN_DASHBOARD_CASH_CARRY_RUNTIME", default=True)
+
+
+def _mt4_spread_runtime_enabled() -> bool:
+    lightweight = env_bool("MAIN_DASHBOARD_LIGHTWEIGHT", default=True)
+    return env_bool("MAIN_DASHBOARD_MT4_SPREAD_RUNTIME", default=not lightweight)

@@ -35,8 +35,6 @@ async def get_snapshot() -> RealtimeSnapshot:
 
 @router.get("/cash-carry/opportunities")
 async def get_cash_carry_opportunities():
-    if _lightweight_dashboard_enabled():
-        return []
     _, runtime = await _runtime()
     return runtime.cash_carry.opportunities if runtime else []
 
@@ -277,32 +275,49 @@ def _lightweight_snapshot() -> RealtimeSnapshot:
     settings = engine.settings_store.load()
     now = datetime.now(timezone.utc)
     live_enabled = engine.live_read.live_data_enabled()
+    runtime = engine.live_runtime.get(settings) if live_enabled and _lightweight_cash_carry_enabled() else None
+    balances = runtime.account.balances if runtime else []
+    positions = runtime.account.positions if runtime else []
+    cash_opps = _trim(runtime.cash_carry.opportunities if runtime else [], 20)
+    cash_candidates = _trim(runtime.cash_carry.candidates if runtime else [], 50)
+    cash_prices = [*cash_opps, *cash_candidates]
+    cash_positions = engine._cash_positions_snapshot(positions, cash_prices, settings) if live_enabled else []
+    risk_events = [
+        RiskEvent(
+            id="main-lightweight-mode",
+            severity="info",
+            title="主控台轻量实时模式",
+            detail="主控台只保留正向期现实时数据、参数和 API 管理；做单历史和 MT4 五所扫描不再参与首屏快照，避免后台缓存堆积导致无法进入。",
+            action="黄金价差套利请进入 /xau-arb/ 独立执行器；需要恢复更多扫描时再单独开启。",
+            created_at=now,
+        )
+    ]
+    risk_events.extend(
+        engine.get_risk_events(
+            settings,
+            runtime.account.issues if runtime else [],
+            runtime.cash_carry.issues if runtime else ["正向期现实时扫描未启动"],
+            [],
+            cash_positions,
+        )
+    )
     return RealtimeSnapshot(
-        balances=[],
-        positions=[],
-        cash_carry_opportunities=[],
-        cash_carry_candidates=[],
-        cash_carry_positions=[],
+        balances=balances,
+        positions=positions,
+        cash_carry_opportunities=cash_opps,
+        cash_carry_candidates=cash_candidates,
+        cash_carry_positions=cash_positions,
         mt4_spread_opportunities=[],
         mt4_spread_candidates=[],
         trades=[],
         settings=settings,
-        risk_events=[
-            RiskEvent(
-                id="main-lightweight-mode",
-                severity="info",
-                title="主控台轻量实时模式",
-                detail="五所扫描和历史数据不再常驻后端内存，页面只保留实时入口、参数和 API 管理，避免后台缓存堆积导致无法进入。",
-                action="黄金价差套利请进入 /xau-arb/ 独立执行器；需要恢复主控台扫描时再单独开启。",
-                created_at=now,
-            )
-        ],
+        risk_events=risk_events,
         credential_status=credential_statuses(),
         ai_insight=AIInsight(
             provider="",
             model="",
             status="disabled",
-            content="主控台已切换为轻量实时模式，不再对五所扫描缓存做 AI 分析。",
+            content="主控台已切换为轻量实时模式，AI 分析暂不参与首屏快照，避免外部调用影响页面进入。",
             updated_at=now,
             next_refresh_at=None,
         ),
@@ -311,9 +326,17 @@ def _lightweight_snapshot() -> RealtimeSnapshot:
 
 
 async def _runtime():
-    if _lightweight_dashboard_enabled():
-        return engine.settings_store.load(), None
     settings = engine.settings_store.load()
+    if _lightweight_dashboard_enabled() and not _lightweight_cash_carry_enabled():
+        return settings, None
     if not engine.live_read.live_data_enabled():
         return settings, None
     return settings, engine.live_runtime.get(settings)
+
+
+def _lightweight_cash_carry_enabled() -> bool:
+    return env_bool("MAIN_DASHBOARD_CASH_CARRY_RUNTIME", default=True)
+
+
+def _trim(items: list, limit: int) -> list:
+    return list(items[:limit])

@@ -1,8 +1,12 @@
 import time
+from datetime import datetime, timezone
+from decimal import Decimal
+from types import SimpleNamespace
 
 from app.api import routes
-from app.core.models import BotSettings
+from app.core.models import BotSettings, CashCarryOpportunity, DataSource, ExchangeName
 from app.services.arbitrage_engine import ArbitrageEngine
+from app.services.live_market_types import CashCarryScan
 from app.services.settings_store import SettingsStore
 
 
@@ -31,6 +35,7 @@ def test_snapshot_cache_uses_lightweight_mode_by_default(monkeypatch) -> None:
     routes._snapshot_json_cache = ""
     routes._snapshot_cache_at = 0.0
     routes._snapshot_refreshing = False
+    monkeypatch.setattr(routes.engine.live_read, "live_data_enabled", lambda: False)
 
     def fail_snapshot():
         raise AssertionError("heavy snapshot should not run")
@@ -42,6 +47,27 @@ def test_snapshot_cache_uses_lightweight_mode_by_default(monkeypatch) -> None:
     assert snapshot.risk_events[0].title == "主控台轻量实时模式"
     assert snapshot.cash_carry_opportunities == []
     assert snapshot.trades == []
+
+
+def test_lightweight_snapshot_keeps_cash_carry_realtime_rows(monkeypatch) -> None:
+    routes._snapshot_cache = None
+    routes._snapshot_json_cache = ""
+    routes._snapshot_cache_at = 0.0
+    routes._snapshot_refreshing = False
+    opportunity = _cash_opportunity()
+    runtime = SimpleNamespace(
+        account=SimpleNamespace(balances=[], positions=[], issues=[]),
+        cash_carry=CashCarryScan(opportunities=[opportunity], candidates=[opportunity], issues=[]),
+    )
+    monkeypatch.setattr(routes.engine.live_read, "live_data_enabled", lambda: True)
+    monkeypatch.setattr(routes.engine.live_runtime, "get", lambda _settings: runtime)
+
+    snapshot = routes.snapshot_cached()
+
+    assert snapshot.cash_carry_opportunities == [opportunity]
+    assert snapshot.cash_carry_candidates == [opportunity]
+    assert snapshot.trades == []
+    assert snapshot.mt4_spread_opportunities == []
 
 
 def test_cash_positions_snapshot_refreshes_in_background(tmp_path) -> None:
@@ -67,3 +93,27 @@ class _SlowCashPositionBuilder:
         self.started = True
         time.sleep(0.2)
         return []
+
+
+def _cash_opportunity() -> CashCarryOpportunity:
+    return CashCarryOpportunity(
+        exchange=ExchangeName.BINANCE,
+        symbol="XAUUSDT",
+        spot_price=Decimal("4200"),
+        perp_price=Decimal("4236"),
+        basis_pct=Decimal("0.8571"),
+        funding_rate_pct=Decimal("0.01"),
+        quantity=Decimal("0.01"),
+        spot_volume_24h_usdt=Decimal("1000000"),
+        perp_volume_24h_usdt=Decimal("1000000"),
+        estimated_basis_profit=Decimal("0.85"),
+        estimated_funding_income=Decimal("0.01"),
+        estimated_open_close_fee=Decimal("0.08"),
+        estimated_net_profit=Decimal("0.78"),
+        notional_usdt=Decimal("100"),
+        margin_required_usdt=Decimal("50"),
+        leverage=Decimal("2"),
+        blocked_reasons=[],
+        data_source=DataSource.LIVE,
+        updated_at=datetime.now(timezone.utc),
+    )
