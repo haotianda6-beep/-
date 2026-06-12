@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+import threading
+from collections import deque
+from decimal import Decimal
+
+from app.config import Settings
+from app.models import MarketQuote, Mt4Command, Mt4Report, Mt4Tick, Side, utc_now_ms
+
+
+class Mt4Bridge:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self._lock = threading.RLock()
+        self._quote: MarketQuote | None = None
+        self._commands: deque[Mt4Command] = deque()
+        self._pending: dict[str, Mt4Command] = {}
+        self._reports: deque[Mt4Report] = deque()
+        self._positions = []
+        self.last_seen_ms = 0
+
+    def token_ok(self, token: str | None) -> bool:
+        expected = self.settings.mt4_bridge_token
+        if expected is None:
+            return True
+        return (token or "") == expected.get_secret_value()
+
+    def update_tick(self, tick: Mt4Tick) -> MarketQuote:
+        quote = MarketQuote(symbol=tick.symbol, bid=tick.bid, ask=tick.ask, timestamp_ms=tick.timestamp_ms)
+        with self._lock:
+            self._quote = quote
+            self._positions = list(tick.positions)
+            self.last_seen_ms = utc_now_ms()
+        return quote
+
+    def latest_quote(self) -> MarketQuote | None:
+        with self._lock:
+            return self._quote
+
+    def connected(self, max_age_ms: int = 3000) -> bool:
+        with self._lock:
+            return self.last_seen_ms > 0 and utc_now_ms() - self.last_seen_ms <= max_age_ms
+
+    def queue_market_order(
+        self,
+        side: Side,
+        lots: Decimal,
+        reason: str,
+        max_price: Decimal | None = None,
+        min_price: Decimal | None = None,
+    ) -> Mt4Command:
+        command = Mt4Command(
+            action=side.value,
+            symbol=self.settings.mt4_symbol,
+            lots=lots,
+            slippage_points=self.settings.mt4_slippage_points,
+            max_price=max_price,
+            min_price=min_price,
+            reason=reason,
+        )
+        with self._lock:
+            self._commands.append(command)
+            self._pending[command.command_id] = command
+        return command
+
+    def queue_close(self, ticket: int, lots: Decimal, reason: str) -> Mt4Command:
+        command = Mt4Command(
+            action="CLOSE",
+            symbol=self.settings.mt4_symbol,
+            lots=lots,
+            slippage_points=self.settings.mt4_slippage_points,
+            ticket=ticket,
+            reason=reason,
+        )
+        with self._lock:
+            self._commands.append(command)
+            self._pending[command.command_id] = command
+        return command
+
+    def next_command(self) -> dict:
+        with self._lock:
+            if not self._commands:
+                return {"command": "NONE"}
+            command = self._commands.popleft()
+            return command.model_dump(mode="json")
+
+    def submit_report(self, report: Mt4Report) -> None:
+        with self._lock:
+            self._reports.append(report)
+            self._pending.pop(report.command_id, None)
+
+    def drain_reports(self) -> list[Mt4Report]:
+        with self._lock:
+            reports = list(self._reports)
+            self._reports.clear()
+            return reports
+
+    def pending_command(self, command_id: str) -> Mt4Command | None:
+        with self._lock:
+            return self._pending.get(command_id)
+

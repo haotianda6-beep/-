@@ -1,0 +1,229 @@
+#property strict
+
+input string BridgeBaseUrl = "http://127.0.0.1:8011";
+input string BridgeToken = "";
+input string TradeSymbol = "XAUUSD";
+input int PollMs = 100;
+input int MagicNumber = 260612;
+input double DefaultLots = 0.01;
+
+datetime lastTickSent = 0;
+
+int OnInit()
+{
+   EventSetMillisecondTimer(PollMs);
+   Print("ArbBridgeEA started. Add WebRequest whitelist: ", BridgeBaseUrl);
+   return(INIT_SUCCEEDED);
+}
+
+void OnDeinit(const int reason)
+{
+   EventKillTimer();
+}
+
+void OnTick()
+{
+   if (Symbol() != TradeSymbol) return;
+   PostTick();
+}
+
+void OnTimer()
+{
+   string body = HttpGet("/mt4/command?token=" + UrlEncode(BridgeToken));
+   if (StringLen(body) <= 0) return;
+   string action = JsonString(body, "action");
+   if (action == "" || action == "NONE") return;
+
+   string commandId = JsonString(body, "command_id");
+   string symbol = JsonString(body, "symbol");
+   double lots = JsonDouble(body, "lots", DefaultLots);
+   int slippage = (int)JsonDouble(body, "slippage_points", 30);
+   double maxPrice = JsonDouble(body, "max_price", 0);
+   double minPrice = JsonDouble(body, "min_price", 0);
+   int ticket = (int)JsonDouble(body, "ticket", 0);
+
+   if (symbol == "") symbol = TradeSymbol;
+   if (action == "BUY") ExecuteMarket(commandId, symbol, OP_BUY, lots, slippage, maxPrice, minPrice);
+   else if (action == "SELL") ExecuteMarket(commandId, symbol, OP_SELL, lots, slippage, maxPrice, minPrice);
+   else if (action == "CLOSE") ExecuteClose(commandId, ticket, lots, slippage);
+}
+
+void PostTick()
+{
+   RefreshRates();
+   string positions = PositionsJson();
+   string json = "{";
+   json += "\"token\":\"" + JsonEscape(BridgeToken) + "\",";
+   json += "\"symbol\":\"" + JsonEscape(TradeSymbol) + "\",";
+   json += "\"bid\":" + DoubleToString(Bid, Digits) + ",";
+   json += "\"ask\":" + DoubleToString(Ask, Digits) + ",";
+   json += "\"timestamp_ms\":" + IntegerToString((int)(TimeCurrent() * 1000)) + ",";
+   json += "\"positions\":" + positions;
+   json += "}";
+   HttpPost("/mt4/tick", json);
+}
+
+void ExecuteMarket(string commandId, string symbol, int type, double lots, int slippage, double maxPrice, double minPrice)
+{
+   RefreshRates();
+   double price = (type == OP_BUY) ? MarketInfo(symbol, MODE_ASK) : MarketInfo(symbol, MODE_BID);
+   if (type == OP_BUY && maxPrice > 0 && price > maxPrice)
+   {
+      PostReport(commandId, "error", "BUY", -1, 0, lots, 9001, "max price exceeded");
+      return;
+   }
+   if (type == OP_SELL && minPrice > 0 && price < minPrice)
+   {
+      PostReport(commandId, "error", "SELL", -1, 0, lots, 9002, "min price exceeded");
+      return;
+   }
+   int ticket = OrderSend(symbol, type, lots, price, slippage, 0, 0, "arb hedge", MagicNumber, 0, clrDodgerBlue);
+   if (ticket < 0)
+   {
+      int err = GetLastError();
+      PostReport(commandId, "error", (type == OP_BUY ? "BUY" : "SELL"), -1, 0, lots, err, "OrderSend failed");
+      ResetLastError();
+      return;
+   }
+   PostReport(commandId, "ok", (type == OP_BUY ? "BUY" : "SELL"), ticket, price, lots, 0, "filled");
+}
+
+void ExecuteClose(string commandId, int ticket, double lots, int slippage)
+{
+   if (!OrderSelect(ticket, SELECT_BY_TICKET))
+   {
+      PostReport(commandId, "error", "CLOSE", ticket, 0, lots, GetLastError(), "ticket not found");
+      ResetLastError();
+      return;
+   }
+   RefreshRates();
+   int type = OrderType();
+   double closeLots = lots > 0 ? MathMin(lots, OrderLots()) : OrderLots();
+   double price = (type == OP_BUY) ? MarketInfo(OrderSymbol(), MODE_BID) : MarketInfo(OrderSymbol(), MODE_ASK);
+   bool ok = OrderClose(ticket, closeLots, price, slippage, clrTomato);
+   if (!ok)
+   {
+      int err = GetLastError();
+      PostReport(commandId, "error", "CLOSE", ticket, price, closeLots, err, "OrderClose failed");
+      ResetLastError();
+      return;
+   }
+   PostReport(commandId, "ok", "CLOSE", ticket, price, closeLots, 0, "closed");
+}
+
+void PostReport(string commandId, string status, string action, int ticket, double fillPrice, double lots, int errorCode, string message)
+{
+   string json = "{";
+   json += "\"token\":\"" + JsonEscape(BridgeToken) + "\",";
+   json += "\"command_id\":\"" + JsonEscape(commandId) + "\",";
+   json += "\"status\":\"" + JsonEscape(status) + "\",";
+   json += "\"action\":\"" + JsonEscape(action) + "\",";
+   json += "\"ticket\":" + IntegerToString(ticket) + ",";
+   json += "\"fill_price\":" + DoubleToString(fillPrice, Digits) + ",";
+   json += "\"lots\":" + DoubleToString(lots, 2) + ",";
+   json += "\"error_code\":" + IntegerToString(errorCode) + ",";
+   json += "\"message\":\"" + JsonEscape(message) + "\"";
+   json += "}";
+   HttpPost("/mt4/report", json);
+}
+
+string PositionsJson()
+{
+   string json = "[";
+   bool first = true;
+   for (int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      if (!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      if (OrderSymbol() != TradeSymbol || OrderMagicNumber() != MagicNumber) continue;
+      if (!first) json += ",";
+      first = false;
+      string side = OrderType() == OP_BUY ? "BUY" : "SELL";
+      json += "{";
+      json += "\"ticket\":" + IntegerToString(OrderTicket()) + ",";
+      json += "\"symbol\":\"" + JsonEscape(OrderSymbol()) + "\",";
+      json += "\"side\":\"" + side + "\",";
+      json += "\"lots\":" + DoubleToString(OrderLots(), 2) + ",";
+      json += "\"open_price\":" + DoubleToString(OrderOpenPrice(), Digits);
+      json += "}";
+   }
+   json += "]";
+   return json;
+}
+
+string HttpGet(string path)
+{
+   char data[];
+   char result[];
+   string headers = "";
+   string resultHeaders = "";
+   int code = WebRequest("GET", BridgeBaseUrl + path, headers, 1000, data, result, resultHeaders);
+   if (code < 200 || code >= 300) return "";
+   return CharArrayToString(result, 0, -1, CP_UTF8);
+}
+
+string HttpPost(string path, string body)
+{
+   char data[];
+   char result[];
+   string headers = "Content-Type: application/json\r\n";
+   string resultHeaders = "";
+   int len = StringToCharArray(body, data, 0, WHOLE_ARRAY, CP_UTF8);
+   if (len > 0) ArrayResize(data, len - 1);
+   int code = WebRequest("POST", BridgeBaseUrl + path, headers, 1000, data, result, resultHeaders);
+   if (code < 200 || code >= 300) Print("Bridge POST failed code=", code, " path=", path);
+   return CharArrayToString(result, 0, -1, CP_UTF8);
+}
+
+string JsonString(string json, string key)
+{
+   string needle = "\"" + key + "\":";
+   int pos = StringFind(json, needle);
+   if (pos < 0) return "";
+   pos += StringLen(needle);
+   while (pos < StringLen(json) && StringGetChar(json, pos) == ' ') pos++;
+   if (StringGetChar(json, pos) != '"') return "";
+   pos++;
+   int end = StringFind(json, "\"", pos);
+   if (end < 0) return "";
+   return StringSubstr(json, pos, end - pos);
+}
+
+double JsonDouble(string json, string key, double fallback)
+{
+   string needle = "\"" + key + "\":";
+   int pos = StringFind(json, needle);
+   if (pos < 0) return fallback;
+   pos += StringLen(needle);
+   while (pos < StringLen(json) && StringGetChar(json, pos) == ' ') pos++;
+   int end = pos;
+   while (end < StringLen(json))
+   {
+      int ch = StringGetChar(json, end);
+      if ((ch >= '0' && ch <= '9') || ch == '-' || ch == '.') end++;
+      else break;
+   }
+   if (end <= pos) return fallback;
+   return StrToDouble(StringSubstr(json, pos, end - pos));
+}
+
+string JsonEscape(string value)
+{
+   string out = value;
+   StringReplace(out, "\\", "\\\\");
+   StringReplace(out, "\"", "\\\"");
+   return out;
+}
+
+string UrlEncode(string value)
+{
+   string out = "";
+   for (int i = 0; i < StringLen(value); i++)
+   {
+      int ch = StringGetChar(value, i);
+      if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) out += CharToString((uchar)ch);
+      else if (ch == '-' || ch == '_' || ch == '.' || ch == '~') out += CharToString((uchar)ch);
+      else out += "%" + StringFormat("%02X", ch);
+   }
+   return out;
+}
+

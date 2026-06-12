@@ -1,0 +1,70 @@
+from __future__ import annotations
+
+from decimal import Decimal
+from pathlib import Path
+
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", populate_by_name=True)
+
+    live_trading: bool = Field(default=False, alias="LIVE_TRADING")
+    paper_mode: bool = Field(default=True, alias="PAPER_MODE")
+    service_host: str = Field(default="127.0.0.1", alias="SERVICE_HOST")
+    service_port: int = Field(default=8011, alias="SERVICE_PORT")
+
+    binance_symbol: str = Field(default="XAUTUSDT", alias="BINANCE_SYMBOL")
+    mt4_symbol: str = Field(default="XAUUSD", alias="MT4_SYMBOL")
+    binance_api_key: SecretStr | None = Field(default=None, alias="BINANCE_API_KEY")
+    binance_api_secret: SecretStr | None = Field(default=None, alias="BINANCE_API_SECRET")
+    binance_base_url: str = Field(default="https://fapi.binance.com", alias="BINANCE_BASE_URL")
+    binance_ws_url: str = Field(default="wss://fstream.binance.com", alias="BINANCE_WS_URL")
+    binance_maker_fee_rate: Decimal | None = Field(default=None, alias="BINANCE_MAKER_FEE_RATE")
+    binance_taker_fee_rate: Decimal = Field(default=Decimal("0.0005"), alias="BINANCE_TAKER_FEE_RATE")
+    binance_tick_size: Decimal = Field(default=Decimal("0.01"), alias="BINANCE_TICK_SIZE")
+    binance_qty_step: Decimal = Field(default=Decimal("0.001"), alias="BINANCE_QTY_STEP")
+    binance_min_qty: Decimal = Field(default=Decimal("0.001"), alias="BINANCE_MIN_QTY")
+
+    mt4_bridge_token: SecretStr | None = Field(default=None, alias="MT4_BRIDGE_TOKEN")
+    open_min_edge: Decimal = Field(default=Decimal("1.50"), alias="OPEN_MIN_EDGE")
+    close_max_spread: Decimal = Field(default=Decimal("0.30"), alias="CLOSE_MAX_SPREAD")
+    min_locked_edge: Decimal = Field(default=Decimal("0.80"), alias="MIN_LOCKED_EDGE")
+    max_order_age_ms: int = Field(default=300, alias="MAX_ORDER_AGE_MS")
+    max_quote_age_ms: int = Field(default=500, alias="MAX_QUOTE_AGE_MS")
+    max_hedge_delay_ms: int = Field(default=800, alias="MAX_HEDGE_DELAY_MS")
+    max_unhedged_loss_usd_per_oz: Decimal = Field(default=Decimal("0.80"), alias="MAX_UNHEDGED_LOSS_USD_PER_OZ")
+    daily_loss_limit_usdt: Decimal = Field(default=Decimal("50"), alias="DAILY_LOSS_LIMIT_USDT")
+    target_oz: Decimal = Field(default=Decimal("1"), alias="TARGET_OZ")
+    mt4_lot_size_oz: Decimal = Field(default=Decimal("100"), alias="MT4_LOT_SIZE_OZ")
+    mt4_slippage_points: int = Field(default=30, alias="MT4_SLIPPAGE_POINTS")
+    sqlite_path: Path = Field(default=Path("data/arb.sqlite3"), alias="SQLITE_PATH")
+    loop_interval_ms: int = Field(default=50, alias="LOOP_INTERVAL_MS")
+    paper_auto_fill: bool = Field(default=True, alias="PAPER_AUTO_FILL")
+    paper_fill_delay_ms: int = Field(default=50, alias="PAPER_FILL_DELAY_MS")
+
+    @field_validator(
+        "open_min_edge",
+        "close_max_spread",
+        "min_locked_edge",
+        "max_unhedged_loss_usd_per_oz",
+        "daily_loss_limit_usdt",
+        "target_oz",
+        "mt4_lot_size_oz",
+        "binance_tick_size",
+        "binance_qty_step",
+    )
+    @classmethod
+    def positive_decimal(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("numeric risk and sizing values must be positive")
+        return value
+
+    @property
+    def is_dry_run(self) -> bool:
+        return self.paper_mode or not self.live_trading
+
+
+def load_settings() -> Settings:
+    return Settings()
