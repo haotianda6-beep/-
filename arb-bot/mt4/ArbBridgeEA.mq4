@@ -42,7 +42,7 @@ void OnTick()
 
 void OnTimer()
 {
-   string body = HttpGet("/mt4/command?token=" + UrlEncode(BridgeToken));
+   string body = HttpGet("/mt4/command");
    if (StringLen(body) <= 0) return;
    string action = JsonString(body, "action");
    if (action == "" || action == "NONE") return;
@@ -66,7 +66,6 @@ void PostTick()
    RefreshRates();
    string positions = PositionsJson();
    string json = "{";
-   json += "\"token\":\"" + JsonEscape(BridgeToken) + "\",";
    json += "\"symbol\":\"" + JsonEscape(TradeSymbol) + "\",";
    json += "\"bid\":" + DoubleToString(Bid, Digits) + ",";
    json += "\"ask\":" + DoubleToString(Ask, Digits) + ",";
@@ -128,7 +127,6 @@ void ExecuteClose(string commandId, int ticket, double lots, int slippage)
 void PostReport(string commandId, string status, string action, int ticket, double fillPrice, double lots, int errorCode, string message)
 {
    string json = "{";
-   json += "\"token\":\"" + JsonEscape(BridgeToken) + "\",";
    json += "\"command_id\":\"" + JsonEscape(commandId) + "\",";
    json += "\"status\":\"" + JsonEscape(status) + "\",";
    json += "\"action\":\"" + JsonEscape(action) + "\",";
@@ -168,7 +166,7 @@ string HttpGet(string path)
 {
    char data[];
    char result[];
-   string headers = "";
+   string headers = "X-MT4-Token: " + BridgeToken + "\r\n";
    string resultHeaders = "";
    int code = WebRequest("GET", BridgeBaseUrl + path, headers, 1000, data, result, resultHeaders);
    if (code < 200 || code >= 300) return "";
@@ -179,7 +177,7 @@ string HttpPost(string path, string body)
 {
    char data[];
    char result[];
-   string headers = "Content-Type: application/json\r\n";
+   string headers = "Content-Type: application/json\r\nX-MT4-Token: " + BridgeToken + "\r\n";
    string resultHeaders = "";
    int len = StringToCharArray(body, data, 0, WHOLE_ARRAY, CP_UTF8);
    if (len > 0) ArrayResize(data, len - 1);
