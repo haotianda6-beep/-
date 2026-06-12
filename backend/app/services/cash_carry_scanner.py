@@ -54,18 +54,23 @@ class CashCarryScanner:
         exchanges = [exchange for exchange in ExchangeName if exchange not in set(settings.exchange_blacklist)]
         with ThreadPoolExecutor(max_workers=max(1, min(3, len(exchanges)))) as executor:
             data = list(executor.map(self._load_exchange_data, exchanges))
-        checked = [
-            item
-            for exchange_data in data
-            for item in self._exchange_opportunities(exchange_data, settings)
-        ]
-        opportunities = [item for item in checked if not item.blocked_reasons]
-        candidates = sorted(checked, key=lambda item: (len(item.blocked_reasons), -item.estimated_net_profit))[:50]
-        return CashCarryScan(
-            opportunities=sorted(opportunities, key=lambda item: item.estimated_net_profit, reverse=True),
-            candidates=candidates,
-            issues=[issue for item in data for issue in item.issues],
-        )
+        try:
+            checked = [
+                item
+                for exchange_data in data
+                for item in self._exchange_opportunities(exchange_data, settings)
+            ]
+            opportunities = [item for item in checked if not item.blocked_reasons]
+            candidates = sorted(checked, key=lambda item: (len(item.blocked_reasons), -item.estimated_net_profit))[:50]
+            return CashCarryScan(
+                opportunities=sorted(opportunities, key=lambda item: item.estimated_net_profit, reverse=True),
+                candidates=candidates,
+                issues=[issue for item in data for issue in item.issues],
+            )
+        finally:
+            for item in data:
+                self._close_exchange(item.spot_exchange)
+                self._close_exchange(item.swap_exchange)
 
     def _load_exchange_data(self, exchange_name: ExchangeName) -> CashCarryExchangeData:
         result = CashCarryExchangeData(exchange=exchange_name)
@@ -84,6 +89,14 @@ class CashCarryScanner:
 
     def _build_exchange(self, exchange_name: ExchangeName, exchange_id: str, default_type: str):
         return build_ccxt_exchange(exchange_name, exchange_id, default_type, timeout=12000)
+
+    def _close_exchange(self, exchange) -> None:
+        close = getattr(exchange, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
 
     def _get_cached_markets(self, exchange_name: ExchangeName, spot_exchange, swap_exchange, issues: list[str]):
         now = datetime.now(timezone.utc)

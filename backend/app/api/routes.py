@@ -1,4 +1,6 @@
 import os
+import threading
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException
@@ -16,6 +18,11 @@ from app.services.settings_store import SettingsStore
 router = APIRouter(prefix="/api")
 engine = ArbitrageEngine(SettingsStore())
 credential_store = CredentialStore()
+_SNAPSHOT_TTL_SECONDS = 1.0
+_snapshot_lock = threading.Lock()
+_snapshot_cache: RealtimeSnapshot | None = None
+_snapshot_cache_at = 0.0
+_snapshot_json_cache = ""
 
 
 @router.get("/snapshot", response_model=RealtimeSnapshot)
@@ -162,7 +169,42 @@ def _server_public_ip() -> str:
 
 
 async def _snapshot() -> RealtimeSnapshot:
-    return await run_in_threadpool(engine.snapshot)
+    return await run_in_threadpool(snapshot_cached)
+
+
+def snapshot_cached() -> RealtimeSnapshot:
+    global _snapshot_cache, _snapshot_cache_at, _snapshot_json_cache
+    now = time.monotonic()
+    if _snapshot_cache and now - _snapshot_cache_at <= _SNAPSHOT_TTL_SECONDS:
+        return _snapshot_cache
+    acquired = _snapshot_lock.acquire(blocking=False)
+    if not acquired:
+        if _snapshot_cache:
+            return _snapshot_cache
+        with _snapshot_lock:
+            if _snapshot_cache:
+                return _snapshot_cache
+            snapshot = engine.snapshot()
+            _snapshot_cache = snapshot
+            _snapshot_cache_at = time.monotonic()
+            _snapshot_json_cache = snapshot.model_dump_json()
+            return snapshot
+    try:
+        now = time.monotonic()
+        if _snapshot_cache and now - _snapshot_cache_at <= _SNAPSHOT_TTL_SECONDS:
+            return _snapshot_cache
+        snapshot = engine.snapshot()
+        _snapshot_cache = snapshot
+        _snapshot_cache_at = time.monotonic()
+        _snapshot_json_cache = snapshot.model_dump_json()
+        return snapshot
+    finally:
+        _snapshot_lock.release()
+
+
+def snapshot_json_cached() -> str:
+    snapshot_cached()
+    return _snapshot_json_cache
 
 
 async def _runtime():

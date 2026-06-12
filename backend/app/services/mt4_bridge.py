@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -96,18 +98,27 @@ class Mt4Quote:
 class Mt4QuoteStore:
     def __init__(self, path: Path = QUOTE_PATH) -> None:
         self.path = path
+        self._lock = threading.RLock()
+        self._state: dict[str, Any] | None = None
+        self._last_write_at = 0.0
 
     def update(self, payload: Mt4QuoteIn) -> Mt4Quote:
         quote = self._quote(payload)
-        state = self._read()
-        state[quote.symbol] = self._serialize(quote)
-        self._write(state)
+        with self._lock:
+            state = self._state_loaded()
+            state[quote.symbol] = self._serialize(quote)
+            now = time.monotonic()
+            if now - self._last_write_at >= 1.0:
+                self._write(state)
+                self._last_write_at = now
         return quote
 
     def quotes(self, max_age_seconds: Decimal) -> list[Mt4Quote]:
         now = datetime.now(timezone.utc)
         result = []
-        for item in self._read().values():
+        with self._lock:
+            items = list(self._state_loaded().values())
+        for item in items:
             quote = self._parse(item)
             if not quote:
                 continue
@@ -116,7 +127,14 @@ class Mt4QuoteStore:
         return result
 
     def all_quotes(self) -> list[Mt4Quote]:
-        return [quote for quote in (self._parse(item) for item in self._read().values()) if quote]
+        with self._lock:
+            items = list(self._state_loaded().values())
+        return [quote for quote in (self._parse(item) for item in items) if quote]
+
+    def _state_loaded(self) -> dict[str, Any]:
+        if self._state is None:
+            self._state = self._read()
+        return self._state
 
     def _quote(self, payload: Mt4QuoteIn) -> Mt4Quote:
         raw_symbol = normalize_mt4_symbol(payload.symbol)
@@ -222,29 +240,33 @@ class Mt4SpreadScanner:
     def _exchange_rows_for_quotes(self, exchange: ExchangeName, quotes: list[Mt4Quote], settings: BotSettings, issues: list[str]) -> list[Mt4SpreadOpportunity]:
         if not quotes:
             return []
+        instance = None
         try:
             instance = self._exchange(exchange)
             markets = self._markets(exchange, instance)
             funding = self._funding(exchange, instance)
         except Exception as exc:  # noqa: BLE001
+            self._close_exchange(instance)
             issues.append(f"{exchange}: MT4 对比合约行情读取失败 {str(exc)[:180]}")
             return []
-
-        matched: list[tuple[Mt4Quote, str]] = []
-        for quote in quotes:
-            symbol = self._mapped_symbol(quote.symbol, markets)
-            if not symbol:
-                continue
-            matched.append((quote, symbol))
-        tickers = self._tickers(instance, markets, [symbol for _quote, symbol in matched])
-        rows: list[Mt4SpreadOpportunity] = []
-        for quote, symbol in matched:
-            ticker = tickers.get(symbol)
-            if not ticker:
-                issues.append(f"{exchange} {quote.symbol}: MT4 对比合约行情未返回 {symbol}")
-                continue
-            rows.append(self._row(exchange, quote, symbol, ticker, funding.get(symbol, Decimal("0")), settings))
-        return rows
+        try:
+            matched: list[tuple[Mt4Quote, str]] = []
+            for quote in quotes:
+                symbol = self._mapped_symbol(quote.symbol, markets)
+                if not symbol:
+                    continue
+                matched.append((quote, symbol))
+            tickers = self._tickers(instance, markets, [symbol for _quote, symbol in matched])
+            rows: list[Mt4SpreadOpportunity] = []
+            for quote, symbol in matched:
+                ticker = tickers.get(symbol)
+                if not ticker:
+                    issues.append(f"{exchange} {quote.symbol}: MT4 对比合约行情未返回 {symbol}")
+                    continue
+                rows.append(self._row(exchange, quote, symbol, ticker, funding.get(symbol, Decimal("0")), settings))
+            return rows
+        finally:
+            self._close_exchange(instance)
 
     def _tickers(self, exchange, markets: dict[str, str], symbols: list[str]) -> dict[str, dict[str, Any]]:
         unique_symbols = sorted({symbol for symbol in symbols if symbol in markets})
@@ -391,6 +413,14 @@ class Mt4SpreadScanner:
 
     def _exchange(self, exchange_name: ExchangeName):
         return build_ccxt_exchange(exchange_name, SWAP_EXCHANGE_IDS[exchange_name], "swap", timeout=12000)
+
+    def _close_exchange(self, exchange) -> None:
+        close = getattr(exchange, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
 
     def _markets(self, exchange_name: ExchangeName, exchange) -> dict[str, str]:
         now = datetime.now(timezone.utc)

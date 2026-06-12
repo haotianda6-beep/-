@@ -28,20 +28,54 @@ export function App() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetchSnapshot().then((next) => setSnapshot((current) => stabilizeSnapshot(current, next))).catch((reason) => setError(String(reason)));
-    const socket = createRealtimeSocket(
-      (next) => {
-        setSnapshot((current) => stabilizeSnapshot(current, next));
-        setConnected(true);
-        setError("");
-      },
-      () => {
+    let stopped = false;
+    let fetchRetry: number | undefined;
+    let socketRetry: number | undefined;
+    let socket: WebSocket | null = null;
+
+    const loadSnapshot = () => {
+      fetchSnapshot()
+        .then((next) => {
+          if (stopped) return;
+          setSnapshot((current) => stabilizeSnapshot(current, next));
+          setError("");
+        })
+        .catch((reason) => {
+          if (stopped) return;
+          setError(String(reason));
+          fetchRetry = window.setTimeout(loadSnapshot, 2000);
+        });
+    };
+
+    const connectSocket = () => {
+      socket = createRealtimeSocket(
+        (next) => {
+          if (stopped) return;
+          setSnapshot((current) => stabilizeSnapshot(current, next));
+          setConnected(true);
+          setError("");
+        },
+        () => {
+          if (stopped) return;
+          setConnected(false);
+          setError("实时连接异常");
+        },
+      );
+      socket.onclose = () => {
+        if (stopped) return;
         setConnected(false);
-        setError("实时连接异常");
-      },
-    );
-    socket.onclose = () => setConnected(false);
-    return () => socket.close();
+        socketRetry = window.setTimeout(connectSocket, 2000);
+      };
+    };
+
+    loadSnapshot();
+    connectSocket();
+    return () => {
+      stopped = true;
+      if (fetchRetry) window.clearTimeout(fetchRetry);
+      if (socketRetry) window.clearTimeout(socketRetry);
+      socket?.close();
+    };
   }, []);
 
   if (!snapshot) {

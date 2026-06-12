@@ -42,12 +42,15 @@ class LiveReadService:
             if not status.configured:
                 snapshot.issues.append(f"{status.exchange}: API 凭证未配置完整")
                 continue
+            exchange = None
             try:
                 exchange = self._build_exchange(ExchangeName(status.exchange))
                 snapshot.balances.append(self._fetch_balance(exchange, ExchangeName(status.exchange)))
                 snapshot.positions.extend(self._fetch_positions(exchange, ExchangeName(status.exchange)))
             except Exception as exc:  # noqa: BLE001 - exchange libraries raise many custom errors.
                 snapshot.issues.append(f"{status.exchange}: {self._sanitize_error(str(exc))}")
+            finally:
+                self._close_exchange(exchange)
         return snapshot
 
     def live_data_enabled(self) -> bool:
@@ -56,6 +59,14 @@ class LiveReadService:
 
     def _build_exchange(self, exchange_name: ExchangeName):
         return build_ccxt_exchange(exchange_name, EXCHANGE_IDS[exchange_name], "swap", timeout=12000)
+
+    def _close_exchange(self, exchange) -> None:
+        close = getattr(exchange, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
 
     def _fetch_balance(self, exchange, exchange_name: ExchangeName) -> ExchangeBalance:
         raw = exchange.fetch_balance()
