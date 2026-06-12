@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 
-from app.binance_client import BinanceFuturesClient, PaperBinanceClient
+from app.binance_client import BinanceError, BinanceFuturesClient, PaperBinanceClient
 from app.config import Settings, existing_env_paths, load_settings, update_local_config_file, update_mode_file
 from app.logger import setup_logging
 from app.history import build_spread_analysis
@@ -20,6 +20,7 @@ from app.models import (
     Mt4HistoryPayload,
     Mt4Report,
     Mt4Tick,
+    OrderStatus,
     PairDirection,
     PositionMetrics,
     RuntimeConfig,
@@ -198,8 +199,8 @@ async def start_live_mode() -> dict:
 
 @app.post("/control/live/stop")
 async def stop_live_mode() -> dict:
-    if not settings.is_dry_run and (strategy.open_pair is not None or strategy.active_order is not None):
-        raise HTTPException(status_code=400, detail="当前有实盘订单或持仓，不能直接切回模拟")
+    if not settings.is_dry_run:
+        await _prepare_live_stop()
     update_mode_file(live_trading=False, paper_mode=True)
     asyncio.create_task(_restart_after_response())
     return {"status": "restarting", "mode": "paper", "message": "已切回模拟模式，服务正在重启"}
@@ -227,6 +228,44 @@ def _assert_live_preflight() -> None:
         check = risk.quote_fresh(quote)
         if not check.ok:
             raise HTTPException(status_code=400, detail=f"报价异常：{check.reason}")
+
+
+async def _prepare_live_stop() -> None:
+    if strategy.open_pair is not None:
+        raise HTTPException(status_code=400, detail="当前有组合持仓，不能直接停止实盘；请先完成平仓")
+    order = strategy.active_order
+    if order is None:
+        return
+    remote_order = await _fetch_stop_order(order.order_id)
+    checked_order = remote_order or order
+    if checked_order.executed_qty > 0 or checked_order.status in {OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED}:
+        raise HTTPException(status_code=400, detail="币安挂单已有成交数量，不能直接停止实盘；需要先完成 MT4 对冲或紧急平仓")
+    if remote_order is not None and remote_order.status not in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED}:
+        await _cancel_stop_order(remote_order.order_id)
+    strategy.clear_runtime_state()
+
+
+async def _fetch_stop_order(order_id: str):
+    try:
+        return await binance_client.get_order(order_id)
+    except BinanceError as exc:
+        if _binance_order_missing(exc):
+            return None
+        raise HTTPException(status_code=400, detail=f"停止实盘前查询币安挂单失败：{str(exc)[:160]}") from exc
+
+
+async def _cancel_stop_order(order_id: str) -> None:
+    try:
+        await binance_client.cancel_order(order_id)
+    except BinanceError as exc:
+        if _binance_order_missing(exc):
+            return
+        raise HTTPException(status_code=400, detail=f"停止实盘前撤销币安挂单失败：{str(exc)[:160]}") from exc
+
+
+def _binance_order_missing(exc: BinanceError) -> bool:
+    text = str(exc)
+    return "-2013" in text or "-2011" in text or "Order does not exist" in text or "Unknown order" in text
 
 
 async def _restart_after_response() -> None:
