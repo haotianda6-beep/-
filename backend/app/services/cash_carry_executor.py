@@ -57,6 +57,7 @@ class CashCarryExecutor:
             item for item in rows
             if not item.blocked_reasons
             and (item.exchange, item.symbol) not in blocked_keys
+            and ExchangeName(item.exchange) not in self.state.active_exchanges()
             and (allowed_open_exchanges is None or ExchangeName(item.exchange) in allowed_open_exchanges)
             and self._exposure_allows(item, settings)
         ]

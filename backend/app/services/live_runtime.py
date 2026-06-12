@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 
 from app.core.credential_utils import env_bool
-from app.core.models import BotSettings, ExchangeName
+from app.core.models import BotSettings, CashCarryOpportunity, ExchangeName
 from app.services.cash_carry_executor import CashCarryExecutor
 from app.services.cash_carry_fast_refresh import CashCarryFastRefresher
 from app.services.cash_carry_positions import CashCarryPositionBuilder
@@ -124,6 +124,7 @@ class LiveRuntimeCache:
                 with self._lock:
                     current = self._cash_carry
                 result = self.cash_carry_refresher.refresh(current, self._settings)
+            result = self._apply_cash_carry_open_scope(result)
             self._execute_cash_carry(result)
             with self._lock:
                 self._cash_carry = result
@@ -232,6 +233,67 @@ class LiveRuntimeCache:
             if swap_market:
                 self.ticker_cache.subscribe(exchange, "swap", item.symbol, swap_market.ccxt_symbol)
 
+    def _apply_cash_carry_open_scope(self, scan: CashCarryScan) -> CashCarryScan:
+        active_keys = self.cash_carry_executor.state.active_keys()
+        active_exchanges = {exchange for exchange, _symbol in active_keys}
+        if not active_exchanges:
+            return self._rebuild_cash_carry_scan([self._without_open_scope_reason(item) for item in self._cash_carry_unique_items(scan)], scan.issues)
+        rows = []
+        for item in self._cash_carry_unique_items(scan):
+            exchange = ExchangeName(item.exchange)
+            if exchange not in active_exchanges:
+                rows.append(self._without_open_scope_reason(item))
+                continue
+            reason = (
+                "该交易所该币种已有正向期现持仓，禁止重复开仓"
+                if (exchange, item.symbol) in active_keys
+                else "同交易所已有正向期现持仓，按一所一币规则禁止开仓"
+            )
+            rows.append(self._with_open_scope_reason(item, reason))
+        return self._rebuild_cash_carry_scan(rows, scan.issues)
+
+    def _cash_carry_unique_items(self, scan: CashCarryScan) -> list[CashCarryOpportunity]:
+        seen: set[tuple[ExchangeName, str]] = set()
+        result = []
+        for item in [*scan.opportunities, *scan.candidates]:
+            key = (ExchangeName(item.exchange), item.symbol)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(item)
+        return result
+
+    def _without_open_scope_reason(self, item: CashCarryOpportunity) -> CashCarryOpportunity:
+        reasons = [reason for reason in item.blocked_reasons if not self._is_open_scope_reason(reason)]
+        return item.model_copy(update={"blocked_reasons": reasons})
+
+    def _with_open_scope_reason(self, item: CashCarryOpportunity, reason: str) -> CashCarryOpportunity:
+        reasons = [reason for reason in self._without_open_scope_reason(item).blocked_reasons if reason]
+        reasons.append(reason)
+        return item.model_copy(update={"blocked_reasons": self._dedupe_reasons(reasons)})
+
+    def _is_open_scope_reason(self, reason: str) -> bool:
+        return "一所一币规则" in reason or "已有正向期现持仓" in reason
+
+    def _rebuild_cash_carry_scan(self, rows: list[CashCarryOpportunity], issues: list[str]) -> CashCarryScan:
+        opportunities = [item for item in rows if not item.blocked_reasons]
+        candidates = sorted(rows, key=lambda item: (len(item.blocked_reasons), -item.estimated_net_profit))[:50]
+        return CashCarryScan(
+            opportunities=sorted(opportunities, key=lambda item: item.estimated_net_profit, reverse=True),
+            candidates=candidates,
+            issues=issues,
+        )
+
+    def _dedupe_reasons(self, reasons: list[str]) -> list[str]:
+        result = []
+        seen = set()
+        for reason in reasons:
+            if reason in seen:
+                continue
+            seen.add(reason)
+            result.append(reason)
+        return result
+
     def _execute_cash_carry(self, result: CashCarryScan) -> None:
         rows = result.opportunities + result.candidates
         try:
@@ -285,7 +347,9 @@ class LiveRuntimeCache:
         if not self._auto_open_allowed(STRATEGY_CASH):
             return set()
         with self._lock:
-            return self._healthy_account_exchanges_locked()
+            healthy = self._healthy_account_exchanges_locked()
+        used = self.cash_carry_executor.state.active_exchanges()
+        return healthy - used
 
     def _healthy_account_exchanges_locked(self) -> set[ExchangeName]:
         return {ExchangeName(item.exchange) for item in self._account.balances}
