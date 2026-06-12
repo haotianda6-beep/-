@@ -75,6 +75,21 @@ def test_cash_carry_fast_refresh_uses_ws_prices() -> None:
     assert refreshed.opportunities[0].estimated_net_profit == Decimal("1.2200")
 
 
+def test_cash_carry_depth_zero_blocks_ready_opportunity() -> None:
+    scanner = CashCarryScanner()
+    settings = BotSettings(order_notional_usdt=Decimal("500"), max_slippage_pct=Decimal("0.2"), min_funding_net_usdt=Decimal("0.01"))
+    item = scanner._build_opportunity("ABCUSDT", _data("101", "0.0002"), settings)
+    assert item is not None
+    data = _data("101", "0.0002")
+    data.spot_exchange = _BookExchange(asks=[[100, 1]], bids=[[99, 1]])
+    data.swap_exchange = _BookExchange(asks=[[102, 1]], bids=[[101, 1]])
+
+    checked = scanner._with_depth_estimate(item, data, settings)
+
+    assert checked.max_safe_notional_usdt == Decimal("100.00")
+    assert "盘口深度不足" in " / ".join(checked.blocked_reasons)
+
+
 def _data(
     perp_bid: str,
     funding_rate: str,
@@ -110,3 +125,18 @@ class _ticker_cache:
         if market_type == "spot":
             return {"ask": "100", "quoteVolume": "1000000"}
         return {"bid": "101.5", "quoteVolume": "1000000"}
+
+
+class _BookExchange:
+    def __init__(self, asks, bids) -> None:
+        self.asks = asks
+        self.bids = bids
+
+    def fetch_order_book(self, symbol, limit=50):
+        return {"asks": self.asks, "bids": self.bids}
+
+    def load_markets(self):
+        return None
+
+    def market(self, symbol):
+        return {"contractSize": "1"}

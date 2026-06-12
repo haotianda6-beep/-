@@ -65,6 +65,50 @@ def test_cash_carry_executor_does_not_duplicate_existing_ready_position(tmp_path
     assert executor.evaluate_open([_opportunity("ABCUSDT", "9")], settings) is None
 
 
+def test_cash_carry_executor_allows_same_exchange_new_symbol_under_cap(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(
+        '{"positions":[{"exchange":"BITGET","symbol":"JCTUSDT","base_asset":"JCT","quantity":"85483.5902","spot_entry_price":"0.0058373725531173","perp_entry_price":"0.00586","opened_at":"2026-06-12T00:00:00+00:00","status":"open"}]}',
+        encoding="utf-8",
+    )
+    executor = CashCarryExecutor(state)
+    settings = BotSettings(
+        order_notional_usdt=Decimal("500"),
+        single_exchange_max_notional_usdt=Decimal("1000"),
+        max_total_notional_usdt=Decimal("2000"),
+        max_symbol_notional_usdt=Decimal("500"),
+        manual_confirm_required=False,
+        cash_carry_auto_open_enabled=True,
+        cash_carry_auto_trade_enabled=False,
+    )
+
+    result = executor.evaluate_open([_opportunity("SKYAIUSDT", "3", exchange=ExchangeName.BITGET)], settings)
+
+    assert result is not None
+    assert result.status == "blocked_by_safety_gate"
+    assert "SKYAIUSDT" in result.steps[2].detail
+
+
+def test_cash_carry_executor_blocks_same_exchange_when_cap_exceeded(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(
+        '{"positions":[{"exchange":"BITGET","symbol":"JCTUSDT","base_asset":"JCT","quantity":"90000","spot_entry_price":"0.006","perp_entry_price":"0.0061","opened_at":"2026-06-12T00:00:00+00:00","status":"open"}]}',
+        encoding="utf-8",
+    )
+    executor = CashCarryExecutor(state)
+    settings = BotSettings(
+        order_notional_usdt=Decimal("500"),
+        single_exchange_max_notional_usdt=Decimal("1000"),
+        max_total_notional_usdt=Decimal("2000"),
+        max_symbol_notional_usdt=Decimal("500"),
+        manual_confirm_required=False,
+        cash_carry_auto_open_enabled=True,
+        cash_carry_auto_trade_enabled=False,
+    )
+
+    assert executor.evaluate_open([_opportunity("SKYAIUSDT", "3", exchange=ExchangeName.BITGET)], settings) is None
+
+
 def test_cash_carry_executor_sets_bitget_isolated_leverage_for_both_sides(tmp_path) -> None:
     exchange = _FakeBitgetLeverage(short_leverage=Decimal("5"))
     result = CashCarryExecutor(tmp_path / "state.json")._set_leverage(exchange, "ABC/USDT:USDT", Decimal("5"), "isolated")
@@ -281,9 +325,9 @@ def test_contract_order_amount_converts_base_quantity_to_contracts() -> None:
     assert contract_order_amount(_FakeSwap(is_pre_market=False), "BTC/USDT:USDT", Decimal("0.03265413")) == 326.0
 
 
-def _opportunity(symbol: str = "ABCUSDT", net: str = "0.8", basis: str = "1", funding: str = "0.01") -> CashCarryOpportunity:
+def _opportunity(symbol: str = "ABCUSDT", net: str = "0.8", basis: str = "1", funding: str = "0.01", exchange: ExchangeName = ExchangeName.GATE) -> CashCarryOpportunity:
     return CashCarryOpportunity(
-        exchange=ExchangeName.GATE,
+        exchange=exchange,
         symbol=symbol,
         spot_price=Decimal("100"),
         perp_price=Decimal("101"),

@@ -53,7 +53,13 @@ class CashCarryExecutor:
         if not allow_open or not settings.cash_carry_auto_open_enabled:
             return None
         blocked_keys = self.state.active_keys() | self.state.recently_closed_keys(self.reopen_cooldown_seconds)
-        ready = [item for item in rows if not item.blocked_reasons and (item.exchange, item.symbol) not in blocked_keys and (allowed_open_exchanges is None or ExchangeName(item.exchange) in allowed_open_exchanges)]
+        ready = [
+            item for item in rows
+            if not item.blocked_reasons
+            and (item.exchange, item.symbol) not in blocked_keys
+            and (allowed_open_exchanges is None or ExchangeName(item.exchange) in allowed_open_exchanges)
+            and self._exposure_allows(item, settings)
+        ]
         if not ready:
             return None
         item = max(ready, key=lambda row: row.estimated_net_profit)
@@ -462,6 +468,34 @@ class CashCarryExecutor:
         return None
 
     def has_active_records(self) -> bool: return bool(self.state.active_keys())
+
+    def _exposure_allows(self, item: CashCarryOpportunity, settings: BotSettings) -> bool:
+        exchange = ExchangeName(item.exchange)
+        active_by_exchange = self._active_notional_by_exchange()
+        active_total = sum(active_by_exchange.values(), Decimal("0"))
+        order_notional = settings.order_notional_usdt
+        if order_notional > settings.max_symbol_notional_usdt:
+            return False
+        if active_total + order_notional > settings.max_total_notional_usdt:
+            return False
+        if active_by_exchange.get(exchange, Decimal("0")) + order_notional > settings.single_exchange_max_notional_usdt:
+            return False
+        return True
+
+    def _active_notional_by_exchange(self) -> dict[ExchangeName, Decimal]:
+        result: dict[ExchangeName, Decimal] = {}
+        for item in self.state.read().get("positions", []):
+            if item.get("status") == "closed":
+                continue
+            try:
+                exchange = ExchangeName(item["exchange"])
+                quantity = Decimal(str(item.get("quantity") or "0"))
+                spot_entry_price = Decimal(str(item.get("spot_entry_price") or "0"))
+            except (ArithmeticError, KeyError, ValueError):
+                continue
+            notional = abs(quantity * spot_entry_price)
+            result[exchange] = result.get(exchange, Decimal("0")) + notional
+        return result
 
     def _live_close_safe(self, row: CashCarryPositionRow) -> bool:
         if row.status != "matched" or row.spot_quantity <= 0 or row.perp_base_quantity <= 0:

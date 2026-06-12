@@ -285,9 +285,7 @@ class LiveRuntimeCache:
         if not self._auto_open_allowed(STRATEGY_CASH):
             return set()
         with self._lock:
-            healthy = self._healthy_account_exchanges_locked()
-        used = self.cash_carry_executor.state.active_exchanges()
-        return healthy - used
+            return self._healthy_account_exchanges_locked()
 
     def _healthy_account_exchanges_locked(self) -> set[ExchangeName]:
         return {ExchangeName(item.exchange) for item in self._account.balances}

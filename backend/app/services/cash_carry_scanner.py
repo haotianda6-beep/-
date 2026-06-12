@@ -342,7 +342,14 @@ class CashCarryScanner:
         )
         if estimate is None:
             return item
-        return item.model_copy(update={"max_safe_notional_usdt": q(estimate, "0.01")})
+        safe_notional = q(estimate, "0.01")
+        updates: dict[str, object] = {"max_safe_notional_usdt": safe_notional}
+        if estimate < settings.order_notional_usdt:
+            updates["blocked_reasons"] = [
+                *item.blocked_reasons,
+                f"盘口深度不足，最大安全本金 {safe_notional}U < 单笔 {q(settings.order_notional_usdt, '0.01')}U",
+            ]
+        return item.model_copy(update=updates)
 
     def _is_pre_market(self, market: dict[str, Any]) -> bool:
         info = market.get("info") if isinstance(market.get("info"), dict) else {}

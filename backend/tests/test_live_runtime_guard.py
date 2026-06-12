@@ -57,7 +57,7 @@ def test_runtime_open_guard_allows_single_exchange_strategies_on_other_exchanges
 
     assert runtime._auto_open_allowed(STRATEGY_CASH) is True
     allowed = runtime._allowed_single_exchange_open_exchanges()
-    assert ExchangeName.GATE not in allowed
+    assert ExchangeName.GATE in allowed
     assert ExchangeName.BYBIT in allowed
 
 
