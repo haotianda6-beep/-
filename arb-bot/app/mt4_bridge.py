@@ -26,11 +26,12 @@ class Mt4Bridge:
         return (token or "") == expected.get_secret_value()
 
     def update_tick(self, tick: Mt4Tick) -> MarketQuote:
-        quote = MarketQuote(symbol=tick.symbol, bid=tick.bid, ask=tick.ask, timestamp_ms=tick.timestamp_ms)
+        received_ms = utc_now_ms()
+        quote = MarketQuote(symbol=tick.symbol, bid=tick.bid, ask=tick.ask, timestamp_ms=received_ms)
         with self._lock:
             self._quote = quote
             self._positions = list(tick.positions)
-            self.last_seen_ms = utc_now_ms()
+            self.last_seen_ms = received_ms
         return quote
 
     def latest_quote(self) -> MarketQuote | None:
@@ -98,4 +99,3 @@ class Mt4Bridge:
     def pending_command(self, command_id: str) -> Mt4Command | None:
         with self._lock:
             return self._pending.get(command_id)
-

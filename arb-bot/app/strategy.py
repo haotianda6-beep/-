@@ -195,6 +195,15 @@ class StrategyEngine:
         if not check.ok:
             await self._emergency_close(check.reason)
             return
+        if self.settings.is_dry_run:
+            fill = mt4_quote.ask if self.active_plan.mt4_hedge_side == Side.BUY else mt4_quote.bid
+            self.hedged_qty += qty
+            self._mark_pair_open(fill, None)
+            self.storage.record_event(
+                "paper_mt4_hedge",
+                {"side": self.active_plan.mt4_hedge_side.value, "quantity": str(qty), "fill_price": str(fill)},
+            )
+            return
         lots = qty / self.settings.mt4_lot_size_oz
         self.mt4.queue_market_order(self.active_plan.mt4_hedge_side, lots, "entry hedge", max_price, min_price)
         self.pending_hedge_qty += qty
@@ -276,6 +285,10 @@ class StrategyEngine:
         if not order or order.status != OrderStatus.FILLED:
             return
         self.active_order = order
+        if self.settings.is_dry_run:
+            self.storage.record_pnl(self.open_pair.pair_id, self.open_pair.realized_pnl)
+            self._reset_all()
+            return
         close_side = Side.SELL if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.BUY
         lots = self.open_pair.quantity_oz / self.settings.mt4_lot_size_oz
         self.mt4.queue_market_order(close_side, lots, "exit hedge")

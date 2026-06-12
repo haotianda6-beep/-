@@ -33,7 +33,7 @@ def test_binance_high_entry_formula(tmp_path):
     plan = build_entry_plan(
         cfg,
         filters(),
-        MarketQuote(symbol="XAUTUSDT", bid=Decimal("2001"), ask=Decimal("2002")),
+        MarketQuote(symbol="XAUUSDT", bid=Decimal("2001"), ask=Decimal("2002")),
         MarketQuote(symbol="XAUUSD", bid=Decimal("1999"), ask=Decimal("2000")),
     )
     assert plan is not None
@@ -49,7 +49,7 @@ def test_binance_low_entry_formula(tmp_path):
     plan = build_entry_plan(
         cfg,
         filters(),
-        MarketQuote(symbol="XAUTUSDT", bid=Decimal("1998"), ask=Decimal("1999")),
+        MarketQuote(symbol="XAUUSDT", bid=Decimal("1998"), ask=Decimal("1999")),
         MarketQuote(symbol="XAUUSD", bid=Decimal("2000"), ask=Decimal("2001")),
     )
     assert plan is not None
@@ -92,8 +92,30 @@ async def test_mt4_failure_triggers_emergency_close(tmp_path):
     assert emergency[-1].executed_qty == Decimal("0.4")
 
 
+@pytest.mark.asyncio
+async def test_dry_run_does_not_send_real_mt4_order(tmp_path):
+    cfg = settings(tmp_path, PAPER_MODE=True, LIVE_TRADING=False)
+    client = PaperBinanceClient(cfg)
+    client.set_quote(Decimal("2001"), Decimal("2002"))
+    mt4 = Mt4Bridge(cfg)
+    mt4.update_tick(Mt4Tick(symbol="XAUUSD", bid=Decimal("1999"), ask=Decimal("2000")))
+    store = Storage(cfg.sqlite_path)
+    engine = StrategyEngine(cfg, client, mt4, RiskManager(cfg, store), store)
+
+    await engine.step()
+    order = engine.active_order
+    assert order is not None
+    await client.simulate_fill(order.order_id, Decimal("0.4"), Decimal("2002"))
+    await engine.step()
+
+    assert mt4.next_command() == {"command": "NONE"}
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.open_pair is not None
+    assert engine.open_pair.quantity_oz == Decimal("0.4")
+
+
 async def make_engine(tmp_path):
-    cfg = settings(tmp_path)
+    cfg = settings(tmp_path, PAPER_MODE=False, LIVE_TRADING=True)
     client = PaperBinanceClient(cfg)
     client.set_quote(Decimal("2001"), Decimal("2002"))
     mt4 = Mt4Bridge(cfg)
@@ -102,4 +124,3 @@ async def make_engine(tmp_path):
     engine = StrategyEngine(cfg, client, mt4, RiskManager(cfg, store), store)
     await client.start()
     return engine, client, mt4
-

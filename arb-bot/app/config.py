@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
+from typing import Mapping
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -11,6 +12,23 @@ APP_DIR = Path(__file__).resolve().parents[1]
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 LOCAL_ENV_PATH = APP_DIR / ".env"
 PROJECT_ENV_PATH = PROJECT_DIR / ".env"
+CONFIG_FIELD_TO_ENV = {
+    "open_min_edge": "OPEN_MIN_EDGE",
+    "close_max_spread": "CLOSE_MAX_SPREAD",
+    "min_locked_edge": "MIN_LOCKED_EDGE",
+    "max_order_age_ms": "MAX_ORDER_AGE_MS",
+    "max_quote_age_ms": "MAX_QUOTE_AGE_MS",
+    "max_hedge_delay_ms": "MAX_HEDGE_DELAY_MS",
+    "max_unhedged_loss_usd_per_oz": "MAX_UNHEDGED_LOSS_USD_PER_OZ",
+    "daily_loss_limit_usdt": "DAILY_LOSS_LIMIT_USDT",
+    "target_oz": "TARGET_OZ",
+    "mt4_lot_size_oz": "MT4_LOT_SIZE_OZ",
+    "mt4_slippage_points": "MT4_SLIPPAGE_POINTS",
+    "loop_interval_ms": "LOOP_INTERVAL_MS",
+    "paper_auto_fill": "PAPER_AUTO_FILL",
+    "paper_fill_delay_ms": "PAPER_FILL_DELAY_MS",
+}
+SAFE_CONFIG_ENV_KEYS = set(CONFIG_FIELD_TO_ENV.values())
 
 
 class Settings(BaseSettings):
@@ -26,7 +44,7 @@ class Settings(BaseSettings):
     service_host: str = Field(default="127.0.0.1", alias="SERVICE_HOST")
     service_port: int = Field(default=8011, alias="SERVICE_PORT")
 
-    binance_symbol: str = Field(default="XAUTUSDT", alias="BINANCE_SYMBOL")
+    binance_symbol: str = Field(default="XAUUSDT", alias="BINANCE_SYMBOL")
     mt4_symbol: str = Field(default="XAUUSD", alias="MT4_SYMBOL")
     binance_api_key: SecretStr | None = Field(default=None, alias="BINANCE_API_KEY")
     binance_api_secret: SecretStr | None = Field(default=None, alias="BINANCE_API_SECRET")
@@ -83,3 +101,37 @@ def load_settings() -> Settings:
 
 def existing_env_paths() -> list[Path]:
     return [path for path in (LOCAL_ENV_PATH, PROJECT_ENV_PATH) if path.exists()]
+
+
+def env_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def update_local_config_file(values: Mapping[str, object], path: Path = LOCAL_ENV_PATH) -> None:
+    updates = {
+        CONFIG_FIELD_TO_ENV[field]: env_value(value)
+        for field, value in values.items()
+        if field in CONFIG_FIELD_TO_ENV
+    }
+    if not updates:
+        return
+
+    existing_lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    written: set[str] = set()
+    next_lines: list[str] = []
+
+    for line in existing_lines:
+        key = line.split("=", 1)[0].strip() if "=" in line else ""
+        if key in updates and key in SAFE_CONFIG_ENV_KEYS:
+            next_lines.append(f"{key}={updates[key]}")
+            written.add(key)
+        else:
+            next_lines.append(line)
+
+    for field, env_key in CONFIG_FIELD_TO_ENV.items():
+        if env_key in updates and env_key not in written:
+            next_lines.append(f"{env_key}={updates[env_key]}")
+
+    path.write_text("\n".join(next_lines).rstrip() + "\n", encoding="utf-8")

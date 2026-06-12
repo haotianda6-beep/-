@@ -70,7 +70,8 @@ void PostTick()
    json += "\"symbol\":\"" + JsonEscape(TradeSymbol) + "\",";
    json += "\"bid\":" + DoubleToString(Bid, Digits) + ",";
    json += "\"ask\":" + DoubleToString(Ask, Digits) + ",";
-   json += "\"timestamp_ms\":" + IntegerToString((int)(TimeCurrent() * 1000)) + ",";
+   long timestampMs = (long)TimeCurrent() * 1000;
+   json += "\"timestamp_ms\":" + IntegerToString(timestampMs) + ",";
    json += "\"positions\":" + positions;
    json += "}";
    HttpPost("/mt4/tick", json);

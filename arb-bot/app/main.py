@@ -9,9 +9,9 @@ from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 
 from app.binance_client import BinanceFuturesClient, PaperBinanceClient
-from app.config import Settings, existing_env_paths, load_settings
+from app.config import Settings, existing_env_paths, load_settings, update_local_config_file
 from app.logger import setup_logging
-from app.models import EngineStatus, MarketQuote, Mt4Report, Mt4Tick, RuntimeConfig
+from app.models import EngineStatus, MarketQuote, Mt4Report, Mt4Tick, RuntimeConfig, RuntimeConfigUpdate
 from app.mt4_bridge import Mt4Bridge
 from app.risk import RiskManager
 from app.storage import Storage
@@ -91,6 +91,15 @@ async def status() -> EngineStatus:
     )
 
 
+@app.put("/config", response_model=RuntimeConfig)
+async def update_config(payload: RuntimeConfigUpdate) -> RuntimeConfig:
+    updates = payload.model_dump(exclude_unset=True, exclude_none=True)
+    for field, value in updates.items():
+        setattr(settings, field, value)
+    update_local_config_file(updates)
+    return _runtime_config()
+
+
 @app.post("/mt4/tick")
 async def mt4_tick(payload: Mt4Tick, x_mt4_token: str | None = Header(default=None)) -> dict:
     if not mt4_bridge.token_ok(x_mt4_token or payload.token):
@@ -162,4 +171,7 @@ def _runtime_config() -> RuntimeConfig:
         target_oz=settings.target_oz,
         mt4_lot_size_oz=settings.mt4_lot_size_oz,
         mt4_slippage_points=settings.mt4_slippage_points,
+        loop_interval_ms=settings.loop_interval_ms,
+        paper_auto_fill=settings.paper_auto_fill,
+        paper_fill_delay_ms=settings.paper_fill_delay_ms,
     )

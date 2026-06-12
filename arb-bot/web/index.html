@@ -222,6 +222,29 @@
         text-decoration: underline;
       }
 
+      .input-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .input-row small {
+        color: #65748b;
+        white-space: nowrap;
+      }
+
+      .check-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .check-row input {
+        width: 16px;
+        height: 16px;
+      }
+
       .form-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -431,7 +454,7 @@
           </div>
 
           <div class="panel">
-            <h2>当前参数</h2>
+            <h2>参数设置</h2>
             <table>
               <tbody>
                 <tr>
@@ -452,34 +475,67 @@
                 </tr>
                 <tr>
                   <th>开仓最小价差</th>
-                  <td id="openMinEdge">-</td>
+                  <td><div class="input-row"><input id="cfgOpenMinEdge" inputmode="decimal" /><small>美元</small></div></td>
                 </tr>
                 <tr>
                   <th>平仓收敛价差</th>
-                  <td id="closeMaxSpread">-</td>
+                  <td><div class="input-row"><input id="cfgCloseMaxSpread" inputmode="decimal" /><small>美元</small></div></td>
                 </tr>
                 <tr>
                   <th>最小锁定价差</th>
-                  <td id="minLockedEdge">-</td>
+                  <td><div class="input-row"><input id="cfgMinLockedEdge" inputmode="decimal" /><small>美元</small></div></td>
                 </tr>
                 <tr>
                   <th>目标数量</th>
-                  <td id="targetOz">-</td>
+                  <td><div class="input-row"><input id="cfgTargetOz" inputmode="decimal" /><small>盎司</small></div></td>
                 </tr>
                 <tr>
                   <th>MT4 每手盎司</th>
-                  <td id="mt4LotSize">-</td>
+                  <td><div class="input-row"><input id="cfgMt4LotSize" inputmode="decimal" /><small>盎司</small></div></td>
+                </tr>
+                <tr>
+                  <th>挂单最长等待</th>
+                  <td><div class="input-row"><input id="cfgMaxOrderAge" inputmode="numeric" /><small>毫秒</small></div></td>
+                </tr>
+                <tr>
+                  <th>报价最大延迟</th>
+                  <td><div class="input-row"><input id="cfgMaxQuoteAge" inputmode="numeric" /><small>毫秒</small></div></td>
                 </tr>
                 <tr>
                   <th>最大单腿等待</th>
-                  <td id="maxHedgeDelay">-</td>
+                  <td><div class="input-row"><input id="cfgMaxHedgeDelay" inputmode="numeric" /><small>毫秒</small></div></td>
+                </tr>
+                <tr>
+                  <th>单腿最大亏损</th>
+                  <td><div class="input-row"><input id="cfgMaxUnhedgedLoss" inputmode="decimal" /><small>美元/盎司</small></div></td>
                 </tr>
                 <tr>
                   <th>每日亏损上限</th>
-                  <td id="dailyLossLimit">-</td>
+                  <td><div class="input-row"><input id="cfgDailyLossLimit" inputmode="decimal" /><small>美元稳定币</small></div></td>
+                </tr>
+                <tr>
+                  <th>MT4 允许滑点</th>
+                  <td><div class="input-row"><input id="cfgMt4Slippage" inputmode="numeric" /><small>点</small></div></td>
+                </tr>
+                <tr>
+                  <th>循环间隔</th>
+                  <td><div class="input-row"><input id="cfgLoopInterval" inputmode="numeric" /><small>毫秒</small></div></td>
+                </tr>
+                <tr>
+                  <th>模拟自动成交</th>
+                  <td><label class="check-row"><input id="cfgPaperAutoFill" type="checkbox" /><span>开启</span></label></td>
+                </tr>
+                <tr>
+                  <th>模拟成交延迟</th>
+                  <td><div class="input-row"><input id="cfgPaperFillDelay" inputmode="numeric" /><small>毫秒</small></div></td>
                 </tr>
               </tbody>
             </table>
+            <div class="actions">
+              <button id="saveConfigBtn">保存参数</button>
+              <button class="secondary" id="resetConfigBtn">放弃修改</button>
+            </div>
+            <div class="small" id="configSaveState">修改后点击保存才会生效</div>
           </div>
         </aside>
       </section>
@@ -488,6 +544,24 @@
     <script>
       const $ = (id) => document.getElementById(id);
       let lastCommand = null;
+      let lastConfig = null;
+      let configDirty = false;
+      const configFields = [
+        ["cfgOpenMinEdge", "open_min_edge", "number"],
+        ["cfgCloseMaxSpread", "close_max_spread", "number"],
+        ["cfgMinLockedEdge", "min_locked_edge", "number"],
+        ["cfgTargetOz", "target_oz", "number"],
+        ["cfgMt4LotSize", "mt4_lot_size_oz", "number"],
+        ["cfgMaxOrderAge", "max_order_age_ms", "number"],
+        ["cfgMaxQuoteAge", "max_quote_age_ms", "number"],
+        ["cfgMaxHedgeDelay", "max_hedge_delay_ms", "number"],
+        ["cfgMaxUnhedgedLoss", "max_unhedged_loss_usd_per_oz", "number"],
+        ["cfgDailyLossLimit", "daily_loss_limit_usdt", "number"],
+        ["cfgMt4Slippage", "mt4_slippage_points", "number"],
+        ["cfgLoopInterval", "loop_interval_ms", "number"],
+        ["cfgPaperAutoFill", "paper_auto_fill", "boolean"],
+        ["cfgPaperFillDelay", "paper_fill_delay_ms", "number"],
+      ];
 
       function api(path, options = {}) {
         return fetch(path, {
@@ -574,16 +648,71 @@
 
       function renderConfig(config) {
         if (!config) return;
+        lastConfig = config;
         $("apiConfigured").textContent = config.binance_api_configured ? "已读取服务器币安密钥" : "未配置币安密钥";
         $("configFiles").textContent = config.config_files?.length ? config.config_files.join("，") : "未找到配置文件";
         $("mt4ScriptPath").textContent = config.mt4_script_path || "-";
-        $("openMinEdge").textContent = `${fmt(config.open_min_edge)} 美元`;
-        $("closeMaxSpread").textContent = `${fmt(config.close_max_spread)} 美元`;
-        $("minLockedEdge").textContent = `${fmt(config.min_locked_edge)} 美元`;
-        $("targetOz").textContent = `${fmt(config.target_oz)} 盎司`;
-        $("mt4LotSize").textContent = `${fmt(config.mt4_lot_size_oz)} 盎司`;
-        $("maxHedgeDelay").textContent = `${fmt(config.max_hedge_delay_ms)} 毫秒`;
-        $("dailyLossLimit").textContent = `${fmt(config.daily_loss_limit_usdt)} 美元稳定币`;
+        if (!configDirty) fillConfigInputs(config);
+      }
+
+      function fillConfigInputs(config) {
+        for (const [id, key, type] of configFields) {
+          const el = $(id);
+          if (!el) continue;
+          if (type === "boolean") el.checked = Boolean(config[key]);
+          else el.value = config[key] ?? "";
+        }
+        $("configSaveState").textContent = "修改后点击保存才会生效";
+      }
+
+      function markConfigDirty() {
+        configDirty = true;
+        $("configSaveState").textContent = "参数已修改，尚未保存";
+      }
+
+      function buildConfigPayload() {
+        const payload = {};
+        for (const [id, key, type] of configFields) {
+          const el = $(id);
+          if (!el) continue;
+          if (type === "boolean") {
+            payload[key] = el.checked;
+            continue;
+          }
+          const value = String(el.value || "").trim();
+          if (value === "") throw new Error("参数不能为空");
+          const numberValue = Number(value);
+          if (!Number.isFinite(numberValue)) throw new Error("参数必须是数字");
+          payload[key] = value;
+        }
+        return payload;
+      }
+
+      async function saveConfig() {
+        $("saveConfigBtn").disabled = true;
+        $("configSaveState").textContent = "正在保存参数...";
+        try {
+          const saved = await api("config", {
+            method: "PUT",
+            body: JSON.stringify(buildConfigPayload()),
+          });
+          configDirty = false;
+          renderConfig(saved);
+          $("configSaveState").textContent = "参数已保存并生效";
+          appendLog("参数已保存");
+          await loadStatus();
+        } catch (error) {
+          $("configSaveState").textContent = `保存失败：${translateError(error.message)}`;
+          throw error;
+        } finally {
+          $("saveConfigBtn").disabled = false;
+        }
+      }
+
+      function resetConfigForm() {
+        configDirty = false;
+        if (lastConfig) fillConfigInputs(lastConfig);
+        appendLog("已放弃未保存的参数修改");
       }
 
       function translateState(value) {
@@ -687,6 +816,15 @@
       $("pollCmdBtn").addEventListener("click", () => pollCommand().catch((error) => appendLog(translateError(error.message))));
       $("reportOkBtn").addEventListener("click", () => reportOk().catch((error) => appendLog(translateError(error.message))));
       $("resumeBtn").addEventListener("click", () => api("control/resume", { method: "POST" }).then(loadStatus).catch((error) => appendLog(translateError(error.message))));
+      $("saveConfigBtn").addEventListener("click", () => saveConfig().catch((error) => appendLog(translateError(error.message))));
+      $("resetConfigBtn").addEventListener("click", resetConfigForm);
+      for (const [id] of configFields) {
+        const el = $(id);
+        if (el) {
+          el.addEventListener("input", markConfigDirty);
+          el.addEventListener("change", markConfigDirty);
+        }
+      }
       loadStatus();
       setInterval(loadStatus, 1000);
     </script>

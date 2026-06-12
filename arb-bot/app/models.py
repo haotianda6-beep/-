@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def utc_now_ms() -> int:
@@ -168,6 +168,61 @@ class RuntimeConfig(BaseModel):
     target_oz: Decimal
     mt4_lot_size_oz: Decimal
     mt4_slippage_points: int
+    loop_interval_ms: int
+    paper_auto_fill: bool
+    paper_fill_delay_ms: int
+
+
+class RuntimeConfigUpdate(BaseModel):
+    open_min_edge: Decimal | None = None
+    close_max_spread: Decimal | None = None
+    min_locked_edge: Decimal | None = None
+    max_order_age_ms: int | None = None
+    max_quote_age_ms: int | None = None
+    max_hedge_delay_ms: int | None = None
+    max_unhedged_loss_usd_per_oz: Decimal | None = None
+    daily_loss_limit_usdt: Decimal | None = None
+    target_oz: Decimal | None = None
+    mt4_lot_size_oz: Decimal | None = None
+    mt4_slippage_points: int | None = None
+    loop_interval_ms: int | None = None
+    paper_auto_fill: bool | None = None
+    paper_fill_delay_ms: int | None = None
+
+    @field_validator(
+        "open_min_edge",
+        "close_max_spread",
+        "min_locked_edge",
+        "max_unhedged_loss_usd_per_oz",
+        "daily_loss_limit_usdt",
+        "target_oz",
+        "mt4_lot_size_oz",
+    )
+    @classmethod
+    def positive_decimal(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value <= 0:
+            raise ValueError("必须大于 0")
+        return value
+
+    @field_validator(
+        "max_order_age_ms",
+        "max_quote_age_ms",
+        "max_hedge_delay_ms",
+        "loop_interval_ms",
+        "paper_fill_delay_ms",
+    )
+    @classmethod
+    def positive_int(cls, value: int | None) -> int | None:
+        if value is not None and value <= 0:
+            raise ValueError("必须大于 0")
+        return value
+
+    @field_validator("mt4_slippage_points")
+    @classmethod
+    def non_negative_int(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            raise ValueError("不能小于 0")
+        return value
 
 
 class EngineStatus(BaseModel):
