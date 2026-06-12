@@ -87,6 +87,10 @@ sudo systemctl enable --now xau-arb-bot
    - `BridgeToken`: 与 `.env` 的 `MT4_BRIDGE_TOKEN` 一致；为空则不校验。
    - `TradeSymbol`: `XAUUSD`
    - `PollMs`: `100`
+   - `UploadHistoryOnStart`: 建议保持开启，EA 启动后会自动补传最近 7 天历史K线。
+   - `HistoryTimeframeMinutes`: 默认 `1`，用于网页里的过去7天价差分析。
+
+网页中的“历史价差”面板会用 MT4 已上传的历史K线，对齐 Binance `XAUUSDT` 同周期K线，检查过去7天有没有回到指定阈值内。
 
 ## Dry-run 验证
 

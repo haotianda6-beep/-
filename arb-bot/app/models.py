@@ -141,6 +141,49 @@ class Mt4Report(BaseModel):
     timestamp_ms: int = Field(default_factory=utc_now_ms)
 
 
+class HistoryBar(BaseModel):
+    open_time_ms: int
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal | None = None
+
+
+class Mt4HistoryPayload(BaseModel):
+    token: str | None = None
+    symbol: str
+    interval: Literal["1m", "5m", "15m", "1h"] = "1m"
+    bars: list[HistoryBar] = Field(default_factory=list)
+
+
+class SpreadAnalysisPoint(BaseModel):
+    timestamp_ms: int
+    mt4_close: Decimal
+    binance_close: Decimal
+    diff: Decimal
+    abs_diff: Decimal
+
+
+class SpreadAnalysis(BaseModel):
+    ready: bool
+    reason: str | None = None
+    days: int
+    interval: str
+    threshold: Decimal
+    mt4_bars: int
+    binance_bars: int
+    matched_points: int
+    returned_to_threshold: bool
+    return_count: int
+    min_abs_diff: Decimal | None = None
+    min_abs_diff_time_ms: int | None = None
+    latest_diff: Decimal | None = None
+    latest_time_ms: int | None = None
+    closest_points: list[SpreadAnalysisPoint] = Field(default_factory=list)
+    latest_points: list[SpreadAnalysisPoint] = Field(default_factory=list)
+
+
 class OpenPair(BaseModel):
     pair_id: str = Field(default_factory=lambda: f"pair_{uuid4().hex[:24]}")
     direction: PairDirection

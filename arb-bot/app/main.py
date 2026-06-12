@@ -11,7 +11,17 @@ from fastapi.responses import FileResponse, HTMLResponse
 from app.binance_client import BinanceFuturesClient, PaperBinanceClient
 from app.config import Settings, existing_env_paths, load_settings, update_local_config_file
 from app.logger import setup_logging
-from app.models import EngineStatus, MarketQuote, Mt4Report, Mt4Tick, RuntimeConfig, RuntimeConfigUpdate
+from app.history import build_spread_analysis
+from app.models import (
+    EngineStatus,
+    MarketQuote,
+    Mt4HistoryPayload,
+    Mt4Report,
+    Mt4Tick,
+    RuntimeConfig,
+    RuntimeConfigUpdate,
+    SpreadAnalysis,
+)
 from app.mt4_bridge import Mt4Bridge
 from app.risk import RiskManager
 from app.storage import Storage
@@ -108,6 +118,16 @@ async def mt4_tick(payload: Mt4Tick, x_mt4_token: str | None = Header(default=No
     return {"status": "ok", "symbol": quote.symbol, "timestamp_ms": quote.timestamp_ms}
 
 
+@app.post("/mt4/history")
+async def mt4_history(payload: Mt4HistoryPayload, x_mt4_token: str | None = Header(default=None)) -> dict:
+    if not mt4_bridge.token_ok(x_mt4_token or payload.token):
+        raise HTTPException(status_code=403, detail="invalid MT4 token")
+    if payload.symbol != settings.mt4_symbol:
+        raise HTTPException(status_code=400, detail="MT4 品种不匹配")
+    saved = storage.upsert_bars("mt4", payload.symbol, payload.interval, payload.bars)
+    return {"status": "ok", "saved": saved}
+
+
 @app.get("/mt4/command")
 async def mt4_command(token: str | None = Query(default=None), x_mt4_token: str | None = Header(default=None)) -> dict:
     if not mt4_bridge.token_ok(x_mt4_token or token):
@@ -143,6 +163,15 @@ async def paper_binance_fill(order_id: str, quantity: Decimal, price: Decimal | 
 async def resume() -> dict:
     strategy.resume()
     return {"status": "ok", "state": strategy.state}
+
+
+@app.get("/analysis/spread", response_model=SpreadAnalysis)
+async def spread_analysis(
+    days: int = Query(default=7, ge=1, le=30),
+    interval: str = Query(default="1m", pattern="^(1m|5m|15m|1h)$"),
+    threshold: Decimal = Query(default=Decimal("0.50"), gt=0),
+) -> SpreadAnalysis:
+    return await build_spread_analysis(settings, storage, days, interval, threshold)
 
 
 async def _strategy_loop() -> None:

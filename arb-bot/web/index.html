@@ -433,6 +433,35 @@
           </div>
 
           <div class="panel">
+            <h2>历史价差</h2>
+            <div class="compact-list">
+              <div class="compact-row">
+                <strong>数据状态</strong>
+                <span id="historyStatus">等待分析</span>
+              </div>
+              <div class="compact-row">
+                <strong>最小价差</strong>
+                <span id="historyMin">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>最近价差</strong>
+                <span id="historyLatest">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>回归次数</strong>
+                <span id="historyReturn">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>接近时间</strong>
+                <span id="historyClosest">-</span>
+              </div>
+            </div>
+            <div class="actions">
+              <button class="secondary" id="historyBtn">分析过去7天</button>
+            </div>
+          </div>
+
+          <div class="panel">
             <h2>事件</h2>
             <div class="log" id="log">准备就绪</div>
           </div>
@@ -576,6 +605,11 @@
         return `${(diff / 1000).toFixed(1)} 秒`;
       }
 
+      function timeText(ts) {
+        if (!ts) return "-";
+        return new Date(Number(ts)).toLocaleString("zh-CN", { hour12: false });
+      }
+
       function setStatus(el, text, cls) {
         el.className = `status ${cls}`;
         el.textContent = text;
@@ -686,6 +720,38 @@
         }
       }
 
+      async function loadHistoryAnalysis() {
+        $("historyBtn").disabled = true;
+        $("historyStatus").textContent = "正在读取历史并对比币安K线...";
+        try {
+          const data = await api("analysis/spread?days=7&interval=1m&threshold=0.5");
+          renderHistory(data);
+          appendLog("历史价差分析已完成");
+        } catch (error) {
+          $("historyStatus").textContent = `分析失败：${translateError(error.message)}`;
+          appendLog(`历史价差分析失败：${translateError(error.message)}`);
+        } finally {
+          $("historyBtn").disabled = false;
+        }
+      }
+
+      function renderHistory(data) {
+        if (!data.ready) {
+          $("historyStatus").textContent = data.reason || "历史数据不足";
+          $("historyMin").textContent = "-";
+          $("historyLatest").textContent = "-";
+          $("historyReturn").textContent = "-";
+          $("historyClosest").textContent = "MT4 EA 启动后会自动补传最近7天K线";
+          return;
+        }
+        $("historyStatus").textContent = `已对齐 ${fmt(data.matched_points)} 根K线，MT4 ${fmt(data.mt4_bars)} 根，币安 ${fmt(data.binance_bars)} 根`;
+        $("historyMin").textContent = `${fmt(data.min_abs_diff)} 美元，时间 ${timeText(data.min_abs_diff_time_ms)}`;
+        $("historyLatest").textContent = `${fmt(data.latest_diff)} 美元，时间 ${timeText(data.latest_time_ms)}`;
+        $("historyReturn").textContent = data.returned_to_threshold ? `有，${fmt(data.return_count)} 次小于等于 0.5 美元` : "没有回到 0.5 美元以内";
+        const closest = (data.closest_points || []).slice(0, 3).map((point) => `${timeText(point.timestamp_ms)}：${fmt(point.diff)} 美元`);
+        $("historyClosest").textContent = closest.length ? closest.join("；") : "-";
+      }
+
       function resetConfigForm() {
         configDirty = false;
         if (lastConfig) fillConfigInputs(lastConfig);
@@ -738,6 +804,7 @@
           ["Internal Server Error", "服务器内部异常"],
           ["Not Found", "接口不存在"],
           ["Forbidden", "没有访问权限"],
+          ["MT4 quote missing", "MT4 报价缺失"],
         ];
         return replacements.reduce((current, [source, target]) => current.replaceAll(source, target), text);
       }
@@ -795,6 +862,7 @@
       if ($("resumeBtn")) $("resumeBtn").addEventListener("click", () => api("control/resume", { method: "POST" }).then(loadStatus).catch((error) => appendLog(translateError(error.message))));
       $("saveConfigBtn").addEventListener("click", () => saveConfig().catch((error) => appendLog(translateError(error.message))));
       $("resetConfigBtn").addEventListener("click", resetConfigForm);
+      $("historyBtn").addEventListener("click", () => loadHistoryAnalysis());
       for (const [id] of configFields) {
         const el = $(id);
         if (el) {

@@ -6,16 +6,29 @@ input string TradeSymbol = "XAUUSD";
 input int PollMs = 50;
 input int MagicNumber = 260612;
 input double DefaultLots = 0.01;
+input bool UploadHistoryOnStart = true;
+input int HistoryDays = 7;
+input int HistoryTimeframeMinutes = 1;
+input int HistoryChunkBars = 300;
 
 datetime lastTickSent = 0;
+bool historyStarted = false;
+bool historyDone = false;
+int historyNextShift = 0;
+int historyPeriod = PERIOD_M1;
+string historyInterval = "1m";
 
 void PostTick();
+void PrepareHistoryUpload();
+bool UploadHistoryChunk();
 void ExecuteMarket(string commandId, string symbol, int type, double lots, int slippage, double maxPrice, double minPrice);
 void ExecuteClose(string commandId, int ticket, double lots, int slippage);
 void PostReport(string commandId, string status, string action, int ticket, double fillPrice, double lots, int errorCode, string message);
 string PositionsJson();
 string HttpGet(string path);
 string HttpPost(string path, string body);
+int HistoryPeriod();
+string HistoryInterval();
 string JsonString(string json, string key);
 double JsonDouble(string json, string key, double fallback);
 string JsonEscape(string value);
@@ -24,6 +37,7 @@ string OrderActionName(int type);
 
 int OnInit()
 {
+   SymbolSelect(TradeSymbol, true);
    EventSetMillisecondTimer(PollMs);
    Print("ArbBridgeEA started. Add WebRequest whitelist: ", BridgeBaseUrl);
    return(INIT_SUCCEEDED);
@@ -42,6 +56,12 @@ void OnTick()
 
 void OnTimer()
 {
+   if (UploadHistoryOnStart && !historyDone)
+   {
+      if (!historyStarted) PrepareHistoryUpload();
+      UploadHistoryChunk();
+   }
+
    string body = HttpGet("/mt4/command");
    if (StringLen(body) <= 0) return;
    string action = JsonString(body, "action");
@@ -74,6 +94,83 @@ void PostTick()
    json += "\"positions\":" + positions;
    json += "}";
    HttpPost("/mt4/tick", json);
+}
+
+void PrepareHistoryUpload()
+{
+   historyPeriod = HistoryPeriod();
+   historyInterval = HistoryInterval();
+   int totalBars = iBars(TradeSymbol, historyPeriod);
+   int minutes = HistoryTimeframeMinutes;
+   if (minutes < 1) minutes = 1;
+   int days = HistoryDays;
+   if (days < 1) days = 1;
+   int wantedBars = days * (1440 / minutes);
+   historyNextShift = totalBars - 1;
+   if (historyNextShift > wantedBars) historyNextShift = wantedBars;
+   historyStarted = true;
+   if (historyNextShift <= 0)
+   {
+      historyDone = true;
+      Print("History upload skipped. No closed bars for ", TradeSymbol);
+      return;
+   }
+   Print("History upload started symbol=", TradeSymbol, " interval=", historyInterval, " bars=", historyNextShift);
+}
+
+bool UploadHistoryChunk()
+{
+   if (historyDone || historyNextShift <= 0) return false;
+
+   int sent = 0;
+   int chunkBars = HistoryChunkBars;
+   if (chunkBars < 1) chunkBars = 1;
+   int digits = (int)MarketInfo(TradeSymbol, MODE_DIGITS);
+   int serverOffsetSec = (int)(TimeCurrent() - TimeGMT());
+   string bars = "[";
+
+   while (historyNextShift >= 1 && sent < chunkBars)
+   {
+      datetime openTime = iTime(TradeSymbol, historyPeriod, historyNextShift);
+      if (openTime <= 0)
+      {
+         historyNextShift--;
+         continue;
+      }
+      long openMs = (long)(openTime - serverOffsetSec) * 1000;
+      if (sent > 0) bars += ",";
+      bars += "{";
+      bars += "\"open_time_ms\":" + IntegerToString(openMs) + ",";
+      bars += "\"open\":" + DoubleToString(iOpen(TradeSymbol, historyPeriod, historyNextShift), digits) + ",";
+      bars += "\"high\":" + DoubleToString(iHigh(TradeSymbol, historyPeriod, historyNextShift), digits) + ",";
+      bars += "\"low\":" + DoubleToString(iLow(TradeSymbol, historyPeriod, historyNextShift), digits) + ",";
+      bars += "\"close\":" + DoubleToString(iClose(TradeSymbol, historyPeriod, historyNextShift), digits) + ",";
+      bars += "\"volume\":" + DoubleToString((double)iVolume(TradeSymbol, historyPeriod, historyNextShift), 2);
+      bars += "}";
+      sent++;
+      historyNextShift--;
+   }
+
+   bars += "]";
+   if (sent <= 0)
+   {
+      historyDone = true;
+      return false;
+   }
+
+   string json = "{";
+   json += "\"symbol\":\"" + JsonEscape(TradeSymbol) + "\",";
+   json += "\"interval\":\"" + JsonEscape(historyInterval) + "\",";
+   json += "\"bars\":" + bars;
+   json += "}";
+   HttpPost("/mt4/history", json);
+
+   if (historyNextShift <= 0)
+   {
+      historyDone = true;
+      Print("History upload completed symbol=", TradeSymbol, " interval=", historyInterval);
+   }
+   return true;
 }
 
 void ExecuteMarket(string commandId, string symbol, int type, double lots, int slippage, double maxPrice, double minPrice)
@@ -184,6 +281,22 @@ string HttpPost(string path, string body)
    int code = WebRequest("POST", BridgeBaseUrl + path, headers, 1000, data, result, resultHeaders);
    if (code < 200 || code >= 300) Print("Bridge POST failed code=", code, " path=", path);
    return CharArrayToString(result, 0, -1, CP_UTF8);
+}
+
+int HistoryPeriod()
+{
+   if (HistoryTimeframeMinutes == 5) return PERIOD_M5;
+   if (HistoryTimeframeMinutes == 15) return PERIOD_M15;
+   if (HistoryTimeframeMinutes == 60) return PERIOD_H1;
+   return PERIOD_M1;
+}
+
+string HistoryInterval()
+{
+   if (HistoryTimeframeMinutes == 5) return "5m";
+   if (HistoryTimeframeMinutes == 15) return "15m";
+   if (HistoryTimeframeMinutes == 60) return "1h";
+   return "1m";
 }
 
 string JsonString(string json, string key)
