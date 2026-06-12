@@ -35,10 +35,52 @@ select {
   color: #3d4b5c;
 }
 
+.loading-panel {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  max-width: 440px;
+  width: min(100%, 440px);
+  padding: 18px;
+  text-align: center;
+  background: #ffffff;
+  border: 1px solid #d8dee7;
+  border-radius: 8px;
+}
+
+.loading-panel strong {
+  color: #18212f;
+  font-size: 16px;
+}
+
+.loading-panel span {
+  color: #5c6978;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.loading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.loading-actions button {
+  min-height: 36px;
+  border: 1px solid #c7d0db;
+  background: #f7f9fb;
+  color: #243044;
+  border-radius: 8px;
+  padding: 8px 11px;
+  cursor: pointer;
+}
+
 .loading small {
   display: block;
   margin-top: 8px;
   color: #a24128;
+  overflow-wrap: anywhere;
 }
 
 .topbar {

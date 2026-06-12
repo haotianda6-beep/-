@@ -8,7 +8,7 @@ from fastapi import APIRouter, Header, HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from app.core.credentials import CredentialStore
-from app.core.env import ai_status, credential_statuses
+from app.core.env import ai_status, credential_statuses, env_bool
 from app.core.models import AIInsight, BotSettings, DataSource, DeepSeekCredentialInput, ExchangeCredentialInput, ExchangeName, Mt4CredentialInput, RealtimeSnapshot, RiskEvent
 from app.services.exchange_factory import build_ccxt_exchange, sanitize_exchange_error
 from app.services.live_market_types import SPOT_EXCHANGE_IDS, SWAP_EXCHANGE_IDS
@@ -35,12 +35,16 @@ async def get_snapshot() -> RealtimeSnapshot:
 
 @router.get("/cash-carry/opportunities")
 async def get_cash_carry_opportunities():
+    if _lightweight_dashboard_enabled():
+        return []
     _, runtime = await _runtime()
     return runtime.cash_carry.opportunities if runtime else []
 
 
 @router.get("/mt4-spread/opportunities")
 async def get_mt4_spread_opportunities():
+    if _lightweight_dashboard_enabled():
+        return []
     _, runtime = await _runtime()
     return runtime.mt4_spread_opportunities if runtime else []
 
@@ -55,6 +59,8 @@ async def post_mt4_quote(payload: Mt4QuoteIn, x_mt4_token: str | None = Header(d
 
 @router.get("/trades")
 async def get_trades():
+    if _lightweight_dashboard_enabled():
+        return []
     return await run_in_threadpool(engine.get_trades)
 
 
@@ -177,6 +183,10 @@ async def _snapshot() -> RealtimeSnapshot:
 
 def snapshot_cached() -> RealtimeSnapshot:
     global _snapshot_cache, _snapshot_cache_at, _snapshot_json_cache
+    if _lightweight_dashboard_enabled():
+        snapshot = _lightweight_snapshot()
+        _store_snapshot(snapshot)
+        return snapshot
     now = time.monotonic()
     if _snapshot_cache and now - _snapshot_cache_at <= _SNAPSHOT_TTL_SECONDS:
         return _snapshot_cache
@@ -259,7 +269,50 @@ def _loading_snapshot() -> RealtimeSnapshot:
     )
 
 
+def _lightweight_dashboard_enabled() -> bool:
+    return env_bool("MAIN_DASHBOARD_LIGHTWEIGHT", default=True)
+
+
+def _lightweight_snapshot() -> RealtimeSnapshot:
+    settings = engine.settings_store.load()
+    now = datetime.now(timezone.utc)
+    live_enabled = engine.live_read.live_data_enabled()
+    return RealtimeSnapshot(
+        balances=[],
+        positions=[],
+        cash_carry_opportunities=[],
+        cash_carry_candidates=[],
+        cash_carry_positions=[],
+        mt4_spread_opportunities=[],
+        mt4_spread_candidates=[],
+        trades=[],
+        settings=settings,
+        risk_events=[
+            RiskEvent(
+                id="main-lightweight-mode",
+                severity="info",
+                title="主控台轻量实时模式",
+                detail="五所扫描和历史数据不再常驻后端内存，页面只保留实时入口、参数和 API 管理，避免后台缓存堆积导致无法进入。",
+                action="黄金价差套利请进入 /xau-arb/ 独立执行器；需要恢复主控台扫描时再单独开启。",
+                created_at=now,
+            )
+        ],
+        credential_status=credential_statuses(),
+        ai_insight=AIInsight(
+            provider="",
+            model="",
+            status="disabled",
+            content="主控台已切换为轻量实时模式，不再对五所扫描缓存做 AI 分析。",
+            updated_at=now,
+            next_refresh_at=None,
+        ),
+        data_source=DataSource.LIVE if live_enabled else DataSource.MOCK,
+    )
+
+
 async def _runtime():
+    if _lightweight_dashboard_enabled():
+        return engine.settings_store.load(), None
     settings = engine.settings_store.load()
     if not engine.live_read.live_data_enabled():
         return settings, None

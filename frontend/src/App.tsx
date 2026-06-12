@@ -81,8 +81,17 @@ export function App() {
   if (!snapshot) {
     return (
       <main className="app loading">
-        <div>正在连接后端数据...</div>
-        {error && <small>{error}</small>}
+        <section className="loading-panel">
+          <strong>正在连接主控台实时数据...</strong>
+          <span>黄金价差套利是独立执行器，主控台加载期间也可以直接进入。</span>
+          <div className="loading-actions">
+            <button className="primary-button" onClick={() => window.location.assign("/xau-arb/")}>
+              进入黄金价差套利
+            </button>
+            <button onClick={() => window.location.reload()}>刷新主控台</button>
+          </div>
+          {error && <small>{error}</small>}
+        </section>
       </main>
     );
   }
