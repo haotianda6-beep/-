@@ -29,7 +29,12 @@ def setup_logging(level: int = logging.INFO) -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     root = logging.getLogger()
-    root.addFilter(RedactingFilter())
+    redacting_filter = RedactingFilter()
+    root.addFilter(redacting_filter)
+    for handler in root.handlers:
+        handler.addFilter(redacting_filter)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def masked(value: str | None, keep: int = 4) -> str:
@@ -38,4 +43,3 @@ def masked(value: str | None, keep: int = 4) -> str:
     if len(value) <= keep * 2:
         return "***"
     return f"{value[:keep]}***{value[-keep:]}"
-

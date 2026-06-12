@@ -64,16 +64,25 @@ class PaperBinanceClient(BinanceBaseClient):
         self._quote: MarketQuote | None = None
         self._orders: dict[str, OrderUpdate] = {}
         self._created_ms: dict[str, int] = {}
+        self._client = httpx.AsyncClient(base_url=settings.binance_base_url, timeout=10, trust_env=False)
+        self._tasks: list[asyncio.Task] = []
+        self._use_live_market_data = bool(settings.binance_api_key and settings.binance_api_secret)
 
     async def start(self) -> None:
+        if self._use_live_market_data:
+            await self._load_live_metadata()
+            self._tasks.append(asyncio.create_task(self._book_ticker_loop()))
         logger.info(
             "Binance paper client ready symbol=%s maker_fee=%s source=%s",
             self.settings.binance_symbol,
             self.maker_fee_rate,
-            "env" if self.settings.binance_maker_fee_rate is not None else "paper-default",
+            "live-api" if self._use_live_market_data else ("env" if self.settings.binance_maker_fee_rate is not None else "paper-default"),
         )
 
     async def stop(self) -> None:
+        for task in self._tasks:
+            task.cancel()
+        await self._client.aclose()
         return None
 
     def set_quote(self, bid: Decimal, ask: Decimal) -> None:
@@ -162,6 +171,65 @@ class PaperBinanceClient(BinanceBaseClient):
         if age < self.settings.paper_fill_delay_ms:
             return
         await self.simulate_fill(order_id, order.orig_qty, order.price)
+
+    async def _load_live_metadata(self) -> None:
+        try:
+            data = await self._public("GET", "/fapi/v1/exchangeInfo")
+            symbol = next(item for item in data["symbols"] if item["symbol"] == self.settings.binance_symbol)
+            filters = {item["filterType"]: item for item in symbol["filters"]}
+            self.filters = ExchangeFilters(
+                tick_size=Decimal(filters["PRICE_FILTER"]["tickSize"]),
+                qty_step=Decimal(filters["LOT_SIZE"]["stepSize"]),
+                min_qty=Decimal(filters["LOT_SIZE"]["minQty"]),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Binance paper metadata unavailable: %s", str(exc)[:160])
+        try:
+            data = await self._signed("GET", "/fapi/v1/commissionRate", {"symbol": self.settings.binance_symbol})
+            self.maker_fee_rate = Decimal(str(data["makerCommissionRate"]))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Binance paper commission unavailable; using configured maker fee: %s", str(exc)[:160])
+
+    async def _book_ticker_loop(self) -> None:
+        stream = f"{self.settings.binance_symbol.lower()}@bookTicker"
+        url = f"{self.settings.binance_ws_url}/ws/{stream}"
+        while True:
+            try:
+                async with websockets.connect(url, ping_interval=15, ping_timeout=10) as ws:
+                    async for message in ws:
+                        data = json.loads(message)
+                        self._quote = MarketQuote(
+                            symbol=self.settings.binance_symbol,
+                            bid=Decimal(str(data["b"])),
+                            ask=Decimal(str(data["a"])),
+                            timestamp_ms=int(data.get("E") or utc_now_ms()),
+                        )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Binance paper bookTicker reconnecting: %s", str(exc)[:160])
+                await asyncio.sleep(2)
+
+    async def _public(self, method: str, path: str) -> Any:
+        response = await self._client.request(method, path)
+        response.raise_for_status()
+        return response.json()
+
+    async def _signed(self, method: str, path: str, params: dict[str, Any]) -> Any:
+        key = self.settings.binance_api_key.get_secret_value() if self.settings.binance_api_key else ""
+        secret = self.settings.binance_api_secret.get_secret_value() if self.settings.binance_api_secret else ""
+        if not key or not secret:
+            raise BinanceError("Binance API credentials missing")
+        payload = {**params, "timestamp": int(time.time() * 1000), "recvWindow": 5000}
+        query = urlencode(payload)
+        signature = hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
+        response = await self._client.request(
+            method,
+            path,
+            params={**payload, "signature": signature},
+            headers={"X-MBX-APIKEY": key},
+        )
+        if response.status_code >= 400:
+            raise BinanceError(response.text[:240])
+        return response.json()
 
 
 class BinanceFuturesClient(BinanceBaseClient):
@@ -310,4 +378,3 @@ class BinanceFuturesClient(BinanceBaseClient):
             avg_price=avg if avg > 0 else price,
             reduce_only=bool(request.reduce_only) if request else str(raw.get("reduceOnly")).lower() == "true",
         )
-

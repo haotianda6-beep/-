@@ -153,6 +153,23 @@ class OpenPair(BaseModel):
     realized_pnl: Decimal = Decimal("0")
 
 
+class RuntimeConfig(BaseModel):
+    binance_api_configured: bool
+    config_files: list[str]
+    mt4_script_path: str
+    open_min_edge: Decimal
+    close_max_spread: Decimal
+    min_locked_edge: Decimal
+    max_order_age_ms: int
+    max_quote_age_ms: int
+    max_hedge_delay_ms: int
+    max_unhedged_loss_usd_per_oz: Decimal
+    daily_loss_limit_usdt: Decimal
+    target_oz: Decimal
+    mt4_lot_size_oz: Decimal
+    mt4_slippage_points: int
+
+
 class EngineStatus(BaseModel):
     state: StrategyState
     live_trading: bool
@@ -166,4 +183,4 @@ class EngineStatus(BaseModel):
     mt4_quote: MarketQuote | None = None
     open_pair: OpenPair | None = None
     last_error: str | None = None
-
+    config: RuntimeConfig

@@ -7,8 +7,19 @@ from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+APP_DIR = Path(__file__).resolve().parents[1]
+PROJECT_DIR = Path(__file__).resolve().parents[2]
+LOCAL_ENV_PATH = APP_DIR / ".env"
+PROJECT_ENV_PATH = PROJECT_DIR / ".env"
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", populate_by_name=True)
+    model_config = SettingsConfigDict(
+        env_file=(PROJECT_ENV_PATH, LOCAL_ENV_PATH),
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
+    )
 
     live_trading: bool = Field(default=False, alias="LIVE_TRADING")
     paper_mode: bool = Field(default=True, alias="PAPER_MODE")
@@ -68,3 +79,7 @@ class Settings(BaseSettings):
 
 def load_settings() -> Settings:
     return Settings()
+
+
+def existing_env_paths() -> list[Path]:
+    return [path for path in (LOCAL_ENV_PATH, PROJECT_ENV_PATH) if path.exists()]

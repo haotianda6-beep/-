@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>XAU MT4 Binance Arb</title>
+    <title>黄金价差执行器</title>
     <style>
       :root {
         color-scheme: light;
@@ -275,11 +275,11 @@
     <main>
       <header>
         <div>
-          <h1>MT4 XAUUSD / Binance Gold Arb</h1>
+          <h1>黄金价差执行器</h1>
           <p class="sub" id="subtitle">正在连接执行器...</p>
         </div>
         <div class="toolbar">
-          <span class="status warn" id="mode">DRY-RUN</span>
+          <span class="status warn" id="mode">模拟模式</span>
           <span class="status bad" id="backend">后端未连接</span>
           <span class="status bad" id="mt4">MT4 未连接</span>
           <button class="secondary" id="refreshBtn">刷新</button>
@@ -293,7 +293,7 @@
           <div class="small" id="lastError">-</div>
         </div>
         <div class="panel metric">
-          <div class="label">Binance</div>
+          <div class="label">币安报价</div>
           <div class="value" id="binanceQuote">-</div>
           <div class="small" id="binanceMeta">-</div>
         </div>
@@ -303,7 +303,7 @@
           <div class="small" id="mt4Meta">-</div>
         </div>
         <div class="panel metric">
-          <div class="label">Maker Fee</div>
+          <div class="label">挂单手续费率</div>
           <div class="value" id="makerFee">-</div>
           <div class="small" id="pairInfo">-</div>
         </div>
@@ -317,14 +317,14 @@
               <thead>
                 <tr>
                   <th>项目</th>
-                  <th>Bid</th>
-                  <th>Ask</th>
+                  <th>买一价</th>
+                  <th>卖一价</th>
                   <th>更新时间</th>
                 </tr>
               </thead>
               <tbody>
                 <tr>
-                  <td>Binance</td>
+                  <td>币安</td>
                   <td id="bBid">-</td>
                   <td id="bAsk">-</td>
                   <td id="bAge">-</td>
@@ -345,10 +345,10 @@
               <thead>
                 <tr>
                   <th>方向</th>
-                  <th>数量 oz</th>
-                  <th>Binance 开仓</th>
-                  <th>MT4 开仓</th>
-                  <th>Pair ID</th>
+                  <th>数量（盎司）</th>
+                  <th>币安开仓价</th>
+                  <th>MT4 开仓价</th>
+                  <th>配对编号</th>
                 </tr>
               </thead>
               <tbody>
@@ -365,28 +365,28 @@
 
           <div class="panel">
             <h2>事件</h2>
-            <div class="log" id="log">ready</div>
+            <div class="log" id="log">准备就绪</div>
           </div>
         </div>
 
         <aside class="stack">
           <div class="panel">
-            <h2>Dry-run 行情</h2>
+            <h2>模拟行情</h2>
             <div class="form-grid">
               <label>
-                <span class="label">Binance Bid</span>
+                <span class="label">币安买一价</span>
                 <input id="paperBid" value="2001" inputmode="decimal" />
               </label>
               <label>
-                <span class="label">Binance Ask</span>
+                <span class="label">币安卖一价</span>
                 <input id="paperAsk" value="2002" inputmode="decimal" />
               </label>
               <label>
-                <span class="label">MT4 Bid</span>
+                <span class="label">MT4 买一价</span>
                 <input id="mt4Bid" value="1999" inputmode="decimal" />
               </label>
               <label>
-                <span class="label">MT4 Ask</span>
+                <span class="label">MT4 卖一价</span>
                 <input id="mt4Ask" value="2000" inputmode="decimal" />
               </label>
             </div>
@@ -401,15 +401,15 @@
             <table>
               <tbody>
                 <tr>
-                  <th>Action</th>
+                  <th>动作</th>
                   <td id="cmdAction">-</td>
                 </tr>
                 <tr>
-                  <th>Lots</th>
+                  <th>手数</th>
                   <td id="cmdLots">-</td>
                 </tr>
                 <tr>
-                  <th>Price Limit</th>
+                  <th>允许价格</th>
                   <td id="cmdLimit">-</td>
                 </tr>
               </tbody>
@@ -418,6 +418,54 @@
               <button id="pollCmdBtn">拉取命令</button>
               <button class="secondary" id="reportOkBtn">回报成功</button>
             </div>
+          </div>
+
+          <div class="panel">
+            <h2>当前参数</h2>
+            <table>
+              <tbody>
+                <tr>
+                  <th>币安密钥</th>
+                  <td id="apiConfigured">-</td>
+                </tr>
+                <tr>
+                  <th>配置文件</th>
+                  <td id="configFiles">-</td>
+                </tr>
+                <tr>
+                  <th>MT4 脚本</th>
+                  <td id="mt4ScriptPath">-</td>
+                </tr>
+                <tr>
+                  <th>开仓最小价差</th>
+                  <td id="openMinEdge">-</td>
+                </tr>
+                <tr>
+                  <th>平仓收敛价差</th>
+                  <td id="closeMaxSpread">-</td>
+                </tr>
+                <tr>
+                  <th>最小锁定价差</th>
+                  <td id="minLockedEdge">-</td>
+                </tr>
+                <tr>
+                  <th>目标数量</th>
+                  <td id="targetOz">-</td>
+                </tr>
+                <tr>
+                  <th>MT4 每手盎司</th>
+                  <td id="mt4LotSize">-</td>
+                </tr>
+                <tr>
+                  <th>最大单腿等待</th>
+                  <td id="maxHedgeDelay">-</td>
+                </tr>
+                <tr>
+                  <th>每日亏损上限</th>
+                  <td id="dailyLossLimit">-</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </aside>
       </section>
@@ -446,15 +494,15 @@
         if (value === null || value === undefined || value === "") return "-";
         const n = Number(value);
         if (!Number.isFinite(n)) return String(value);
-        return n.toLocaleString("en-US", { maximumFractionDigits: 6 });
+        return n.toLocaleString("zh-CN", { maximumFractionDigits: 6 });
       }
 
       function age(ts) {
         if (!ts) return "-";
         const diff = Date.now() - Number(ts);
-        if (diff < 0) return "0ms";
-        if (diff < 1000) return `${diff}ms`;
-        return `${(diff / 1000).toFixed(1)}s`;
+        if (diff < 0) return "0 毫秒";
+        if (diff < 1000) return `${diff} 毫秒`;
+        return `${(diff / 1000).toFixed(1)} 秒`;
       }
 
       function setStatus(el, text, cls) {
@@ -474,26 +522,26 @@
           setStatus($("backend"), "后端已连接", "ok");
         } catch (error) {
           setStatus($("backend"), "后端异常", "bad");
-          appendLog(`status failed: ${error.message}`);
+          appendLog(`状态读取失败：${translateError(error.message)}`);
         }
       }
 
       function render(data) {
-        const modeText = data.paper_mode || !data.live_trading ? "DRY-RUN" : "LIVE";
-        setStatus($("mode"), modeText, modeText === "LIVE" ? "bad" : "warn");
+        const modeText = data.paper_mode || !data.live_trading ? "模拟模式" : "实盘模式";
+        setStatus($("mode"), modeText, modeText === "实盘模式" ? "bad" : "warn");
         setStatus($("mt4"), data.mt4_connected ? "MT4 已连接" : "MT4 未连接", data.mt4_connected ? "ok" : "bad");
-        $("subtitle").textContent = `${data.binance_symbol} / ${data.mt4_symbol}`;
-        $("state").textContent = data.state || "-";
-        $("lastError").textContent = data.last_error || "无异常";
+        $("subtitle").textContent = `交易品种：币安 ${data.binance_symbol} / MT4 ${data.mt4_symbol}`;
+        $("state").textContent = translateState(data.state);
+        $("lastError").textContent = data.last_error ? translateError(data.last_error) : "无异常";
         $("makerFee").textContent = data.maker_fee_rate ? `${fmt(Number(data.maker_fee_rate) * 100)}%` : "-";
-        $("pairInfo").textContent = `${data.binance_symbol} / ${data.mt4_symbol}`;
+        $("pairInfo").textContent = `币安 ${data.binance_symbol} / MT4 ${data.mt4_symbol}`;
 
         const b = data.binance_quote;
         const m = data.mt4_quote;
         $("binanceQuote").textContent = b ? `${fmt(b.bid)} / ${fmt(b.ask)}` : "-";
         $("mt4Quote").textContent = m ? `${fmt(m.bid)} / ${fmt(m.ask)}` : "-";
-        $("binanceMeta").textContent = b ? `age ${age(b.timestamp_ms)}` : "等待报价";
-        $("mt4Meta").textContent = m ? `age ${age(m.timestamp_ms)}` : "等待报价";
+        $("binanceMeta").textContent = b ? `延迟 ${age(b.timestamp_ms)}` : "等待报价";
+        $("mt4Meta").textContent = m ? `延迟 ${age(m.timestamp_ms)}` : "等待报价";
         $("bBid").textContent = b ? fmt(b.bid) : "-";
         $("bAsk").textContent = b ? fmt(b.ask) : "-";
         $("bAge").textContent = b ? age(b.timestamp_ms) : "-";
@@ -502,11 +550,76 @@
         $("mAge").textContent = m ? age(m.timestamp_ms) : "-";
 
         const pair = data.open_pair;
-        $("pairDirection").textContent = pair?.direction || "-";
+        $("pairDirection").textContent = pair ? translateDirection(pair.direction) : "-";
         $("pairQty").textContent = pair ? fmt(pair.quantity_oz) : "-";
         $("pairBinance").textContent = pair ? fmt(pair.binance_entry_price) : "-";
         $("pairMt4").textContent = pair ? fmt(pair.mt4_entry_price) : "-";
         $("pairId").textContent = pair?.pair_id || "-";
+        renderConfig(data.config);
+      }
+
+      function renderConfig(config) {
+        if (!config) return;
+        $("apiConfigured").textContent = config.binance_api_configured ? "已读取服务器币安密钥" : "未配置币安密钥";
+        $("configFiles").textContent = config.config_files?.length ? config.config_files.join("，") : "未找到配置文件";
+        $("mt4ScriptPath").textContent = config.mt4_script_path || "-";
+        $("openMinEdge").textContent = `${fmt(config.open_min_edge)} 美元`;
+        $("closeMaxSpread").textContent = `${fmt(config.close_max_spread)} 美元`;
+        $("minLockedEdge").textContent = `${fmt(config.min_locked_edge)} 美元`;
+        $("targetOz").textContent = `${fmt(config.target_oz)} 盎司`;
+        $("mt4LotSize").textContent = `${fmt(config.mt4_lot_size_oz)} 盎司`;
+        $("maxHedgeDelay").textContent = `${fmt(config.max_hedge_delay_ms)} 毫秒`;
+        $("dailyLossLimit").textContent = `${fmt(config.daily_loss_limit_usdt)} 美元稳定币`;
+      }
+
+      function translateState(value) {
+        const map = {
+          IDLE: "等待机会",
+          QUOTING_BINANCE_ENTRY: "币安开仓挂单中",
+          HEDGING_MT4: "等待 MT4 对冲",
+          PAIR_OPEN: "组合持仓中",
+          QUOTING_BINANCE_EXIT: "币安平仓挂单中",
+          CLOSING_MT4: "等待 MT4 平仓",
+          UNHEDGED: "单腿风险",
+          EMERGENCY_CLOSE_BINANCE: "币安紧急平仓中",
+          PAUSED: "已暂停",
+        };
+        return map[value] || value || "-";
+      }
+
+      function translateDirection(value) {
+        const map = {
+          BINANCE_SHORT_MT4_LONG: "币安做空 / MT4 做多",
+          BINANCE_LONG_MT4_SHORT: "币安做多 / MT4 做空",
+        };
+        return map[value] || value || "-";
+      }
+
+      function translateAction(value) {
+        const map = {
+          BUY: "买入",
+          SELL: "卖出",
+          CLOSE: "平仓",
+        };
+        return map[value] || value || "-";
+      }
+
+      function translateError(message) {
+        const text = String(message || "");
+        const replacements = [
+          ["Binance API credentials missing", "币安密钥未配置"],
+          ["invalid MT4 token", "MT4 连接口令不正确"],
+          ["MT4 quote missing before hedge", "MT4 对冲前报价缺失"],
+          ["post only would take liquidity", "只做挂单会立即成交，已拒绝并等待重挂"],
+          ["paper quote missing", "模拟行情缺失"],
+          ["MT4 hedge timeout", "MT4 对冲超时"],
+          ["MT4 command failed", "MT4 命令执行失败"],
+          ["only available in paper mode", "只允许在模拟模式使用"],
+          ["Internal Server Error", "服务器内部异常"],
+          ["Not Found", "接口不存在"],
+          ["Forbidden", "没有访问权限"],
+        ];
+        return replacements.reduce((current, [source, target]) => current.replaceAll(source, target), text);
       }
 
       async function sendPaperQuotes() {
@@ -520,22 +633,22 @@
             positions: [],
           }),
         });
-        appendLog("paper quotes sent");
+        appendLog("模拟行情已推送");
         await loadStatus();
       }
 
       async function pollCommand() {
         const command = await api("mt4/command");
         lastCommand = command.command === "NONE" ? null : command;
-        $("cmdAction").textContent = lastCommand?.action || "-";
+        $("cmdAction").textContent = lastCommand ? translateAction(lastCommand.action) : "-";
         $("cmdLots").textContent = lastCommand?.lots || "-";
         $("cmdLimit").textContent = lastCommand ? (lastCommand.max_price || lastCommand.min_price || "-") : "-";
-        appendLog(lastCommand ? `command ${lastCommand.action} lots=${lastCommand.lots}` : "no MT4 command");
+        appendLog(lastCommand ? `收到 MT4 命令：${translateAction(lastCommand.action)}，手数 ${lastCommand.lots}` : "暂无 MT4 命令");
       }
 
       async function reportOk() {
         if (!lastCommand) {
-          appendLog("no command to report");
+          appendLog("没有可回报的命令");
           return;
         }
         const fill = lastCommand.action === "BUY" ? $("mt4Ask").value : $("mt4Bid").value;
@@ -550,16 +663,16 @@
             lots: lastCommand.lots,
           }),
         });
-        appendLog(`reported ${lastCommand.action} ok`);
+        appendLog(`已回报 ${translateAction(lastCommand.action)} 成功`);
         lastCommand = null;
         await loadStatus();
       }
 
       $("refreshBtn").addEventListener("click", loadStatus);
-      $("sendPaperBtn").addEventListener("click", () => sendPaperQuotes().catch((error) => appendLog(error.message)));
-      $("pollCmdBtn").addEventListener("click", () => pollCommand().catch((error) => appendLog(error.message)));
-      $("reportOkBtn").addEventListener("click", () => reportOk().catch((error) => appendLog(error.message)));
-      $("resumeBtn").addEventListener("click", () => api("control/resume", { method: "POST" }).then(loadStatus).catch((error) => appendLog(error.message)));
+      $("sendPaperBtn").addEventListener("click", () => sendPaperQuotes().catch((error) => appendLog(translateError(error.message))));
+      $("pollCmdBtn").addEventListener("click", () => pollCommand().catch((error) => appendLog(translateError(error.message))));
+      $("reportOkBtn").addEventListener("click", () => reportOk().catch((error) => appendLog(translateError(error.message))));
+      $("resumeBtn").addEventListener("click", () => api("control/resume", { method: "POST" }).then(loadStatus).catch((error) => appendLog(translateError(error.message))));
       loadStatus();
       setInterval(loadStatus, 1000);
     </script>

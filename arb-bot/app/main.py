@@ -9,9 +9,9 @@ from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
 from app.binance_client import BinanceFuturesClient, PaperBinanceClient
-from app.config import Settings, load_settings
+from app.config import Settings, existing_env_paths, load_settings
 from app.logger import setup_logging
-from app.models import EngineStatus, MarketQuote, Mt4Report, Mt4Tick
+from app.models import EngineStatus, MarketQuote, Mt4Report, Mt4Tick, RuntimeConfig
 from app.mt4_bridge import Mt4Bridge
 from app.risk import RiskManager
 from app.storage import Storage
@@ -28,7 +28,7 @@ binance_client = PaperBinanceClient(settings) if settings.is_dry_run else Binanc
 risk = RiskManager(settings, storage)
 strategy = StrategyEngine(settings, binance_client, mt4_bridge, risk, storage)
 
-app = FastAPI(title="MT4 XAUUSD / Binance Gold Arb Executor", version="0.1.0")
+app = FastAPI(title="黄金价差执行器", version="0.1.0")
 _loop_task: asyncio.Task | None = None
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 
@@ -81,6 +81,7 @@ async def status() -> EngineStatus:
         mt4_quote=mt4_bridge.latest_quote(),
         open_pair=strategy.open_pair,
         last_error=strategy.last_error,
+        config=_runtime_config(),
     )
 
 
@@ -137,3 +138,22 @@ async def _strategy_loop() -> None:
             strategy.last_error = str(exc)[:240]
             logger.exception("strategy loop error")
         await asyncio.sleep(settings.loop_interval_ms / 1000)
+
+
+def _runtime_config() -> RuntimeConfig:
+    return RuntimeConfig(
+        binance_api_configured=bool(settings.binance_api_key and settings.binance_api_secret),
+        config_files=[str(path) for path in existing_env_paths()],
+        mt4_script_path=str((WEB_DIR.parents[0] / "mt4" / "ArbBridgeEA.mq4").resolve()),
+        open_min_edge=settings.open_min_edge,
+        close_max_spread=settings.close_max_spread,
+        min_locked_edge=settings.min_locked_edge,
+        max_order_age_ms=settings.max_order_age_ms,
+        max_quote_age_ms=settings.max_quote_age_ms,
+        max_hedge_delay_ms=settings.max_hedge_delay_ms,
+        max_unhedged_loss_usd_per_oz=settings.max_unhedged_loss_usd_per_oz,
+        daily_loss_limit_usdt=settings.daily_loss_limit_usdt,
+        target_oz=settings.target_oz,
+        mt4_lot_size_oz=settings.mt4_lot_size_oz,
+        mt4_slippage_points=settings.mt4_slippage_points,
+    )
