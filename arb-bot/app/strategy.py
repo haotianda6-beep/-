@@ -197,11 +197,12 @@ class StrategyEngine:
             return
         if self.settings.is_dry_run:
             fill = mt4_quote.ask if self.active_plan.mt4_hedge_side == Side.BUY else mt4_quote.bid
+            hedge_side = self.active_plan.mt4_hedge_side
             self.hedged_qty += qty
             self._mark_pair_open(fill, None)
             self.storage.record_event(
                 "paper_mt4_hedge",
-                {"side": self.active_plan.mt4_hedge_side.value, "quantity": str(qty), "fill_price": str(fill)},
+                {"side": hedge_side.value, "quantity": str(qty), "fill_price": str(fill)},
             )
             return
         lots = qty / self.settings.mt4_lot_size_oz
@@ -242,6 +243,9 @@ class StrategyEngine:
             binance_order_id=self.active_order.order_id,
             mt4_ticket=ticket,
         )
+        self.active_plan = None
+        self.active_order = None
+        self.pending_hedge_qty = Decimal("0")
         self.state = StrategyState.PAIR_OPEN
 
     async def _maybe_exit(self, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> None:

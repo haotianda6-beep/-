@@ -29,6 +29,7 @@ string HttpGet(string path);
 string HttpPost(string path, string body);
 int HistoryPeriod();
 string HistoryInterval();
+long NextRolloverMs();
 string JsonString(string json, string key);
 double JsonDouble(string json, string key, double fallback);
 string JsonEscape(string value);
@@ -89,6 +90,13 @@ void PostTick()
    json += "\"symbol\":\"" + JsonEscape(TradeSymbol) + "\",";
    json += "\"bid\":" + DoubleToString(Bid, Digits) + ",";
    json += "\"ask\":" + DoubleToString(Ask, Digits) + ",";
+   json += "\"swap_long_per_lot\":" + DoubleToString(MarketInfo(TradeSymbol, MODE_SWAPLONG), 8) + ",";
+   json += "\"swap_short_per_lot\":" + DoubleToString(MarketInfo(TradeSymbol, MODE_SWAPSHORT), 8) + ",";
+   json += "\"swap_type\":" + IntegerToString((int)MarketInfo(TradeSymbol, MODE_SWAPTYPE)) + ",";
+   json += "\"tick_value\":" + DoubleToString(MarketInfo(TradeSymbol, MODE_TICKVALUE), 8) + ",";
+   json += "\"tick_size\":" + DoubleToString(MarketInfo(TradeSymbol, MODE_TICKSIZE), 8) + ",";
+   json += "\"point\":" + DoubleToString(MarketInfo(TradeSymbol, MODE_POINT), 8) + ",";
+   json += "\"next_rollover_time_ms\":" + IntegerToString(NextRolloverMs()) + ",";
    long timestampMs = (long)TimeCurrent() * 1000;
    json += "\"timestamp_ms\":" + IntegerToString(timestampMs) + ",";
    json += "\"positions\":" + positions;
@@ -244,6 +252,7 @@ string PositionsJson()
    {
       if (!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
       if (OrderSymbol() != TradeSymbol || OrderMagicNumber() != MagicNumber) continue;
+      if (OrderType() != OP_BUY && OrderType() != OP_SELL) continue;
       if (!first) json += ",";
       first = false;
       string side = OrderType() == OP_BUY ? "BUY" : "SELL";
@@ -252,7 +261,9 @@ string PositionsJson()
       json += "\"symbol\":\"" + JsonEscape(OrderSymbol()) + "\",";
       json += "\"side\":\"" + side + "\",";
       json += "\"lots\":" + DoubleToString(OrderLots(), 2) + ",";
-      json += "\"open_price\":" + DoubleToString(OrderOpenPrice(), Digits);
+      json += "\"open_price\":" + DoubleToString(OrderOpenPrice(), Digits) + ",";
+      json += "\"profit\":" + DoubleToString(OrderProfit(), 2) + ",";
+      json += "\"swap\":" + DoubleToString(OrderSwap(), 2);
       json += "}";
    }
    json += "]";
@@ -297,6 +308,15 @@ string HistoryInterval()
    if (HistoryTimeframeMinutes == 15) return "15m";
    if (HistoryTimeframeMinutes == 60) return "1h";
    return "1m";
+}
+
+long NextRolloverMs()
+{
+   datetime nowServer = TimeCurrent();
+   datetime serverDate = StrToTime(TimeToString(nowServer, TIME_DATE));
+   datetime nextServer = serverDate + 86400;
+   int serverOffsetSec = (int)MathRound((TimeCurrent() - TimeGMT()) / 60.0) * 60;
+   return (long)(nextServer - serverOffsetSec) * 1000;
 }
 
 string JsonString(string json, string key)

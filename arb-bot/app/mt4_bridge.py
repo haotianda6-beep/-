@@ -5,7 +5,7 @@ from collections import deque
 from decimal import Decimal
 
 from app.config import Settings
-from app.models import MarketQuote, Mt4Command, Mt4Report, Mt4Tick, Side, utc_now_ms
+from app.models import MarketQuote, Mt4Command, Mt4Report, Mt4SwapInfo, Mt4Tick, Side, utc_now_ms
 
 
 class Mt4Bridge:
@@ -17,6 +17,7 @@ class Mt4Bridge:
         self._pending: dict[str, Mt4Command] = {}
         self._reports: deque[Mt4Report] = deque()
         self._positions = []
+        self._swap_info = Mt4SwapInfo()
         self.last_seen_ms = 0
 
     def token_ok(self, token: str | None) -> bool:
@@ -31,12 +32,29 @@ class Mt4Bridge:
         with self._lock:
             self._quote = quote
             self._positions = list(tick.positions)
+            self._swap_info = Mt4SwapInfo(
+                swap_long_per_lot=tick.swap_long_per_lot,
+                swap_short_per_lot=tick.swap_short_per_lot,
+                swap_type=tick.swap_type,
+                tick_value=tick.tick_value,
+                tick_size=tick.tick_size,
+                point=tick.point,
+                next_rollover_time_ms=tick.next_rollover_time_ms,
+            )
             self.last_seen_ms = received_ms
         return quote
 
     def latest_quote(self) -> MarketQuote | None:
         with self._lock:
             return self._quote
+
+    def latest_swap_info(self) -> Mt4SwapInfo:
+        with self._lock:
+            return self._swap_info
+
+    def positions(self) -> list:
+        with self._lock:
+            return list(self._positions)
 
     def connected(self, max_age_ms: int = 3000) -> bool:
         with self._lock:

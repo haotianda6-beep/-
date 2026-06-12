@@ -98,12 +98,32 @@ class OrderUpdate(BaseModel):
     timestamp_ms: int = Field(default_factory=utc_now_ms)
 
 
+class BinanceFundingInfo(BaseModel):
+    symbol: str
+    funding_rate: Decimal
+    next_funding_time_ms: int
+    mark_price: Decimal | None = None
+    timestamp_ms: int = Field(default_factory=utc_now_ms)
+
+
 class Mt4Position(BaseModel):
     ticket: int
     symbol: str
     side: Side
     lots: Decimal
     open_price: Decimal
+    profit: Decimal = Decimal("0")
+    swap: Decimal = Decimal("0")
+
+
+class Mt4SwapInfo(BaseModel):
+    swap_long_per_lot: Decimal | None = None
+    swap_short_per_lot: Decimal | None = None
+    swap_type: int | None = None
+    tick_value: Decimal | None = None
+    tick_size: Decimal | None = None
+    point: Decimal | None = None
+    next_rollover_time_ms: int | None = None
 
 
 class Mt4Tick(BaseModel):
@@ -113,6 +133,13 @@ class Mt4Tick(BaseModel):
     ask: Decimal
     timestamp_ms: int = Field(default_factory=utc_now_ms)
     positions: list[Mt4Position] = Field(default_factory=list)
+    swap_long_per_lot: Decimal | None = None
+    swap_short_per_lot: Decimal | None = None
+    swap_type: int | None = None
+    tick_value: Decimal | None = None
+    tick_size: Decimal | None = None
+    point: Decimal | None = None
+    next_rollover_time_ms: int | None = None
 
 
 class Mt4Command(BaseModel):
@@ -194,6 +221,28 @@ class OpenPair(BaseModel):
     mt4_ticket: int | None = None
     opened_ms: int = Field(default_factory=utc_now_ms)
     realized_pnl: Decimal = Decimal("0")
+
+
+class PositionMetrics(BaseModel):
+    binance_funding_rate: Decimal | None = None
+    binance_next_funding_time_ms: int | None = None
+    binance_funding_estimate: Decimal | None = None
+    mt4_next_rollover_time_ms: int | None = None
+    mt4_swap_estimate: Decimal | None = None
+    mt4_accrued_swap: Decimal | None = None
+    estimated_close_gross: Decimal | None = None
+    estimated_fees: Decimal | None = None
+    estimated_close_net: Decimal | None = None
+
+
+class ExecutionPlanStatus(BaseModel):
+    summary: str
+    binance_order_side: Side | None = None
+    binance_order_price: Decimal | None = None
+    binance_order_qty: Decimal | None = None
+    mt4_follow_side: Side | None = None
+    mt4_price_limit: Decimal | None = None
+    max_follow_seconds: Decimal
 
 
 class RuntimeConfig(BaseModel):
@@ -286,8 +335,11 @@ class EngineStatus(BaseModel):
     binance_symbol: str
     mt4_symbol: str
     maker_fee_rate: Decimal | None = None
+    binance_funding: BinanceFundingInfo | None = None
     binance_quote: MarketQuote | None = None
     mt4_quote: MarketQuote | None = None
     open_pair: OpenPair | None = None
+    position_metrics: PositionMetrics | None = None
+    execution_plan: ExecutionPlanStatus
     last_error: str | None = None
     config: RuntimeConfig

@@ -16,7 +16,7 @@ import websockets
 
 from app.config import Settings
 from app.logger import masked
-from app.models import ExchangeFilters, MarketQuote, OrderRequest, OrderStatus, OrderUpdate, Side, utc_now_ms
+from app.models import BinanceFundingInfo, ExchangeFilters, MarketQuote, OrderRequest, OrderStatus, OrderUpdate, Side, utc_now_ms
 
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,9 @@ class BinanceBaseClient:
         raise NotImplementedError
 
     def latest_quote(self) -> MarketQuote | None:
+        raise NotImplementedError
+
+    def latest_funding(self) -> BinanceFundingInfo | None:
         raise NotImplementedError
 
     async def place_post_only_order(self, request: OrderRequest) -> OrderUpdate:
@@ -67,11 +70,14 @@ class PaperBinanceClient(BinanceBaseClient):
         self._client = httpx.AsyncClient(base_url=settings.binance_base_url, timeout=10, trust_env=False)
         self._tasks: list[asyncio.Task] = []
         self._use_live_market_data = bool(settings.binance_api_key and settings.binance_api_secret)
+        self._funding: BinanceFundingInfo | None = None
 
     async def start(self) -> None:
         if self._use_live_market_data:
             await self._load_live_metadata()
             self._tasks.append(asyncio.create_task(self._book_ticker_loop()))
+            await self._refresh_funding_info()
+            self._tasks.append(asyncio.create_task(self._funding_loop()))
         logger.info(
             "Binance paper client ready symbol=%s maker_fee=%s source=%s",
             self.settings.binance_symbol,
@@ -90,6 +96,9 @@ class PaperBinanceClient(BinanceBaseClient):
 
     def latest_quote(self) -> MarketQuote | None:
         return self._quote
+
+    def latest_funding(self) -> BinanceFundingInfo | None:
+        return self._funding
 
     async def place_post_only_order(self, request: OrderRequest) -> OrderUpdate:
         if request.price is None:
@@ -208,8 +217,20 @@ class PaperBinanceClient(BinanceBaseClient):
                 logger.warning("Binance paper bookTicker reconnecting: %s", str(exc)[:160])
                 await asyncio.sleep(2)
 
-    async def _public(self, method: str, path: str) -> Any:
-        response = await self._client.request(method, path)
+    async def _funding_loop(self) -> None:
+        while True:
+            try:
+                await self._refresh_funding_info()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Binance funding info unavailable: %s", str(exc)[:160])
+            await asyncio.sleep(30)
+
+    async def _refresh_funding_info(self) -> None:
+        data = await self._public("GET", "/fapi/v1/premiumIndex", {"symbol": self.settings.binance_symbol})
+        self._funding = _parse_funding_info(data, self.settings.binance_symbol)
+
+    async def _public(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:
+        response = await self._client.request(method, path, params=params)
         response.raise_for_status()
         return response.json()
 
@@ -238,6 +259,7 @@ class BinanceFuturesClient(BinanceBaseClient):
         self.filters = ExchangeFilters(tick_size=settings.binance_tick_size, qty_step=settings.binance_qty_step)
         self._client = httpx.AsyncClient(base_url=settings.binance_base_url, timeout=10, trust_env=False)
         self._quote: MarketQuote | None = None
+        self._funding: BinanceFundingInfo | None = None
         self._listen_key: str | None = None
         self._tasks: list[asyncio.Task] = []
         self._hedge_mode = False
@@ -247,7 +269,9 @@ class BinanceFuturesClient(BinanceBaseClient):
         await self._load_commission_rate()
         await self._configure_leverage()
         await self._detect_position_mode()
+        await self._refresh_funding_info()
         self._tasks.append(asyncio.create_task(self._book_ticker_loop()))
+        self._tasks.append(asyncio.create_task(self._funding_loop()))
         logger.info(
             "Binance live client ready symbol=%s key=%s maker_fee=%s hedge_mode=%s",
             self.settings.binance_symbol,
@@ -263,6 +287,9 @@ class BinanceFuturesClient(BinanceBaseClient):
 
     def latest_quote(self) -> MarketQuote | None:
         return self._quote
+
+    def latest_funding(self) -> BinanceFundingInfo | None:
+        return self._funding
 
     async def place_post_only_order(self, request: OrderRequest) -> OrderUpdate:
         params = self._order_params(request, order_type="LIMIT")
@@ -332,8 +359,20 @@ class BinanceFuturesClient(BinanceBaseClient):
                 logger.warning("Binance bookTicker reconnecting: %s", str(exc)[:160])
                 await asyncio.sleep(2)
 
-    async def _public(self, method: str, path: str) -> Any:
-        response = await self._client.request(method, path)
+    async def _funding_loop(self) -> None:
+        while True:
+            try:
+                await self._refresh_funding_info()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Binance funding info unavailable: %s", str(exc)[:160])
+            await asyncio.sleep(30)
+
+    async def _refresh_funding_info(self) -> None:
+        data = await self._public("GET", "/fapi/v1/premiumIndex", {"symbol": self.settings.binance_symbol})
+        self._funding = _parse_funding_info(data, self.settings.binance_symbol)
+
+    async def _public(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:
+        response = await self._client.request(method, path, params=params)
         response.raise_for_status()
         return response.json()
 
@@ -387,3 +426,12 @@ class BinanceFuturesClient(BinanceBaseClient):
             avg_price=avg if avg > 0 else price,
             reduce_only=bool(request.reduce_only) if request else str(raw.get("reduceOnly")).lower() == "true",
         )
+
+
+def _parse_funding_info(data: dict[str, Any], symbol: str) -> BinanceFundingInfo:
+    return BinanceFundingInfo(
+        symbol=str(data.get("symbol") or symbol),
+        funding_rate=Decimal(str(data.get("lastFundingRate") or "0")),
+        next_funding_time_ms=int(data.get("nextFundingTime") or 0),
+        mark_price=Decimal(str(data["markPrice"])) if data.get("markPrice") is not None else None,
+    )
