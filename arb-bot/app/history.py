@@ -84,16 +84,20 @@ def compare_spreads(
     interval: str,
     threshold: Decimal,
 ) -> SpreadAnalysis:
-    binance_by_time = {bar.open_time_ms: bar for bar in binance_bars}
+    interval_ms = INTERVAL_MS.get(interval)
+    if interval_ms is None:
+        raise ValueError("不支持的K线周期")
+    binance_by_time = {_bucket_time(bar.open_time_ms, interval_ms): bar for bar in binance_bars}
     points: list[SpreadAnalysisPoint] = []
     for mt4_bar in mt4_bars:
-        binance_bar = binance_by_time.get(mt4_bar.open_time_ms)
+        aligned_time = _bucket_time(mt4_bar.open_time_ms, interval_ms)
+        binance_bar = binance_by_time.get(aligned_time)
         if not binance_bar:
             continue
         diff = binance_bar.close - mt4_bar.close
         points.append(
             SpreadAnalysisPoint(
-                timestamp_ms=mt4_bar.open_time_ms,
+                timestamp_ms=aligned_time,
                 mt4_close=mt4_bar.close,
                 binance_close=binance_bar.close,
                 diff=diff,
@@ -147,3 +151,7 @@ def _parse_binance_bar(row: list[Any]) -> HistoryBar:
         close=Decimal(str(row[4])),
         volume=Decimal(str(row[5])),
     )
+
+
+def _bucket_time(timestamp_ms: int, interval_ms: int) -> int:
+    return timestamp_ms - (timestamp_ms % interval_ms)

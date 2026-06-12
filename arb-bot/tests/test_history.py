@@ -24,8 +24,8 @@ def test_storage_upserts_and_reads_history_bars(tmp_path):
 
 
 def test_spread_analysis_detects_return_to_threshold():
-    mt4 = [bar(1000, "4170"), bar(2000, "4171"), bar(3000, "4172")]
-    binance = [bar(1000, "4173"), bar(2000, "4171.40"), bar(3000, "4175")]
+    mt4 = [bar(60_038, "4170"), bar(120_038, "4171"), bar(180_038, "4172")]
+    binance = [bar(60_000, "4173"), bar(120_000, "4171.40"), bar(180_000, "4175")]
 
     result = compare_spreads(mt4, binance, days=7, interval="1m", threshold=Decimal("0.50"))
 
@@ -33,14 +33,14 @@ def test_spread_analysis_detects_return_to_threshold():
     assert result.returned_to_threshold
     assert result.return_count == 1
     assert result.min_abs_diff == Decimal("0.40")
-    assert result.min_abs_diff_time_ms == 2000
+    assert result.min_abs_diff_time_ms == 120_000
     assert result.latest_diff == Decimal("3")
 
 
 def test_spread_analysis_reports_unaligned_bars():
     result = compare_spreads(
-        [bar(1000, "4170")],
-        [bar(2000, "4173")],
+        [bar(60_038, "4170")],
+        [bar(120_000, "4173")],
         days=7,
         interval="1m",
         threshold=Decimal("0.50"),

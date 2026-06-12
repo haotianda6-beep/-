@@ -126,7 +126,7 @@ bool UploadHistoryChunk()
    int chunkBars = HistoryChunkBars;
    if (chunkBars < 1) chunkBars = 1;
    int digits = (int)MarketInfo(TradeSymbol, MODE_DIGITS);
-   int serverOffsetSec = (int)(TimeCurrent() - TimeGMT());
+   int serverOffsetSec = (int)MathRound((TimeCurrent() - TimeGMT()) / 60.0) * 60;
    string bars = "[";
 
    while (historyNextShift >= 1 && sent < chunkBars)
