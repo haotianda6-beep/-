@@ -98,6 +98,9 @@ class StrategyEngine:
         binance_quote = self.binance.latest_quote()
         mt4_quote = self.mt4.latest_quote()
         if self.state == StrategyState.IDLE:
+            if binance_quote is None or mt4_quote is None:
+                self.last_error = None
+                return
             if not self._quotes_fresh(binance_quote, mt4_quote):
                 return
             await self._maybe_enter(binance_quote, mt4_quote)

@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from decimal import Decimal
+from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi.responses import HTMLResponse
 
 from app.binance_client import BinanceFuturesClient, PaperBinanceClient
 from app.config import Settings, load_settings
@@ -28,6 +30,7 @@ strategy = StrategyEngine(settings, binance_client, mt4_bridge, risk, storage)
 
 app = FastAPI(title="MT4 XAUUSD / Binance Gold Arb Executor", version="0.1.0")
 _loop_task: asyncio.Task | None = None
+WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 
 
 @app.on_event("startup")
@@ -56,6 +59,11 @@ async def health() -> dict:
         "paper_mode": settings.paper_mode,
         "live_trading": settings.live_trading,
     }
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index() -> HTMLResponse:
+    return HTMLResponse((WEB_DIR / "index.html").read_text(encoding="utf-8"))
 
 
 @app.get("/status", response_model=EngineStatus)
@@ -129,4 +137,3 @@ async def _strategy_loop() -> None:
             strategy.last_error = str(exc)[:240]
             logger.exception("strategy loop error")
         await asyncio.sleep(settings.loop_interval_ms / 1000)
-

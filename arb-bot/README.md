@@ -43,6 +43,36 @@ pip install -r requirements-dev.txt
 uvicorn app.main:app --host 127.0.0.1 --port 8011
 ```
 
+## 前端页面
+
+服务器已上线到：
+
+```text
+https://redzhong.top/xau-arb/
+```
+
+该入口继承 `redzhong.top` 的 Basic Auth 保护。执行器只监听本机：
+
+```text
+127.0.0.1:8011
+```
+
+页面包含：
+
+- 状态机、dry-run/live 模式、Binance/MT4 连接状态
+- Binance/MT4 最新 bid/ask
+- 当前持仓摘要
+- dry-run 行情推送
+- MT4 命令拉取与模拟回报
+
+Linux systemd 模板：
+
+```bash
+sudo cp deploy/xau-arb-bot.service /etc/systemd/system/xau-arb-bot.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now xau-arb-bot
+```
+
 ## MT4 EA 安装
 
 1. 把 `mt4/ArbBridgeEA.mq4` 放到 MT4 数据目录：
@@ -162,4 +192,3 @@ pytest
 - 不硬编码 API key/secret/账号/密码
 - 日志不打印密钥、完整签名或账户敏感信息
 - MT4 对冲失败时，Binance emergency close 允许 taker，因为优先风控
-
