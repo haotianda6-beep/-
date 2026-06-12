@@ -1,4 +1,4 @@
-from app.config import update_local_config_file
+from app.config import update_local_config_file, update_mode_file
 
 
 def test_update_local_config_file_only_writes_safe_parameters(tmp_path):
@@ -22,3 +22,15 @@ def test_update_local_config_file_only_writes_safe_parameters(tmp_path):
     assert "OPEN_MIN_EDGE=2.10" in content
     assert "MT4_BRIDGE_TOKEN" not in content
     assert "should-not-be-written" not in content
+
+
+def test_update_mode_file_only_writes_mode_flags(tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text("BINANCE_API_KEY=secret-key\nLIVE_TRADING=false\nPAPER_MODE=true\n", encoding="utf-8")
+
+    update_mode_file(live_trading=True, paper_mode=False, path=env_path)
+
+    content = env_path.read_text(encoding="utf-8")
+    assert "BINANCE_API_KEY=secret-key" in content
+    assert "LIVE_TRADING=true" in content
+    assert "PAPER_MODE=false" in content

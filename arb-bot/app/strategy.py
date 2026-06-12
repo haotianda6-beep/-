@@ -132,9 +132,22 @@ class StrategyEngine:
             self.state = StrategyState.IDLE
             self.last_error = None
 
+    def clear_runtime_state(self) -> None:
+        self._reset_all()
+        self.last_error = None
+
     async def _maybe_enter(self, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> None:
         if not binance_quote or not mt4_quote:
             return
+        if not self.settings.is_dry_run:
+            live_check = self.risk.live_ready(
+                binance_ready=binance_quote is not None,
+                mt4_connected=self.mt4.connected(),
+                maker_fee_loaded=self.binance.maker_fee_rate is not None,
+            )
+            if not live_check.ok:
+                self.last_error = live_check.reason
+                return
         plan = build_entry_plan(self.settings, self.binance.filters, binance_quote, mt4_quote)
         if not plan:
             return

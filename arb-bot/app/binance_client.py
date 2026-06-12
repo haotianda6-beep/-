@@ -100,6 +100,10 @@ class PaperBinanceClient(BinanceBaseClient):
     def latest_funding(self) -> BinanceFundingInfo | None:
         return self._funding
 
+    def clear_orders(self) -> None:
+        self._orders.clear()
+        self._created_ms.clear()
+
     async def place_post_only_order(self, request: OrderRequest) -> OrderUpdate:
         if request.price is None:
             raise BinanceError("post only order requires price")

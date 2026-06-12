@@ -101,6 +101,15 @@ LIVE_TRADING=false
 PAPER_MODE=true
 ```
 
+网页顶栏提供“清理模拟”“启动实盘”“停止实盘”按钮。启动实盘会先检查 Binance 密钥、MT4 连接、报价新鲜度和挂单手续费率，通过后写入：
+
+```env
+LIVE_TRADING=true
+PAPER_MODE=false
+```
+
+随后服务会自动重启并使用真实 Binance 客户端。当前有实盘订单或持仓时，不允许直接切回模拟模式。
+
 启动后检查：
 
 ```bash

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from decimal import Decimal
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 
 from app.binance_client import BinanceFuturesClient, PaperBinanceClient
-from app.config import Settings, existing_env_paths, load_settings, update_local_config_file
+from app.config import Settings, existing_env_paths, load_settings, update_local_config_file, update_mode_file
 from app.logger import setup_logging
 from app.history import build_spread_analysis
 from app.models import (
@@ -172,6 +173,36 @@ async def resume() -> dict:
     return {"status": "ok", "state": strategy.state}
 
 
+@app.post("/control/paper/clear")
+async def clear_paper_state() -> dict:
+    if not settings.is_dry_run:
+        raise HTTPException(status_code=400, detail="实盘模式不允许清理运行持仓状态")
+    if isinstance(binance_client, PaperBinanceClient):
+        binance_client.clear_orders()
+    strategy.clear_runtime_state()
+    return {"status": "ok", "state": strategy.state}
+
+
+@app.post("/control/live/start")
+async def start_live_mode() -> dict:
+    _assert_live_preflight()
+    if isinstance(binance_client, PaperBinanceClient):
+        binance_client.clear_orders()
+    strategy.clear_runtime_state()
+    update_mode_file(live_trading=True, paper_mode=False)
+    asyncio.create_task(_restart_after_response())
+    return {"status": "restarting", "mode": "live", "message": "实盘模式已写入，服务正在重启"}
+
+
+@app.post("/control/live/stop")
+async def stop_live_mode() -> dict:
+    if not settings.is_dry_run and (strategy.open_pair is not None or strategy.active_order is not None):
+        raise HTTPException(status_code=400, detail="当前有实盘订单或持仓，不能直接切回模拟")
+    update_mode_file(live_trading=False, paper_mode=True)
+    asyncio.create_task(_restart_after_response())
+    return {"status": "restarting", "mode": "paper", "message": "已切回模拟模式，服务正在重启"}
+
+
 @app.get("/analysis/spread", response_model=SpreadAnalysis)
 async def spread_analysis(
     days: int = Query(default=7, ge=1, le=30),
@@ -179,6 +210,26 @@ async def spread_analysis(
     threshold: Decimal = Query(default=Decimal("0.50"), gt=0),
 ) -> SpreadAnalysis:
     return await build_spread_analysis(settings, storage, days, interval, threshold)
+
+
+def _assert_live_preflight() -> None:
+    if not settings.binance_api_key or not settings.binance_api_secret:
+        raise HTTPException(status_code=400, detail="币安密钥未配置")
+    if not mt4_bridge.connected():
+        raise HTTPException(status_code=400, detail="MT4 未连接")
+    if not binance_client.latest_quote():
+        raise HTTPException(status_code=400, detail="币安报价未连接")
+    if binance_client.maker_fee_rate is None:
+        raise HTTPException(status_code=400, detail="币安挂单手续费率未读取")
+    for quote in (binance_client.latest_quote(), mt4_bridge.latest_quote()):
+        check = risk.quote_fresh(quote)
+        if not check.ok:
+            raise HTTPException(status_code=400, detail=f"报价异常：{check.reason}")
+
+
+async def _restart_after_response() -> None:
+    await asyncio.sleep(0.4)
+    os._exit(0)
 
 
 async def _strategy_loop() -> None:

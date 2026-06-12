@@ -31,6 +31,7 @@ CONFIG_FIELD_TO_ENV = {
     "paper_fill_delay_ms": "PAPER_FILL_DELAY_MS",
 }
 SAFE_CONFIG_ENV_KEYS = set(CONFIG_FIELD_TO_ENV.values())
+MODE_ENV_KEYS = {"LIVE_TRADING", "PAPER_MODE"}
 
 
 class Settings(BaseSettings):
@@ -146,4 +147,25 @@ def update_local_config_file(values: Mapping[str, object], path: Path = LOCAL_EN
         if env_key in updates and env_key not in written:
             next_lines.append(f"{env_key}={updates[env_key]}")
 
+    path.write_text("\n".join(next_lines).rstrip() + "\n", encoding="utf-8")
+
+
+def update_mode_file(live_trading: bool, paper_mode: bool, path: Path = LOCAL_ENV_PATH) -> None:
+    updates = {
+        "LIVE_TRADING": env_value(live_trading),
+        "PAPER_MODE": env_value(paper_mode),
+    }
+    existing_lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    written: set[str] = set()
+    next_lines: list[str] = []
+    for line in existing_lines:
+        key = line.split("=", 1)[0].strip() if "=" in line else ""
+        if key in MODE_ENV_KEYS:
+            next_lines.append(f"{key}={updates[key]}")
+            written.add(key)
+        else:
+            next_lines.append(line)
+    for key in ("LIVE_TRADING", "PAPER_MODE"):
+        if key not in written:
+            next_lines.append(f"{key}={updates[key]}")
     path.write_text("\n".join(next_lines).rstrip() + "\n", encoding="utf-8")

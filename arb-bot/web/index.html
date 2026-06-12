@@ -207,6 +207,10 @@
         background: #344256;
       }
 
+      button.danger {
+        background: #b42318;
+      }
+
       button:disabled {
         opacity: 0.55;
         cursor: not-allowed;
@@ -350,6 +354,9 @@
           <span class="status bad" id="backend">后端未连接</span>
           <span class="status bad" id="mt4">MT4 未连接</span>
           <button class="secondary" id="refreshBtn">刷新</button>
+          <button class="secondary" id="clearPaperBtn">清理模拟</button>
+          <button class="danger" id="startLiveBtn">启动实盘</button>
+          <button class="secondary" id="stopLiveBtn">停止实盘</button>
         </div>
       </header>
 
@@ -552,14 +559,6 @@
                   <th>循环间隔</th>
                   <td><div class="input-row"><input id="cfgLoopInterval" inputmode="numeric" /><small>毫秒</small></div></td>
                 </tr>
-                <tr>
-                  <th>模拟自动成交</th>
-                  <td><label class="check-row"><input id="cfgPaperAutoFill" type="checkbox" /><span>开启</span></label></td>
-                </tr>
-                <tr>
-                  <th>模拟成交延迟</th>
-                  <td><div class="input-row"><input id="cfgPaperFillDelay" inputmode="numeric" /><small>毫秒</small></div></td>
-                </tr>
               </tbody>
             </table>
             <div class="actions">
@@ -592,8 +591,6 @@
         ["cfgDailyLossLimit", "daily_loss_limit_usdt", "number"],
         ["cfgMt4Slippage", "mt4_slippage_points", "number"],
         ["cfgLoopInterval", "loop_interval_ms", "number"],
-        ["cfgPaperAutoFill", "paper_auto_fill", "boolean"],
-        ["cfgPaperFillDelay", "paper_fill_delay_ms", "number"],
       ];
 
       function api(path, options = {}) {
@@ -689,6 +686,9 @@
         const modeText = data.paper_mode || !data.live_trading ? "模拟模式" : "实盘模式";
         setStatus($("mode"), modeText, modeText === "实盘模式" ? "bad" : "warn");
         setStatus($("mt4"), data.mt4_connected ? "MT4 已连接" : "MT4 未连接", data.mt4_connected ? "ok" : "bad");
+        $("startLiveBtn").disabled = modeText === "实盘模式";
+        $("stopLiveBtn").disabled = modeText !== "实盘模式";
+        $("clearPaperBtn").disabled = modeText === "实盘模式";
         $("subtitle").textContent = `交易品种：币安 ${data.binance_symbol} / MT4 ${data.mt4_symbol}`;
         $("state").textContent = translateState(data.state);
         $("lastError").textContent = data.last_error ? translateError(data.last_error) : "无异常";
@@ -831,6 +831,32 @@
         appendLog("已放弃未保存的参数修改");
       }
 
+      async function clearPaperState() {
+        await api("control/paper/clear", { method: "POST" });
+        appendLog("模拟订单和模拟持仓已清理");
+        await loadStatus();
+      }
+
+      async function startLiveMode() {
+        const ok = window.confirm("确认启动实盘？启动后系统会使用真实 Binance API 挂单，成交后 MT4 会真实跟随。");
+        if (!ok) return;
+        $("startLiveBtn").disabled = true;
+        const result = await api("control/live/start", { method: "POST" });
+        appendLog(result.message || "实盘模式正在启动");
+        setStatus($("backend"), "服务重启中", "warn");
+        setTimeout(loadStatus, 2500);
+      }
+
+      async function stopLiveMode() {
+        const ok = window.confirm("确认停止实盘并切回模拟模式？");
+        if (!ok) return;
+        $("stopLiveBtn").disabled = true;
+        const result = await api("control/live/stop", { method: "POST" });
+        appendLog(result.message || "正在切回模拟模式");
+        setStatus($("backend"), "服务重启中", "warn");
+        setTimeout(loadStatus, 2500);
+      }
+
       function translateState(value) {
         const map = {
           IDLE: "等待机会",
@@ -878,60 +904,17 @@
           ["Not Found", "接口不存在"],
           ["Forbidden", "没有访问权限"],
           ["MT4 quote missing", "MT4 报价缺失"],
+          ["Binance API key/secret missing", "币安密钥未配置"],
+          ["daily loss limit reached", "已达到每日亏损上限"],
+          ["maker fee missing", "币安挂单手续费率未读取"],
         ];
         return replacements.reduce((current, [source, target]) => current.replaceAll(source, target), text);
       }
 
-      async function sendPaperQuotes() {
-        await api(`paper/binance/book?bid=${encodeURIComponent($("paperBid").value)}&ask=${encodeURIComponent($("paperAsk").value)}`, { method: "POST" });
-        await api("mt4/tick", {
-          method: "POST",
-          body: JSON.stringify({
-            symbol: "XAUUSD",
-            bid: $("mt4Bid").value,
-            ask: $("mt4Ask").value,
-            positions: [],
-          }),
-        });
-        appendLog("模拟行情已推送");
-        await loadStatus();
-      }
-
-      async function pollCommand() {
-        const command = await api("mt4/command");
-        lastCommand = command.command === "NONE" ? null : command;
-        $("cmdAction").textContent = lastCommand ? translateAction(lastCommand.action) : "-";
-        $("cmdLots").textContent = lastCommand?.lots || "-";
-        $("cmdLimit").textContent = lastCommand ? (lastCommand.max_price || lastCommand.min_price || "-") : "-";
-        appendLog(lastCommand ? `收到 MT4 命令：${translateAction(lastCommand.action)}，手数 ${lastCommand.lots}` : "暂无 MT4 命令");
-      }
-
-      async function reportOk() {
-        if (!lastCommand) {
-          appendLog("没有可回报的命令");
-          return;
-        }
-        const fill = lastCommand.action === "BUY" ? $("mt4Ask").value : $("mt4Bid").value;
-        await api("mt4/report", {
-          method: "POST",
-          body: JSON.stringify({
-            command_id: lastCommand.command_id,
-            status: "ok",
-            action: lastCommand.action,
-            ticket: Math.floor(Date.now() / 1000),
-            fill_price: fill,
-            lots: lastCommand.lots,
-          }),
-        });
-        appendLog(`已回报 ${translateAction(lastCommand.action)} 成功`);
-        lastCommand = null;
-        await loadStatus();
-      }
-
       $("refreshBtn").addEventListener("click", loadStatus);
-      if ($("sendPaperBtn")) $("sendPaperBtn").addEventListener("click", () => sendPaperQuotes().catch((error) => appendLog(translateError(error.message))));
-      if ($("pollCmdBtn")) $("pollCmdBtn").addEventListener("click", () => pollCommand().catch((error) => appendLog(translateError(error.message))));
-      if ($("reportOkBtn")) $("reportOkBtn").addEventListener("click", () => reportOk().catch((error) => appendLog(translateError(error.message))));
+      $("clearPaperBtn").addEventListener("click", () => clearPaperState().catch((error) => appendLog(translateError(error.message))));
+      $("startLiveBtn").addEventListener("click", () => startLiveMode().catch((error) => appendLog(translateError(error.message))));
+      $("stopLiveBtn").addEventListener("click", () => stopLiveMode().catch((error) => appendLog(translateError(error.message))));
       if ($("resumeBtn")) $("resumeBtn").addEventListener("click", () => api("control/resume", { method: "POST" }).then(loadStatus).catch((error) => appendLog(translateError(error.message))));
       $("saveConfigBtn").addEventListener("click", () => saveConfig().catch((error) => appendLog(translateError(error.message))));
       $("resetConfigBtn").addEventListener("click", resetConfigForm);

@@ -125,7 +125,7 @@ async def test_dry_run_does_not_send_real_mt4_order(tmp_path):
 
 
 async def make_engine(tmp_path):
-    cfg = settings(tmp_path, PAPER_MODE=False, LIVE_TRADING=True)
+    cfg = settings(tmp_path, PAPER_MODE=False, LIVE_TRADING=True, BINANCE_API_KEY="test-key", BINANCE_API_SECRET="test-secret")
     client = PaperBinanceClient(cfg)
     client.set_quote(Decimal("2001"), Decimal("2002"))
     mt4 = Mt4Bridge(cfg)
