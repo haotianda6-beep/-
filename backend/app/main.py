@@ -42,9 +42,15 @@ async def realtime_socket(websocket: WebSocket) -> None:
         while True:
             try:
                 payload = await asyncio.to_thread(lambda: engine.snapshot().model_dump_json())
-                await websocket.send_text(payload)
             except Exception as exc:  # noqa: BLE001 - keep realtime connection alive through transient exchange issues.
                 logger.warning("realtime snapshot failed: %s", str(exc)[:200])
+                await asyncio.sleep(1.0)
+                continue
+            try:
+                await websocket.send_text(payload)
+            except RuntimeError as exc:
+                logger.info("realtime socket closed: %s", str(exc)[:160])
+                return
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         return
