@@ -55,6 +55,26 @@ def test_cash_carry_auto_sells_orphan_spot_after_external_perp_close(tmp_path) -
     assert saved["history"]["actual_net_profit"] == "-1"
 
 
+def test_cash_carry_auto_sells_state_only_spot_row(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(
+        '{"positions":[{"id":"pos-1","exchange":"BITGET","symbol":"ABCUSDT","base_asset":"ABC","quantity":"10","spot_entry_price":"2","perp_entry_price":"2.1","spot_order_id":"spot-open","perp_order_id":"perp-open","opened_at":"2026-06-09T00:00:00+00:00","status":"open"}]}',
+        encoding="utf-8",
+    )
+    executor = _OrphanCloseExecutor(state)
+    settings = BotSettings(manual_confirm_required=True, cash_carry_auto_close_enabled=True)
+    live = type("Row", (), {"exchange": "BITGET", "symbol": "ABCUSDT", "status": "spot_only"})()
+
+    result = executor.evaluate_close([], settings, [live])
+    saved = json.loads(state.read_text(encoding="utf-8"))["positions"][0]
+
+    assert result is not None
+    assert result.status == "close_submitted"
+    assert executor.spot.orders[0]["side"] == "sell"
+    assert saved["status"] == "closed"
+    assert "自动卖出现货孤腿" in saved["close_reason"]
+
+
 class _OrphanCloseExecutor(CashCarryExecutor):
     def __init__(self, state_path):
         super().__init__(state_path)

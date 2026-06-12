@@ -78,6 +78,8 @@ class CashCarryExecutor:
                 if record.status in {"open", "mismatch"}:
                     return self._handle_missing_live_perp(record, settings)
                 continue
+            if live.status == "spot_only" and record.status in {"open", "mismatch"}:
+                return self._handle_missing_live_perp(record, settings)
             if record.status == "mismatch" and live.status == "matched":
                 self.state.mark_status(record.id, "open")
             decision = cash_carry_close_decision(live.current_net_profit, live.basis_pct, live.estimated_funding_rate_pct, settings, has_live_net=True)

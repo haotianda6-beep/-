@@ -157,7 +157,7 @@ def _close_time(trades: list[dict[str, Any]], fallback: datetime) -> datetime:
 
 def _forced_close(trades: list[dict[str, Any]]) -> bool:
     text = " ".join(str(trade.get("info") or "").lower() for trade in trades)
-    return "burst" in text or "liquid" in text or "force" in text
+    return "burst" in text or "liquid" in text or "force" in text or "liq-" in text
 
 
 def _spot_group(trades: list[dict[str, Any]]) -> dict[str, Decimal]:
