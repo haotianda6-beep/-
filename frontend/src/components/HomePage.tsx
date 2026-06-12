@@ -1,4 +1,4 @@
-import { Landmark, LayoutDashboard } from "lucide-react";
+import { ArrowUpRight, Landmark, LayoutDashboard } from "lucide-react";
 import { money, valueTone } from "../lib/format";
 import type { RealtimeSnapshot } from "../types/api";
 
@@ -40,6 +40,19 @@ export function HomePage({ snapshot, onOpen }: Props) {
           <span>候选 <strong>{snapshot.mt4_spread_candidates.length}</strong></span>
         </div>
         <div className={`module-profit ${valueTone(mt4Profit)}`}>预估盈利 {money(mt4Profit, 4)} USDT</div>
+      </button>
+
+      <button className="module-card" onClick={() => window.location.assign("/xau-arb/")}>
+        <div className="module-head">
+          <ArrowUpRight size={18} />
+          <span>独立执行器</span>
+        </div>
+        <h2>MT4 / Binance 黄金套利</h2>
+        <div className="module-metrics">
+          <span>品种 <strong>XAUUSD</strong></span>
+          <span>入口 <strong>/xau-arb/</strong></span>
+        </div>
+        <div className="module-profit neutral">打开黄金价差执行页面</div>
       </button>
     </section>
   );
