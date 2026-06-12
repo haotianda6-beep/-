@@ -43,7 +43,10 @@ def build_entry_plan(
     qty = max(round_down(settings.target_oz, filters.qty_step), filters.min_qty)
     edge_high = binance.ask - mt4.ask
     if edge_high >= settings.open_min_edge:
-        price = round_up(max(binance.ask, mt4.ask + settings.open_min_edge), filters.tick_size)
+        price = round_up(
+            max(binance.ask + settings.binance_entry_offset_usd, mt4.ask + settings.open_min_edge),
+            filters.tick_size,
+        )
         return EntryPlan(
             direction=PairDirection.BINANCE_SHORT_MT4_LONG,
             binance_side=Side.SELL,
@@ -55,7 +58,10 @@ def build_entry_plan(
         )
     edge_low = mt4.bid - binance.bid
     if edge_low >= settings.open_min_edge:
-        price = round_down(min(binance.bid, mt4.bid - settings.open_min_edge), filters.tick_size)
+        price = round_down(
+            min(binance.bid - settings.binance_entry_offset_usd, mt4.bid - settings.open_min_edge),
+            filters.tick_size,
+        )
         return EntryPlan(
             direction=PairDirection.BINANCE_LONG_MT4_SHORT,
             binance_side=Side.BUY,

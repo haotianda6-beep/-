@@ -14,6 +14,7 @@ LOCAL_ENV_PATH = APP_DIR / ".env"
 PROJECT_ENV_PATH = PROJECT_DIR / ".env"
 CONFIG_FIELD_TO_ENV = {
     "binance_leverage": "BINANCE_LEVERAGE",
+    "binance_entry_offset_usd": "BINANCE_ENTRY_OFFSET_USD",
     "open_min_edge": "OPEN_MIN_EDGE",
     "close_max_spread": "CLOSE_MAX_SPREAD",
     "min_locked_edge": "MIN_LOCKED_EDGE",
@@ -57,6 +58,7 @@ class Settings(BaseSettings):
     binance_qty_step: Decimal = Field(default=Decimal("0.001"), alias="BINANCE_QTY_STEP")
     binance_min_qty: Decimal = Field(default=Decimal("0.001"), alias="BINANCE_MIN_QTY")
     binance_leverage: int = Field(default=20, alias="BINANCE_LEVERAGE")
+    binance_entry_offset_usd: Decimal = Field(default=Decimal("3"), alias="BINANCE_ENTRY_OFFSET_USD")
 
     mt4_bridge_token: SecretStr | None = Field(default=None, alias="MT4_BRIDGE_TOKEN")
     open_min_edge: Decimal = Field(default=Decimal("1.50"), alias="OPEN_MIN_EDGE")
@@ -83,6 +85,7 @@ class Settings(BaseSettings):
         "daily_loss_limit_usdt",
         "target_oz",
         "mt4_lot_size_oz",
+        "binance_entry_offset_usd",
         "binance_tick_size",
         "binance_qty_step",
     )

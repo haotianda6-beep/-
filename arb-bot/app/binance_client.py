@@ -176,6 +176,12 @@ class PaperBinanceClient(BinanceBaseClient):
         order = self._orders.get(order_id)
         if not order or order.status != OrderStatus.NEW:
             return
+        quote = self.latest_quote()
+        if not quote:
+            return
+        touched = quote.ask <= order.price if order.side == Side.BUY else quote.bid >= order.price
+        if not touched:
+            return
         age = utc_now_ms() - self._created_ms.get(order_id, utc_now_ms())
         if age < self.settings.paper_fill_delay_ms:
             return

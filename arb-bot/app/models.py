@@ -250,6 +250,7 @@ class RuntimeConfig(BaseModel):
     config_files: list[str]
     mt4_script_path: str
     binance_leverage: int
+    binance_entry_offset_usd: Decimal
     open_min_edge: Decimal
     close_max_spread: Decimal
     min_locked_edge: Decimal
@@ -268,6 +269,7 @@ class RuntimeConfig(BaseModel):
 
 class RuntimeConfigUpdate(BaseModel):
     binance_leverage: int | None = None
+    binance_entry_offset_usd: Decimal | None = None
     open_min_edge: Decimal | None = None
     close_max_spread: Decimal | None = None
     min_locked_edge: Decimal | None = None
@@ -291,6 +293,7 @@ class RuntimeConfigUpdate(BaseModel):
         "daily_loss_limit_usdt",
         "target_oz",
         "mt4_lot_size_oz",
+        "binance_entry_offset_usd",
     )
     @classmethod
     def positive_decimal(cls, value: Decimal | None) -> Decimal | None:

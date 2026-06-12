@@ -197,6 +197,7 @@ def _runtime_config() -> RuntimeConfig:
         config_files=[str(path) for path in existing_env_paths()],
         mt4_script_path=str((MT4_DIR / "ArbBridgeEA.mq4").resolve()),
         binance_leverage=settings.binance_leverage,
+        binance_entry_offset_usd=settings.binance_entry_offset_usd,
         open_min_edge=settings.open_min_edge,
         close_max_spread=settings.close_max_spread,
         min_locked_edge=settings.min_locked_edge,
@@ -373,7 +374,7 @@ def _execution_plan() -> ExecutionPlanStatus:
         high_edge = binance_quote.ask - mt4_quote.ask
         low_edge = mt4_quote.bid - binance_quote.bid
         return ExecutionPlanStatus(
-            summary=f"等待开仓：币安高价差 {high_edge:.4f} 美元，币安低价差 {low_edge:.4f} 美元；任一方向达到 {settings.open_min_edge} 美元才挂单。",
+            summary=f"等待开仓：币安高价差 {high_edge:.4f} 美元，币安低价差 {low_edge:.4f} 美元；任一方向达到 {settings.open_min_edge} 美元才挂单，挂单距离当前价 {settings.binance_entry_offset_usd} 美元。",
             max_follow_seconds=max_follow_seconds,
         )
     return ExecutionPlanStatus(summary="等待 Binance 和 MT4 报价齐全。", max_follow_seconds=max_follow_seconds)

@@ -501,6 +501,10 @@
                   <td><div class="input-row"><input id="cfgTargetOz" inputmode="decimal" /><small>XAU</small></div></td>
                 </tr>
                 <tr>
+                  <th>币安挂单偏移</th>
+                  <td><div class="input-row"><input id="cfgBinanceEntryOffset" inputmode="decimal" /><small>美元</small></div></td>
+                </tr>
+                <tr>
                   <th>MT4 对冲数量</th>
                   <td id="mt4HedgeQty">自动等于币安数量</td>
                 </tr>
@@ -576,6 +580,7 @@
       const configFields = [
         ["cfgBinanceLeverage", "binance_leverage", "number"],
         ["cfgTargetOz", "target_oz", "number"],
+        ["cfgBinanceEntryOffset", "binance_entry_offset_usd", "number"],
         ["cfgOpenMinEdge", "open_min_edge", "number"],
         ["cfgCloseMaxSpread", "close_max_spread", "number"],
         ["cfgMinLockedEdge", "min_locked_edge", "number"],

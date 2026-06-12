@@ -28,8 +28,13 @@ def filters() -> ExchangeFilters:
     return ExchangeFilters(tick_size=Decimal("0.1"), qty_step=Decimal("0.001"), min_qty=Decimal("0.001"))
 
 
-def test_binance_high_entry_formula(tmp_path):
-    cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("1.50"), MIN_LOCKED_EDGE=Decimal("0.80"))
+def test_binance_high_entry_formula_uses_maker_offset(tmp_path):
+    cfg = settings(
+        tmp_path,
+        OPEN_MIN_EDGE=Decimal("1.50"),
+        MIN_LOCKED_EDGE=Decimal("0.80"),
+        BINANCE_ENTRY_OFFSET_USD=Decimal("3"),
+    )
     plan = build_entry_plan(
         cfg,
         filters(),
@@ -39,13 +44,18 @@ def test_binance_high_entry_formula(tmp_path):
     assert plan is not None
     assert plan.direction == PairDirection.BINANCE_SHORT_MT4_LONG
     assert plan.binance_side == Side.SELL
-    assert plan.limit_price == Decimal("2002.0")
+    assert plan.limit_price == Decimal("2005.0")
     assert plan.mt4_hedge_side == Side.BUY
-    assert plan.mt4_price_limit == Decimal("2001.2")
+    assert plan.mt4_price_limit == Decimal("2004.2")
 
 
-def test_binance_low_entry_formula(tmp_path):
-    cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("1.50"), MIN_LOCKED_EDGE=Decimal("0.80"))
+def test_binance_low_entry_formula_uses_maker_offset(tmp_path):
+    cfg = settings(
+        tmp_path,
+        OPEN_MIN_EDGE=Decimal("1.50"),
+        MIN_LOCKED_EDGE=Decimal("0.80"),
+        BINANCE_ENTRY_OFFSET_USD=Decimal("3"),
+    )
     plan = build_entry_plan(
         cfg,
         filters(),
@@ -55,9 +65,9 @@ def test_binance_low_entry_formula(tmp_path):
     assert plan is not None
     assert plan.direction == PairDirection.BINANCE_LONG_MT4_SHORT
     assert plan.binance_side == Side.BUY
-    assert plan.limit_price == Decimal("1998.0")
+    assert plan.limit_price == Decimal("1995.0")
     assert plan.mt4_hedge_side == Side.SELL
-    assert plan.mt4_price_limit == Decimal("1998.8")
+    assert plan.mt4_price_limit == Decimal("1995.8")
 
 
 @pytest.mark.asyncio
