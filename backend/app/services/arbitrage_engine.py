@@ -119,10 +119,6 @@ class ArbitrageEngine:
             cached = list(self._cash_positions_cache)
             stale = time.monotonic() - self._cash_positions_cache_at > 5
             if stale and not self._cash_positions_refreshing:
-                if not cached:
-                    self._cash_positions_cache = self.cash_carry_positions.build(positions, cash_prices, settings)
-                    self._cash_positions_cache_at = time.monotonic()
-                    return list(self._cash_positions_cache)
                 self._cash_positions_refreshing = True
                 threading.Thread(
                     target=self._refresh_cash_positions,

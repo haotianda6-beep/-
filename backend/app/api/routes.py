@@ -2,13 +2,14 @@ import os
 import threading
 import time
 from datetime import datetime, timezone
+import logging
 
 from fastapi import APIRouter, Header, HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from app.core.credentials import CredentialStore
 from app.core.env import ai_status, credential_statuses
-from app.core.models import BotSettings, DeepSeekCredentialInput, ExchangeCredentialInput, ExchangeName, Mt4CredentialInput, RealtimeSnapshot
+from app.core.models import AIInsight, BotSettings, DataSource, DeepSeekCredentialInput, ExchangeCredentialInput, ExchangeName, Mt4CredentialInput, RealtimeSnapshot, RiskEvent
 from app.services.exchange_factory import build_ccxt_exchange, sanitize_exchange_error
 from app.services.live_market_types import SPOT_EXCHANGE_IDS, SWAP_EXCHANGE_IDS
 from app.services.mt4_bridge import Mt4QuoteIn, mt4_token_ok
@@ -23,6 +24,8 @@ _snapshot_lock = threading.Lock()
 _snapshot_cache: RealtimeSnapshot | None = None
 _snapshot_cache_at = 0.0
 _snapshot_json_cache = ""
+_snapshot_refreshing = False
+logger = logging.getLogger(__name__)
 
 
 @router.get("/snapshot", response_model=RealtimeSnapshot)
@@ -177,34 +180,83 @@ def snapshot_cached() -> RealtimeSnapshot:
     now = time.monotonic()
     if _snapshot_cache and now - _snapshot_cache_at <= _SNAPSHOT_TTL_SECONDS:
         return _snapshot_cache
-    acquired = _snapshot_lock.acquire(blocking=False)
-    if not acquired:
-        if _snapshot_cache:
-            return _snapshot_cache
-        with _snapshot_lock:
-            if _snapshot_cache:
-                return _snapshot_cache
-            snapshot = engine.snapshot()
-            _snapshot_cache = snapshot
-            _snapshot_cache_at = time.monotonic()
-            _snapshot_json_cache = snapshot.model_dump_json()
-            return snapshot
-    try:
-        now = time.monotonic()
-        if _snapshot_cache and now - _snapshot_cache_at <= _SNAPSHOT_TTL_SECONDS:
-            return _snapshot_cache
-        snapshot = engine.snapshot()
-        _snapshot_cache = snapshot
-        _snapshot_cache_at = time.monotonic()
-        _snapshot_json_cache = snapshot.model_dump_json()
-        return snapshot
-    finally:
-        _snapshot_lock.release()
+    _start_snapshot_refresh()
+    if _snapshot_cache:
+        return _snapshot_cache
+    snapshot = _loading_snapshot()
+    _store_snapshot(snapshot)
+    return snapshot
 
 
 def snapshot_json_cached() -> str:
     snapshot_cached()
     return _snapshot_json_cache
+
+
+def _start_snapshot_refresh() -> None:
+    global _snapshot_refreshing
+    if _snapshot_refreshing:
+        return
+    _snapshot_refreshing = True
+    threading.Thread(target=_refresh_snapshot, daemon=True, name="snapshot-refresh").start()
+
+
+def _refresh_snapshot() -> None:
+    global _snapshot_refreshing
+    if not _snapshot_lock.acquire(blocking=False):
+        _snapshot_refreshing = False
+        return
+    try:
+        _store_snapshot(engine.snapshot())
+    except Exception as exc:  # noqa: BLE001 - keep frontend responsive if any exchange call hangs/fails.
+        logger.warning("snapshot refresh failed: %s", str(exc)[:220])
+    finally:
+        _snapshot_lock.release()
+        _snapshot_refreshing = False
+
+
+def _store_snapshot(snapshot: RealtimeSnapshot) -> None:
+    global _snapshot_cache, _snapshot_cache_at, _snapshot_json_cache
+    _snapshot_cache = snapshot
+    _snapshot_cache_at = time.monotonic()
+    _snapshot_json_cache = snapshot.model_dump_json()
+
+
+def _loading_snapshot() -> RealtimeSnapshot:
+    settings = engine.settings_store.load()
+    now = datetime.now(timezone.utc)
+    live_enabled = engine.live_read.live_data_enabled()
+    return RealtimeSnapshot(
+        balances=[],
+        positions=[],
+        cash_carry_opportunities=[],
+        cash_carry_candidates=[],
+        cash_carry_positions=[],
+        mt4_spread_opportunities=[],
+        mt4_spread_candidates=[],
+        trades=engine.get_trades(),
+        settings=settings,
+        risk_events=[
+            RiskEvent(
+                id="snapshot-loading",
+                severity="info",
+                title="后台数据加载中",
+                detail="交易所账户、机会扫描和持仓组合正在后台刷新，页面不会再等待全量扫描完成。",
+                action="等待下一次自动刷新；若持续超过 1 分钟，检查交易所接口和后台日志。",
+                created_at=now,
+            )
+        ],
+        credential_status=credential_statuses(),
+        ai_insight=AIInsight(
+            provider="",
+            model="",
+            status="disabled",
+            content="后台数据加载中，AI 风控等待真实快照刷新后更新。",
+            updated_at=now,
+            next_refresh_at=None,
+        ),
+        data_source=DataSource.LIVE if live_enabled else DataSource.MOCK,
+    )
 
 
 async def _runtime():
