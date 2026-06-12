@@ -110,7 +110,7 @@ class ArbitrageEngine:
         return self.trade_history.load()
 
     def _cash_positions_snapshot(self, positions: list[PositionSnapshot], cash_prices: list, settings: BotSettings) -> list[CashCarryPositionRow]:
-        if not positions:
+        if not positions and not self.cash_carry_positions.has_open_state_records():
             with self._cash_positions_lock:
                 self._cash_positions_cache = []
                 self._cash_positions_cache_at = time.monotonic()
@@ -119,6 +119,10 @@ class ArbitrageEngine:
             cached = list(self._cash_positions_cache)
             stale = time.monotonic() - self._cash_positions_cache_at > 5
             if stale and not self._cash_positions_refreshing:
+                if not cached:
+                    self._cash_positions_cache = self.cash_carry_positions.build(positions, cash_prices, settings)
+                    self._cash_positions_cache_at = time.monotonic()
+                    return list(self._cash_positions_cache)
                 self._cash_positions_refreshing = True
                 threading.Thread(
                     target=self._refresh_cash_positions,

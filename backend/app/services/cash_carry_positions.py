@@ -29,16 +29,29 @@ class CashCarryPositionBuilder:
         rows = []
         price_map = {(ExchangeName(item.exchange), item.symbol): item for item in prices}
         state_map = self._state_records()
+        seen: set[tuple[ExchangeName, str]] = set()
         for position in positions:
             if position.side != "short":
                 continue
             exchange = ExchangeName(position.exchange)
             price = price_map.get((exchange, position.symbol))
+            seen.add((exchange, position.symbol))
             try:
                 rows.append(self._row(exchange, position, price, state_map.get((exchange, position.symbol)), settings))
             except Exception:
                 continue
+        for key, state in state_map.items():
+            if key in seen:
+                continue
+            exchange, symbol = key
+            try:
+                rows.append(self._state_only_row(exchange, symbol, price_map.get(key), state, settings))
+            except Exception:
+                continue
         return rows
+
+    def has_open_state_records(self) -> bool:
+        return bool(self._state_records())
 
     def _row(
         self,
@@ -87,6 +100,55 @@ class CashCarryPositionBuilder:
             current_net_profit=q(net),
             quantity_gap=q(gap, "0.000001"),
             basis_pct=q(basis),
+            add_count=self._add_count(state),
+            add_notional_usdt=self._add_notional(state, settings),
+            next_add_trigger_basis_pct=self._next_add_trigger_basis(state, settings),
+            updated_at=datetime.now(timezone.utc),
+        )
+
+    def _state_only_row(
+        self,
+        exchange: ExchangeName,
+        symbol: str,
+        price: CashCarryOpportunity | None,
+        state: dict[str, Any],
+        settings: BotSettings,
+    ) -> CashCarryPositionRow:
+        base = symbol.removesuffix("USDT")
+        swap_symbol = f"{base}/USDT:USDT"
+        spot_quantity = self._cached_spot_quantity(exchange, base)
+        contract_size = self._cached_contract_size(exchange, swap_symbol)
+        spot_price, perp_mark = self._close_prices(exchange, symbol, base, price, decimal_from(state.get("perp_entry_price")))
+        spot_entry = self._entry_price(state, "spot_entry_price", spot_price)
+        perp_entry = decimal_from(state.get("perp_entry_price"))
+        spot_pnl = (spot_price - spot_entry) * spot_quantity
+        perp_base = Decimal("0")
+        funding_rate_pct = price.funding_rate_pct if price else Decimal("0")
+        open_fee, close_fee = self._fees(exchange, spot_quantity, spot_entry, spot_price, perp_base, perp_entry, perp_mark)
+        net = spot_pnl - open_fee - close_fee
+        return CashCarryPositionRow(
+            exchange=exchange,
+            symbol=symbol,
+            status=self._status(spot_quantity, perp_base),
+            spot_quantity=q(spot_quantity, "0.000001"),
+            spot_entry_price=q(spot_entry),
+            spot_price=q(spot_price),
+            spot_unrealized_pnl=q(spot_pnl),
+            perp_side="none",
+            perp_contracts=Decimal("0"),
+            perp_base_quantity=Decimal("0"),
+            contract_size=contract_size,
+            perp_entry_price=perp_entry,
+            perp_mark_price=q(perp_mark),
+            leverage=settings.default_leverage,
+            perp_unrealized_pnl=Decimal("0"),
+            estimated_funding_rate_pct=q(funding_rate_pct),
+            estimated_funding_income=Decimal("0"),
+            estimated_open_fee=q(open_fee),
+            estimated_close_fee=q(close_fee),
+            current_net_profit=q(net),
+            quantity_gap=q(spot_quantity, "0.000001"),
+            basis_pct=q(((perp_mark - spot_price) / spot_price * Decimal("100")) if spot_price > 0 and perp_mark > 0 else Decimal("0")),
             add_count=self._add_count(state),
             add_notional_usdt=self._add_notional(state, settings),
             next_add_trigger_basis_pct=self._next_add_trigger_basis(state, settings),

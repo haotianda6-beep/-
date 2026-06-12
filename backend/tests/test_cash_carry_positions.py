@@ -18,6 +18,23 @@ def test_cash_carry_position_uses_executable_close_bid_ask_for_basis() -> None:
     assert row.current_net_profit < 0
 
 
+def test_cash_carry_position_shows_state_only_spot_leg() -> None:
+    builder = _Builder(_TickerCache({
+        ("spot", "AIAUSDT"): {"bid": "99", "ask": "100"},
+        ("swap", "AIAUSDT"): {"bid": "99.1", "ask": "100"},
+    }))
+
+    row = builder.build([], [_opportunity()], BotSettings())[0]
+
+    assert row.exchange == ExchangeName.GATE
+    assert row.symbol == "AIAUSDT"
+    assert row.status == "spot_only"
+    assert row.perp_side == "none"
+    assert row.spot_quantity == Decimal("1.000000")
+    assert row.perp_base_quantity == Decimal("0")
+    assert row.quantity_gap == Decimal("1.000000")
+
+
 class _TickerCache:
     def __init__(self, tickers):
         self.tickers = tickers
