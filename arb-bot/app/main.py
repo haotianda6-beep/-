@@ -99,6 +99,8 @@ async def status() -> EngineStatus:
         mt4_symbol=settings.mt4_symbol,
         maker_fee_rate=binance_client.maker_fee_rate,
         binance_funding=binance_client.latest_funding(),
+        binance_account=await binance_client.account_snapshot(),
+        mt4_account=mt4_bridge.account_snapshot(),
         binance_quote=binance_client.latest_quote(),
         mt4_quote=mt4_bridge.latest_quote(),
         open_pair=strategy.open_pair,

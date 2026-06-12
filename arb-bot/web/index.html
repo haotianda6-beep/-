@@ -76,6 +76,12 @@
         gap: 12px;
       }
 
+      .account-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
       .layout {
         display: grid;
         grid-template-columns: minmax(0, 1fr) 380px;
@@ -318,6 +324,7 @@
 
       @media (max-width: 1040px) {
         .grid,
+        .account-grid,
         .layout {
           grid-template-columns: 1fr 1fr;
         }
@@ -335,6 +342,7 @@
         }
 
         .grid,
+        .account-grid,
         .layout,
         .form-grid {
           grid-template-columns: 1fr;
@@ -380,6 +388,59 @@
           <div class="label">挂单手续费率</div>
           <div class="value" id="makerFee">-</div>
           <div class="small" id="pairInfo">-</div>
+        </div>
+      </section>
+
+      <section class="account-grid mt">
+        <div class="panel">
+          <h2>币安账户余额</h2>
+          <div class="compact-list">
+            <div class="compact-row">
+              <strong>钱包余额</strong>
+              <span id="binanceWalletBalance">-</span>
+            </div>
+            <div class="compact-row">
+              <strong>账户权益</strong>
+              <span id="binanceEquity">-</span>
+            </div>
+            <div class="compact-row">
+              <strong>可用余额</strong>
+              <span id="binanceAvailable">-</span>
+            </div>
+            <div class="compact-row">
+              <strong>保证金</strong>
+              <span id="binanceMargin">-</span>
+            </div>
+            <div class="compact-row">
+              <strong>浮动盈亏</strong>
+              <span id="binanceUnrealized">-</span>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>MT4账户余额</h2>
+          <div class="compact-list">
+            <div class="compact-row">
+              <strong>账户余额</strong>
+              <span id="mt4AccountBalance">-</span>
+            </div>
+            <div class="compact-row">
+              <strong>账户净值</strong>
+              <span id="mt4Equity">-</span>
+            </div>
+            <div class="compact-row">
+              <strong>可用保证金</strong>
+              <span id="mt4Available">-</span>
+            </div>
+            <div class="compact-row">
+              <strong>占用保证金</strong>
+              <span id="mt4Margin">-</span>
+            </div>
+            <div class="compact-row">
+              <strong>浮动盈亏</strong>
+              <span id="mt4Unrealized">-</span>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -631,6 +692,32 @@
         return `${n >= 0 ? "+" : "-"}${text} 美元`;
       }
 
+      function accountMoney(value, currency) {
+        if (value === null || value === undefined || value === "") return "-";
+        const n = Number(value);
+        const unit = currencyText(currency);
+        if (!Number.isFinite(n)) return `${value} ${unit}`;
+        return `${n.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} ${unit}`;
+      }
+
+      function accountSigned(value, currency) {
+        if (value === null || value === undefined || value === "") return "-";
+        const n = Number(value);
+        const unit = currencyText(currency);
+        if (!Number.isFinite(n)) return `${value} ${unit}`;
+        const text = Math.abs(n).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+        return `${n >= 0 ? "+" : "-"}${text} ${unit}`;
+      }
+
+      function currencyText(value) {
+        const map = {
+          USDT: "美元稳定币",
+          USD: "美元",
+          CNY: "人民币",
+        };
+        return map[value] || value || "";
+      }
+
       function pct(value) {
         if (value === null || value === undefined || value === "") return "-";
         return `${fmt(Number(value) * 100)}%`;
@@ -704,6 +791,7 @@
         $("binanceLine").textContent = b ? `买 ${fmt(b.bid)} / 卖 ${fmt(b.ask)} / ${age(b.timestamp_ms)}` : "等待报价";
         $("mt4Line").textContent = m ? `买 ${fmt(m.bid)} / 卖 ${fmt(m.ask)} / ${age(m.timestamp_ms)}` : "等待报价";
         $("spreadLine").textContent = b && m ? `开仓差 ${fmt(Number(b.ask) - Number(m.ask))} 美元；反向差 ${fmt(Number(m.bid) - Number(b.bid))} 美元` : "-";
+        renderAccounts(data);
 
         const pair = data.open_pair;
         const metrics = data.position_metrics || {};
@@ -716,6 +804,21 @@
         $("executionPlan").textContent = data.execution_plan?.summary || "-";
         $("followLimit").textContent = data.execution_plan ? `币安成交后 MT4 需要在 ${fmt(data.execution_plan.max_follow_seconds)} 秒内回报；EA 当前建议轮询 0.05 秒。` : "-";
         renderConfig(data.config);
+      }
+
+      function renderAccounts(data) {
+        const binance = data.binance_account;
+        const mt4 = data.mt4_account;
+        $("binanceWalletBalance").textContent = binance ? accountMoney(binance.balance, binance.currency) : "等待币安账户数据";
+        $("binanceEquity").textContent = binance ? accountMoney(binance.equity, binance.currency) : "-";
+        $("binanceAvailable").textContent = binance ? accountMoney(binance.available, binance.currency) : "-";
+        $("binanceMargin").textContent = binance ? accountMoney(binance.used_margin, binance.currency) : "-";
+        $("binanceUnrealized").textContent = binance ? accountSigned(binance.unrealized_pnl, binance.currency) : "-";
+        $("mt4AccountBalance").textContent = mt4 ? accountMoney(mt4.balance, mt4.currency) : "等待新版 EA 上报";
+        $("mt4Equity").textContent = mt4 ? accountMoney(mt4.equity, mt4.currency) : "-";
+        $("mt4Available").textContent = mt4 ? accountMoney(mt4.available, mt4.currency) : "-";
+        $("mt4Margin").textContent = mt4 ? accountMoney(mt4.used_margin, mt4.currency) : "-";
+        $("mt4Unrealized").textContent = mt4 ? accountSigned(mt4.unrealized_pnl, mt4.currency) : "-";
       }
 
       function renderFunding(metrics, pair) {

@@ -126,6 +126,17 @@ class Mt4SwapInfo(BaseModel):
     next_rollover_time_ms: int | None = None
 
 
+class AccountSnapshot(BaseModel):
+    venue: str
+    balance: Decimal | None = None
+    equity: Decimal | None = None
+    available: Decimal | None = None
+    used_margin: Decimal | None = None
+    unrealized_pnl: Decimal | None = None
+    currency: str | None = None
+    timestamp_ms: int = Field(default_factory=utc_now_ms)
+
+
 class Mt4Tick(BaseModel):
     token: str | None = None
     symbol: str
@@ -140,6 +151,12 @@ class Mt4Tick(BaseModel):
     tick_size: Decimal | None = None
     point: Decimal | None = None
     next_rollover_time_ms: int | None = None
+    account_balance: Decimal | None = None
+    account_equity: Decimal | None = None
+    account_free_margin: Decimal | None = None
+    account_margin: Decimal | None = None
+    account_profit: Decimal | None = None
+    account_currency: str | None = None
 
 
 class Mt4Command(BaseModel):
@@ -339,6 +356,8 @@ class EngineStatus(BaseModel):
     mt4_symbol: str
     maker_fee_rate: Decimal | None = None
     binance_funding: BinanceFundingInfo | None = None
+    binance_account: AccountSnapshot | None = None
+    mt4_account: AccountSnapshot | None = None
     binance_quote: MarketQuote | None = None
     mt4_quote: MarketQuote | None = None
     open_pair: OpenPair | None = None

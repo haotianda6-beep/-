@@ -5,7 +5,7 @@ from collections import deque
 from decimal import Decimal
 
 from app.config import Settings
-from app.models import MarketQuote, Mt4Command, Mt4Report, Mt4SwapInfo, Mt4Tick, Side, utc_now_ms
+from app.models import AccountSnapshot, MarketQuote, Mt4Command, Mt4Report, Mt4SwapInfo, Mt4Tick, Side, utc_now_ms
 
 
 class Mt4Bridge:
@@ -18,6 +18,7 @@ class Mt4Bridge:
         self._reports: deque[Mt4Report] = deque()
         self._positions = []
         self._swap_info = Mt4SwapInfo()
+        self._account: AccountSnapshot | None = None
         self.last_seen_ms = 0
 
     def token_ok(self, token: str | None) -> bool:
@@ -41,6 +42,27 @@ class Mt4Bridge:
                 point=tick.point,
                 next_rollover_time_ms=tick.next_rollover_time_ms,
             )
+            account_values = (
+                tick.account_balance,
+                tick.account_equity,
+                tick.account_free_margin,
+                tick.account_margin,
+                tick.account_profit,
+            )
+            self._account = (
+                AccountSnapshot(
+                    venue="MT4",
+                    balance=tick.account_balance,
+                    equity=tick.account_equity,
+                    available=tick.account_free_margin,
+                    used_margin=tick.account_margin,
+                    unrealized_pnl=tick.account_profit,
+                    currency=tick.account_currency,
+                    timestamp_ms=received_ms,
+                )
+                if any(value is not None for value in account_values)
+                else None
+            )
             self.last_seen_ms = received_ms
         return quote
 
@@ -55,6 +77,10 @@ class Mt4Bridge:
     def positions(self) -> list:
         with self._lock:
             return list(self._positions)
+
+    def account_snapshot(self) -> AccountSnapshot | None:
+        with self._lock:
+            return self._account
 
     def connected(self, max_age_ms: int = 3000) -> bool:
         with self._lock:

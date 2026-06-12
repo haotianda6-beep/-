@@ -16,7 +16,7 @@ import websockets
 
 from app.config import Settings
 from app.logger import masked
-from app.models import BinanceFundingInfo, ExchangeFilters, MarketQuote, OrderRequest, OrderStatus, OrderUpdate, Side, utc_now_ms
+from app.models import AccountSnapshot, BinanceFundingInfo, ExchangeFilters, MarketQuote, OrderRequest, OrderStatus, OrderUpdate, Side, utc_now_ms
 
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,9 @@ class BinanceBaseClient:
     async def get_order(self, order_id: str) -> OrderUpdate | None:
         raise NotImplementedError
 
+    async def account_snapshot(self) -> AccountSnapshot | None:
+        raise NotImplementedError
+
 
 class PaperBinanceClient(BinanceBaseClient):
     def __init__(self, settings: Settings) -> None:
@@ -71,6 +74,8 @@ class PaperBinanceClient(BinanceBaseClient):
         self._tasks: list[asyncio.Task] = []
         self._use_live_market_data = bool(settings.binance_api_key and settings.binance_api_secret)
         self._funding: BinanceFundingInfo | None = None
+        self._account: AccountSnapshot | None = None
+        self._account_cache_ms = 0
 
     async def start(self) -> None:
         if self._use_live_market_data:
@@ -156,6 +161,19 @@ class PaperBinanceClient(BinanceBaseClient):
     async def get_order(self, order_id: str) -> OrderUpdate | None:
         await self._auto_fill(order_id)
         return self._orders.get(order_id)
+
+    async def account_snapshot(self) -> AccountSnapshot | None:
+        if not self._use_live_market_data:
+            return self._account
+        now = utc_now_ms()
+        if self._account and now - self._account_cache_ms <= 3000:
+            return self._account
+        try:
+            self._account = _parse_account_snapshot(await self._signed("GET", "/fapi/v2/account", {}))
+            self._account_cache_ms = now
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Binance paper account snapshot unavailable: %s", str(exc)[:160])
+        return self._account
 
     async def simulate_fill(self, order_id: str, quantity: Decimal, price: Decimal | None = None) -> OrderUpdate:
         order = self._orders[order_id]
@@ -273,6 +291,8 @@ class BinanceFuturesClient(BinanceBaseClient):
         self._listen_key: str | None = None
         self._tasks: list[asyncio.Task] = []
         self._hedge_mode = False
+        self._account: AccountSnapshot | None = None
+        self._account_cache_ms = 0
 
     async def start(self) -> None:
         await self._load_exchange_info()
@@ -318,6 +338,17 @@ class BinanceFuturesClient(BinanceBaseClient):
     async def get_order(self, order_id: str) -> OrderUpdate | None:
         raw = await self._signed("GET", "/fapi/v1/order", {"symbol": self.settings.binance_symbol, "orderId": order_id})
         return self._parse_order(raw)
+
+    async def account_snapshot(self) -> AccountSnapshot | None:
+        now = utc_now_ms()
+        if self._account and now - self._account_cache_ms <= 3000:
+            return self._account
+        try:
+            self._account = _parse_account_snapshot(await self._signed("GET", "/fapi/v2/account", {}))
+            self._account_cache_ms = now
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Binance account snapshot unavailable: %s", str(exc)[:160])
+        return self._account
 
     async def _load_exchange_info(self) -> None:
         data = await self._public("GET", "/fapi/v1/exchangeInfo")
@@ -445,3 +476,21 @@ def _parse_funding_info(data: dict[str, Any], symbol: str) -> BinanceFundingInfo
         next_funding_time_ms=int(data.get("nextFundingTime") or 0),
         mark_price=Decimal(str(data["markPrice"])) if data.get("markPrice") is not None else None,
     )
+
+
+def _parse_account_snapshot(data: dict[str, Any]) -> AccountSnapshot:
+    return AccountSnapshot(
+        venue="币安合约",
+        balance=_optional_decimal(data.get("totalWalletBalance")),
+        equity=_optional_decimal(data.get("totalMarginBalance")),
+        available=_optional_decimal(data.get("availableBalance")),
+        used_margin=_optional_decimal(data.get("totalInitialMargin")),
+        unrealized_pnl=_optional_decimal(data.get("totalUnrealizedProfit")),
+        currency="USDT",
+    )
+
+
+def _optional_decimal(value: Any) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    return Decimal(str(value))
