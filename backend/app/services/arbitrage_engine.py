@@ -162,6 +162,7 @@ class ArbitrageEngine:
             events.append(RiskEvent(id=f"cash-carry-issue-{index}", severity="warning", title="期现扫描接口异常", detail=issue, action="检查同所现货、合约行情和资金费率接口。", created_at=now))
         for index, issue in enumerate(mt4_spread_issues or []):
             events.append(RiskEvent(id=f"mt4-spread-issue-{index}", severity="warning", title="MT4 价差扫描异常", detail=issue, action="检查 MT4 插件报价推送、品种映射和交易所合约行情接口。", created_at=now))
+        events.extend(self._cash_carry_add_config_events(settings, now))
         for result in recent_execution_results():
             if result["status"] not in {"failed", "blocked_by_safety_gate"}:
                 continue
@@ -174,6 +175,36 @@ class ArbitrageEngine:
         if settings.emergency_close_enabled:
             events.append(RiskEvent(id="emergency-close", severity="critical", title="紧急平仓开关已打开", detail="系统应停止新开仓并准备执行保护性平仓。", action="检查持仓并人工确认。", created_at=now))
         return events
+
+    def _cash_carry_add_config_events(self, settings: BotSettings, now: datetime) -> list[RiskEvent]:
+        if (
+            not settings.cash_carry_enabled
+            or not settings.cash_carry_auto_open_enabled
+            or settings.max_add_count <= 0
+            or settings.add_trigger_spread_pct <= 0
+            or settings.order_notional_usdt <= 0
+        ):
+            return []
+        first_add_required = settings.order_notional_usdt * Decimal("2")
+        reasons = []
+        if settings.max_symbol_notional_usdt < first_add_required:
+            reasons.append(f"单币最大仓位 {settings.max_symbol_notional_usdt}U 小于首仓+一次补仓所需 {first_add_required}U")
+        if settings.single_exchange_max_notional_usdt < first_add_required:
+            reasons.append(f"单所最大暴露 {settings.single_exchange_max_notional_usdt}U 小于首仓+一次补仓所需 {first_add_required}U")
+        if settings.max_total_notional_usdt < first_add_required:
+            reasons.append(f"最大总仓位 {settings.max_total_notional_usdt}U 小于首仓+一次补仓所需 {first_add_required}U")
+        if not reasons:
+            return []
+        return [
+            RiskEvent(
+                id="cash-carry-add-config-blocked",
+                severity="warning",
+                title="正向期现补仓参数不可执行",
+                detail="；".join(reasons),
+                action="若需要补仓，调高对应仓位上限或降低单笔下单金额；否则系统只会持有首仓并等待平仓/止损。",
+                created_at=now,
+            )
+        ]
 
     def _stale_execution_result(self, result: dict[str, str], rows: list[CashCarryPositionRow]) -> bool:
         return self._stale_cash_carry_result(result, rows)

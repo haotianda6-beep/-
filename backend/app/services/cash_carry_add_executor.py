@@ -23,7 +23,7 @@ def evaluate_cash_carry_add(
     records = executor.state.load_positions()
     total_notional = _active_notional(records, by_key)
     for record in records:
-        current = by_key.get((record.exchange, record.symbol))
+        current = _add_candidate(by_key.get((record.exchange, record.symbol)))
         live = live_by_key.get((record.exchange, record.symbol))
         if not current or not live or live.status != "matched":
             continue
@@ -36,6 +36,17 @@ def evaluate_cash_carry_add(
             return executor.state.remember(ExecutionResult(str(uuid.uuid4()), "blocked_by_safety_gate", " / ".join(gate_reasons), steps))
         return _execute_add(executor, record, current, settings, steps)
     return None
+
+
+def _add_candidate(item: CashCarryOpportunity | None) -> CashCarryOpportunity | None:
+    if not item:
+        return None
+    reasons = [reason for reason in item.blocked_reasons if not _is_open_scope_reason(reason)]
+    return item.model_copy(update={"blocked_reasons": reasons}) if reasons != item.blocked_reasons else item
+
+
+def _is_open_scope_reason(reason: str) -> bool:
+    return "一所一币规则" in reason or "已有正向期现持仓" in reason
 
 
 def _execute_add(

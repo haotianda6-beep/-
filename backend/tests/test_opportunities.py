@@ -53,6 +53,26 @@ def test_execution_rate_limit_reason_is_localized(tmp_path, monkeypatch) -> None
     assert any(item.detail == "交易所 API 限频，系统已短暂冷却并等待自动重试。" for item in events)
 
 
+def test_cash_carry_add_config_warns_when_limits_block_first_add(tmp_path) -> None:
+    engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
+    settings = BotSettings(
+        cash_carry_enabled=True,
+        cash_carry_auto_open_enabled=True,
+        order_notional_usdt=Decimal("500"),
+        max_symbol_notional_usdt=Decimal("500"),
+        single_exchange_max_notional_usdt=Decimal("1000"),
+        max_total_notional_usdt=Decimal("2000"),
+        max_add_count=4,
+        add_trigger_spread_pct=Decimal("2"),
+    )
+
+    events = engine.get_risk_events(settings)
+
+    event = next(item for item in events if item.id == "cash-carry-add-config-blocked")
+    assert event.title == "正向期现补仓参数不可执行"
+    assert "单币最大仓位 500U" in event.detail
+
+
 def _cash_position() -> CashCarryPositionRow:
     now = datetime.now(timezone.utc)
     return CashCarryPositionRow(

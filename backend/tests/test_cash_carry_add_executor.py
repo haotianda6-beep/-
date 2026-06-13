@@ -37,6 +37,33 @@ def test_cash_carry_add_submits_spot_buy_and_perp_short_when_basis_widens(tmp_pa
     assert saved["add_orders"][0]["perp_order_id"] == "perp-add"
 
 
+def test_cash_carry_add_ignores_same_position_open_scope_reason(tmp_path) -> None:
+    state = _state_with_open_position(tmp_path, add_count=0)
+    executor = _RecordingExecutor(state)
+    settings = _settings()
+    opportunity = _opportunity(basis="3.3", perp="103.3")
+    opportunity = opportunity.model_copy(update={"blocked_reasons": ["该交易所该币种已有正向期现持仓，禁止重复开仓"]})
+
+    result = executor.evaluate([opportunity], settings, [_position_row(basis="3.3")], allow_open=False, allow_add=True)
+
+    assert result is not None
+    assert result.status == "add_submitted"
+    assert json.loads(state.read_text(encoding="utf-8"))["positions"][0]["add_count"] == 1
+
+
+def test_cash_carry_add_still_blocks_real_market_reason(tmp_path) -> None:
+    state = _state_with_open_position(tmp_path, add_count=0)
+    executor = _RecordingExecutor(state)
+    settings = _settings()
+    opportunity = _opportunity(basis="3.3", perp="103.3")
+    opportunity = opportunity.model_copy(update={"blocked_reasons": ["盘口深度不足"]})
+
+    result = executor.evaluate([opportunity], settings, [_position_row(basis="3.3")], allow_open=False, allow_add=True)
+
+    assert result is None
+    assert executor.spot.orders == []
+
+
 def test_cash_carry_add_stops_at_max_add_count(tmp_path) -> None:
     state = _state_with_open_position(tmp_path, add_count=2, last_add_basis="3.3")
     executor = _RecordingExecutor(state)
