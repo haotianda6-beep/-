@@ -1,4 +1,4 @@
-import type { BotSettings, CredentialsOverview, ExchangeCredentialInput, ExchangeName, RealtimeSnapshot } from "../types/api";
+import type { BotSettings, CredentialsOverview, ExchangeCredentialInput, ExchangeName, RealtimeSnapshot, TradeHistory } from "../types/api";
 
 export async function fetchSnapshot(): Promise<RealtimeSnapshot> {
   const response = await fetch("/api/snapshot");
@@ -16,6 +16,14 @@ export async function saveSettings(settings: BotSettings): Promise<BotSettings> 
   });
   if (!response.ok) {
     throw new Error(`settings save failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function fetchTrades(): Promise<TradeHistory[]> {
+  const response = await fetch("/api/trades", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`trades request failed: ${response.status}`);
   }
   return response.json();
 }

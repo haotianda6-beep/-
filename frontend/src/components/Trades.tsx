@@ -8,18 +8,29 @@ type Props = {
   strategy: TradeHistory["strategy_type"];
   title?: string;
   emptyText?: string;
+  loading?: boolean;
+  error?: string;
+  onRefresh?: () => void;
 };
 
-export function Trades({ trades, strategy, title = "做单历史", emptyText = "还没有经过交易所成交回执核验的真实历史单。" }: Props) {
+export function Trades({
+  trades,
+  strategy,
+  title = "做单历史",
+  emptyText = "还没有经过交易所成交回执核验的真实历史单。",
+  loading = false,
+  error = "",
+  onRefresh,
+}: Props) {
   if (strategy === "mt4_spread") {
-    return <Mt4Trades trades={trades} title={title} emptyText={emptyText} />;
+    return <Mt4Trades trades={trades} title={title} emptyText={emptyText} loading={loading} error={error} onRefresh={onRefresh} />;
   }
-  return <CashCarryTrades trades={trades} title={title} emptyText={emptyText} />;
+  return <CashCarryTrades trades={trades} title={title} emptyText={emptyText} loading={loading} error={error} onRefresh={onRefresh} />;
 }
 
-function CashCarryTrades({ trades, title, emptyText }: Omit<Props, "strategy">) {
+function CashCarryTrades({ trades, title, emptyText, loading, error, onRefresh }: Omit<Props, "strategy">) {
   return (
-    <TradePanel title={title} emptyText={emptyText} isEmpty={trades.length === 0}>
+    <TradePanel title={title} emptyText={emptyText} isEmpty={trades.length === 0} loading={loading} error={error} onRefresh={onRefresh}>
       <table>
         <thead>
           <tr>
@@ -48,9 +59,9 @@ function CashCarryTrades({ trades, title, emptyText }: Omit<Props, "strategy">) 
   );
 }
 
-function Mt4Trades({ trades, title, emptyText }: Omit<Props, "strategy">) {
+function Mt4Trades({ trades, title, emptyText, loading, error, onRefresh }: Omit<Props, "strategy">) {
   return (
-    <TradePanel title={title} emptyText={emptyText} isEmpty={trades.length === 0}>
+    <TradePanel title={title} emptyText={emptyText} isEmpty={trades.length === 0} loading={loading} error={error} onRefresh={onRefresh}>
       <table>
         <thead>
           <tr>
@@ -80,15 +91,35 @@ function Mt4Trades({ trades, title, emptyText }: Omit<Props, "strategy">) {
   );
 }
 
-function TradePanel({ title, emptyText, isEmpty, children }: { title?: string; emptyText?: string; isEmpty: boolean; children: ReactNode }) {
+function TradePanel({
+  title,
+  emptyText,
+  isEmpty,
+  loading,
+  error,
+  onRefresh,
+  children,
+}: {
+  title?: string;
+  emptyText?: string;
+  isEmpty: boolean;
+  loading?: boolean;
+  error?: string;
+  onRefresh?: () => void;
+  children: ReactNode;
+}) {
   return (
     <section className="panel wide">
       <div className="section-title">
         <History size={18} />
         <h2>{title}</h2>
+        <button className="ghost-button" onClick={onRefresh} disabled={loading}>
+          {loading ? "读取中" : "刷新"}
+        </button>
       </div>
       <div className="table-wrap">{children}</div>
-      {isEmpty && <div className="empty">{emptyText}</div>}
+      {error && <div className="empty negative">{error}</div>}
+      {isEmpty && !loading && !error && <div className="empty">{emptyText}</div>}
     </section>
   );
 }

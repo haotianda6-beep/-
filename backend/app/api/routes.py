@@ -57,8 +57,6 @@ async def post_mt4_quote(payload: Mt4QuoteIn, x_mt4_token: str | None = Header(d
 
 @router.get("/trades")
 async def get_trades():
-    if _lightweight_dashboard_enabled():
-        return []
     return await run_in_threadpool(engine.get_trades)
 
 

@@ -8,7 +8,7 @@ import { Mt4Spread, Mt4SpreadDashboard } from "./components/Mt4Spread";
 import { RiskPanel } from "./components/RiskPanel";
 import { SettingsPage } from "./components/SettingsPage";
 import { Trades } from "./components/Trades";
-import { createRealtimeSocket, fetchSnapshot } from "./lib/api";
+import { createRealtimeSocket, fetchSnapshot, fetchTrades } from "./lib/api";
 import type { AIInsight, RealtimeSnapshot, RiskEvent, TradeHistory } from "./types/api";
 
 type Tab = "dashboard" | "opportunities" | "trades";
@@ -24,6 +24,9 @@ export function App() {
   const [activeModule, setActiveModule] = useState<Module>("home");
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [snapshot, setSnapshot] = useState<RealtimeSnapshot | null>(null);
+  const [trades, setTrades] = useState<TradeHistory[]>([]);
+  const [tradesLoading, setTradesLoading] = useState(false);
+  const [tradesError, setTradesError] = useState("");
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState("");
 
@@ -77,6 +80,37 @@ export function App() {
       socket?.close();
     };
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== "trades" || (activeModule !== "cash-carry" && activeModule !== "mt4-spread")) return;
+    let stopped = false;
+    let timer: number | undefined;
+
+    const loadTrades = () => {
+      setTradesLoading(true);
+      fetchTrades()
+        .then((next) => {
+          if (stopped) return;
+          setTrades(next);
+          setTradesError("");
+        })
+        .catch((reason) => {
+          if (stopped) return;
+          setTradesError(String(reason));
+        })
+        .finally(() => {
+          if (stopped) return;
+          setTradesLoading(false);
+          timer = window.setTimeout(loadTrades, 10000);
+        });
+    };
+
+    loadTrades();
+    return () => {
+      stopped = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [activeModule, activeTab]);
 
   if (!snapshot) {
     return (
@@ -158,10 +192,22 @@ export function App() {
           )}
           {activeModule === "cash-carry" && activeTab === "trades" && (
             <Trades
-              trades={filterTrades(snapshot.trades, "cash_carry")}
+              trades={filterTrades(trades.length ? trades : snapshot.trades, "cash_carry")}
               strategy="cash_carry"
               title="各所期现正向套利做单历史"
               emptyText="各所期现正向套利还没有经过交易所成交回执核验的真实历史单。"
+              loading={tradesLoading}
+              error={tradesError}
+              onRefresh={() => {
+                setTradesLoading(true);
+                fetchTrades()
+                  .then((next) => {
+                    setTrades(next);
+                    setTradesError("");
+                  })
+                  .catch((reason) => setTradesError(String(reason)))
+                  .finally(() => setTradesLoading(false));
+              }}
             />
           )}
           {activeModule === "mt4-spread" && activeTab === "dashboard" && <Mt4SpreadDashboard snapshot={snapshot} />}
@@ -173,10 +219,22 @@ export function App() {
           )}
           {activeModule === "mt4-spread" && activeTab === "trades" && (
             <Trades
-              trades={filterTrades(snapshot.trades, "mt4_spread")}
+              trades={filterTrades(trades.length ? trades : snapshot.trades, "mt4_spread")}
               strategy="mt4_spread"
               title="MT4 与五所合约价差做单历史"
               emptyText="MT4 与五所合约价差套利还没有经过交易所成交回执核验的真实历史单。"
+              loading={tradesLoading}
+              error={tradesError}
+              onRefresh={() => {
+                setTradesLoading(true);
+                fetchTrades()
+                  .then((next) => {
+                    setTrades(next);
+                    setTradesError("");
+                  })
+                  .catch((reason) => setTradesError(String(reason)))
+                  .finally(() => setTradesLoading(false));
+              }}
             />
           )}
         </div>
