@@ -181,10 +181,6 @@ async def _snapshot() -> RealtimeSnapshot:
 
 def snapshot_cached() -> RealtimeSnapshot:
     global _snapshot_cache, _snapshot_cache_at, _snapshot_json_cache
-    if _lightweight_dashboard_enabled():
-        snapshot = _lightweight_snapshot()
-        _store_snapshot(snapshot)
-        return snapshot
     now = time.monotonic()
     if _snapshot_cache and now - _snapshot_cache_at <= _SNAPSHOT_TTL_SECONDS:
         return _snapshot_cache
@@ -215,7 +211,10 @@ def _refresh_snapshot() -> None:
         _snapshot_refreshing = False
         return
     try:
-        _store_snapshot(engine.snapshot())
+        if _lightweight_dashboard_enabled():
+            _store_snapshot(_lightweight_snapshot())
+        else:
+            _store_snapshot(engine.snapshot())
     except Exception as exc:  # noqa: BLE001 - keep frontend responsive if any exchange call hangs/fails.
         logger.warning("snapshot refresh failed: %s", str(exc)[:220])
     finally:

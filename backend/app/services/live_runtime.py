@@ -1,9 +1,11 @@
 import gc
 import logging
+import multiprocessing
 import os
 import threading
 import time
 from dataclasses import dataclass
+from decimal import Decimal
 
 from app.core.credential_utils import env_bool
 from app.core.models import BotSettings, CashCarryOpportunity, ExchangeName
@@ -19,6 +21,7 @@ from app.services.ws_ticker_cache import WSTickerCache
 
 FAST_REFRESH_SECONDS = 1.0
 FULL_SCAN_INTERVAL_SECONDS = 300.0
+FULL_SCAN_TIMEOUT_SECONDS = 90.0
 ACCOUNT_REFRESH_SECONDS = 30.0
 MT4_SCAN_SECONDS = 2.0
 MEMORY_GUARD_SECONDS = 60.0
@@ -36,6 +39,20 @@ class LiveRuntimeSnapshot:
     mt4_spread_opportunities: list
     mt4_spread_candidates: list
     mt4_spread_issues: list[str]
+
+
+@dataclass(frozen=True)
+class TickerSubscription:
+    exchange: ExchangeName
+    symbol: str
+    spot_ccxt_symbol: str
+    swap_ccxt_symbol: str
+
+
+@dataclass(frozen=True)
+class CashCarryFullScanResult:
+    scan: CashCarryScan
+    subscriptions: list[TickerSubscription]
 
 
 class LiveRuntimeCache:
@@ -71,6 +88,9 @@ class LiveRuntimeCache:
     def get(self, settings: BotSettings) -> LiveRuntimeSnapshot:
         self._settings = settings
         self._ensure_started()
+        return self.cached()
+
+    def cached(self) -> LiveRuntimeSnapshot:
         with self._lock:
             return LiveRuntimeSnapshot(
                 account=self._account,
@@ -115,10 +135,11 @@ class LiveRuntimeCache:
             if last_full_scan == 0.0 or now - last_full_scan >= FULL_SCAN_INTERVAL_SECONDS:
                 with self._lock:
                     current = self._cash_carry
-                result, completed = self._run_full_scan(lambda: self.cash_carry_scanner.scan(self._settings), current)
+                full_scan, completed = self._run_full_scan(lambda: self._cash_carry_full_scan(self._settings), current)
+                result = full_scan.scan
                 if completed:
                     last_full_scan = time.monotonic()
-                    self._subscribe_cash_carry(result, self.cash_carry_scanner)
+                    self._subscribe_cash_carry(full_scan.subscriptions)
                     self._drop_full_scan_caches()
             else:
                 with self._lock:
@@ -210,8 +231,9 @@ class LiveRuntimeCache:
         self.cash_carry_scanner.clear_caches()
         gc.collect()
 
-    def _run_full_scan(self, action, fallback):
-        return self._run_guarded_scan(self._full_scan_slots, action, fallback)
+    def _run_full_scan(self, action, fallback: CashCarryScan):
+        full_fallback = CashCarryFullScanResult(fallback, [])
+        return self._run_guarded_scan(self._full_scan_slots, action, full_fallback)
 
     def _run_guarded_scan(self, slot: threading.BoundedSemaphore, action, fallback):
         if not slot.acquire(blocking=False):
@@ -224,14 +246,16 @@ class LiveRuntimeCache:
         finally:
             slot.release()
 
-    def _subscribe_cash_carry(self, scan: CashCarryScan, scanner: CashCarryScanner) -> None:
-        for item in [*scan.opportunities, *scan.candidates]:
-            exchange = item.exchange if isinstance(item.exchange, ExchangeName) else ExchangeName(item.exchange)
-            spot_market, swap_market = scanner.market_pair(exchange, item.symbol)
-            if spot_market:
-                self.ticker_cache.subscribe(exchange, "spot", item.symbol, spot_market.ccxt_symbol)
-            if swap_market:
-                self.ticker_cache.subscribe(exchange, "swap", item.symbol, swap_market.ccxt_symbol)
+    def _cash_carry_full_scan(self, settings: BotSettings) -> CashCarryFullScanResult:
+        if not _cash_carry_scan_subprocess_enabled():
+            scan = _compact_cash_carry_scan(self.cash_carry_scanner.scan(settings))
+            return CashCarryFullScanResult(scan, _cash_carry_subscriptions(scan, self.cash_carry_scanner))
+        return _cash_carry_full_scan_subprocess(settings)
+
+    def _subscribe_cash_carry(self, subscriptions: list[TickerSubscription]) -> None:
+        for item in subscriptions:
+            self.ticker_cache.subscribe(item.exchange, "spot", item.symbol, item.spot_ccxt_symbol)
+            self.ticker_cache.subscribe(item.exchange, "swap", item.symbol, item.swap_ccxt_symbol)
 
     def _apply_cash_carry_open_scope(self, scan: CashCarryScan) -> CashCarryScan:
         active_keys = self.cash_carry_executor.state.active_keys()
@@ -366,6 +390,87 @@ def _cash_carry_runtime_enabled() -> bool:
     return env_bool("MAIN_DASHBOARD_CASH_CARRY_RUNTIME", default=True)
 
 
+def _cash_carry_scan_subprocess_enabled() -> bool:
+    return env_bool("MAIN_DASHBOARD_CASH_CARRY_SCAN_SUBPROCESS", default=True)
+
+
 def _mt4_spread_runtime_enabled() -> bool:
     lightweight = env_bool("MAIN_DASHBOARD_LIGHTWEIGHT", default=True)
     return env_bool("MAIN_DASHBOARD_MT4_SPREAD_RUNTIME", default=not lightweight)
+
+
+def _cash_carry_full_scan_subprocess(settings: BotSettings) -> CashCarryFullScanResult:
+    timeout = _cash_carry_scan_timeout()
+    ctx = multiprocessing.get_context("spawn")
+    parent_conn, child_conn = ctx.Pipe(duplex=False)
+    process = ctx.Process(target=_cash_carry_scan_worker, args=(settings, child_conn), daemon=True)
+    process.start()
+    child_conn.close()
+    try:
+        if not parent_conn.poll(timeout):
+            raise TimeoutError(f"正向期现全量扫描超过 {timeout:.0f} 秒，已终止本次扫描")
+        kind, payload = parent_conn.recv()
+    except TimeoutError:
+        process.terminate()
+        process.join(timeout=5)
+        raise
+    finally:
+        parent_conn.close()
+        if process.is_alive():
+            process.join(timeout=5)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+    if kind == "error":
+        raise RuntimeError(str(payload))
+    return payload
+
+
+def _cash_carry_scan_timeout() -> float:
+    raw = os.getenv("MAIN_DASHBOARD_FULL_SCAN_TIMEOUT_SECONDS", str(FULL_SCAN_TIMEOUT_SECONDS)).strip()
+    try:
+        value = float(Decimal(raw))
+    except Exception:
+        return FULL_SCAN_TIMEOUT_SECONDS
+    return max(10.0, value)
+
+
+def _cash_carry_scan_worker(settings: BotSettings, result_conn) -> None:
+    scanner = CashCarryScanner()
+    try:
+        scan = _compact_cash_carry_scan(scanner.scan(settings))
+        result_conn.send(("ok", CashCarryFullScanResult(scan, _cash_carry_subscriptions(scan, scanner))))
+    except Exception as exc:  # noqa: BLE001 - return sanitized worker failure to parent process.
+        result_conn.send(("error", str(exc)[:220]))
+    finally:
+        result_conn.close()
+
+
+def _cash_carry_subscriptions(scan: CashCarryScan, scanner: CashCarryScanner) -> list[TickerSubscription]:
+    subscriptions: list[TickerSubscription] = []
+    seen: set[tuple[ExchangeName, str]] = set()
+    for item in [*scan.opportunities, *scan.candidates]:
+        exchange = item.exchange if isinstance(item.exchange, ExchangeName) else ExchangeName(item.exchange)
+        key = (exchange, item.symbol)
+        if key in seen:
+            continue
+        seen.add(key)
+        spot_market, swap_market = scanner.market_pair(exchange, item.symbol)
+        if spot_market and swap_market:
+            subscriptions.append(
+                TickerSubscription(
+                    exchange=exchange,
+                    symbol=item.symbol,
+                    spot_ccxt_symbol=spot_market.ccxt_symbol,
+                    swap_ccxt_symbol=swap_market.ccxt_symbol,
+                )
+            )
+    return subscriptions
+
+
+def _compact_cash_carry_scan(scan: CashCarryScan, opportunity_limit: int = 50, candidate_limit: int = 50) -> CashCarryScan:
+    return CashCarryScan(
+        opportunities=list(scan.opportunities[:opportunity_limit]),
+        candidates=list(scan.candidates[:candidate_limit]),
+        issues=list(scan.issues[:30]),
+    )
