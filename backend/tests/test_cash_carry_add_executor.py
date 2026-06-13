@@ -51,6 +51,20 @@ def test_cash_carry_add_ignores_same_position_open_scope_reason(tmp_path) -> Non
     assert json.loads(state.read_text(encoding="utf-8"))["positions"][0]["add_count"] == 1
 
 
+def test_cash_carry_add_uses_independent_add_notional(tmp_path) -> None:
+    state = _state_with_open_position(tmp_path, add_count=0)
+    executor = _RecordingExecutor(state)
+    settings = _settings(add_notional=Decimal("50"))
+
+    result = executor.evaluate([_opportunity(basis="3.3", perp="103.3")], settings, [_position_row(basis="3.3")], allow_open=False, allow_add=True)
+
+    saved = json.loads(state.read_text(encoding="utf-8"))["positions"][0]
+    assert result is not None
+    assert Decimal(executor.spot.orders[0]["cost"]) == Decimal("50")
+    assert Decimal(saved["quantity"]) == Decimal("1.5")
+    assert Decimal(saved["add_orders"][0]["quantity"]) == Decimal("0.5")
+
+
 def test_cash_carry_add_still_blocks_real_market_reason(tmp_path) -> None:
     state = _state_with_open_position(tmp_path, add_count=0)
     executor = _RecordingExecutor(state)
@@ -76,12 +90,13 @@ def test_cash_carry_add_stops_at_max_add_count(tmp_path) -> None:
     assert json.loads(state.read_text(encoding="utf-8"))["positions"][0]["add_count"] == 2
 
 
-def _settings(max_add_count: int = 4) -> BotSettings:
+def _settings(max_add_count: int = 4, add_notional: Decimal = Decimal("100")) -> BotSettings:
     return BotSettings(
         manual_confirm_required=False,
         cash_carry_auto_open_enabled=True,
         cash_carry_auto_trade_enabled=True,
         order_notional_usdt=Decimal("100"),
+        add_notional_usdt=add_notional,
         add_trigger_spread_pct=Decimal("2.2"),
         max_add_count=max_add_count,
         max_symbol_notional_usdt=Decimal("500"),
@@ -183,7 +198,8 @@ class _RecordingSpot:
         self.orders = []
 
     def create_market_buy_order_with_cost(self, symbol, cost, params=None):
-        order = {"id": "spot-add", "symbol": symbol, "side": "buy", "cost": str(cost), "average": "100", "filled": "1"}
+        filled = Decimal(str(cost)) / Decimal("100")
+        order = {"id": "spot-add", "symbol": symbol, "side": "buy", "cost": str(cost), "average": "100", "filled": str(filled)}
         self.orders.append(order)
         return order
 

@@ -310,8 +310,8 @@ class CashCarryExecutor:
             ExecutionStep("sell_spot", "pending", f"卖出现货 {record.symbol}，数量 {qty}"),
         ]
 
-    def _maybe_transfer(self, exchange, item: CashCarryOpportunity, settings: BotSettings, step: ExecutionStep) -> None:
-        transfer_usdt_to_spot(exchange, settings.order_notional_usdt, step, settings.cash_carry_auto_transfer_enabled)
+    def _maybe_transfer(self, exchange, item: CashCarryOpportunity, settings: BotSettings, step: ExecutionStep, amount: Decimal | None = None) -> None:
+        transfer_usdt_to_spot(exchange, amount or settings.order_notional_usdt, step, settings.cash_carry_auto_transfer_enabled)
 
     def _run(self, step: ExecutionStep, action, enabled: bool):
         if not enabled:

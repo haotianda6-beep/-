@@ -263,7 +263,7 @@ class CashCarryPositionBuilder:
             return 0
 
     def _add_notional(self, state: dict[str, Any] | None, settings: BotSettings) -> Decimal:
-        return settings.order_notional_usdt if self._add_count(state) < settings.max_add_count else Decimal("0")
+        return settings.add_notional_usdt if self._add_count(state) < settings.max_add_count else Decimal("0")
 
     def _next_add_trigger_basis(self, state: dict[str, Any] | None, settings: BotSettings) -> Decimal | None:
         if not state or self._add_count(state) >= settings.max_add_count or settings.add_trigger_spread_pct <= 0:

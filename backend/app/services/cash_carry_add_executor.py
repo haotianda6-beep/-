@@ -60,12 +60,13 @@ def _execute_add(
     swap = executor._exchange(item.exchange, "swap")
     spot_symbol = f"{record.base_asset}/USDT"
     swap_symbol = f"{record.base_asset}/USDT:USDT"
-    base_qty = item.quantity
+    add_notional = settings.add_notional_usdt
+    base_qty = add_notional / item.spot_price if item.spot_price > 0 else item.quantity
     try:
-        executor._maybe_transfer(spot, item, settings, steps[0])
-        spot_order_raw = executor._run(steps[1], lambda: spot_market_buy(spot, spot_symbol, settings.order_notional_usdt, item.quantity), True)
+        executor._maybe_transfer(spot, item, settings, steps[0], add_notional)
+        spot_order_raw = executor._run(steps[1], lambda: spot_market_buy(spot, spot_symbol, add_notional, base_qty), True)
         spot_order = fetch_order_snapshot(spot, spot_symbol, spot_order_raw)
-        base_qty = filled_base_quantity(spot, spot_symbol, spot_order, item.quantity)
+        base_qty = filled_base_quantity(spot, spot_symbol, spot_order, base_qty)
         contract_qty = contract_order_amount(swap, swap_symbol, base_qty)
         executor._run(steps[2], lambda: executor._set_leverage(swap, swap_symbol, settings.default_leverage), True)
         perp_order_raw = executor._run(
@@ -96,8 +97,8 @@ def _add_plan(
     decision: CashCarryAddDecision,
 ) -> list[ExecutionStep]:
     return [
-        ExecutionStep("transfer_usdt_add", "pending", f"按需划转 USDT，补仓名义 {settings.order_notional_usdt}"),
-        ExecutionStep("buy_spot_add", "pending", f"补买现货 {record.symbol}，数量 {item.quantity}"),
+        ExecutionStep("transfer_usdt_add", "pending", f"按需划转 USDT，补仓名义 {settings.add_notional_usdt}"),
+        ExecutionStep("buy_spot_add", "pending", f"补买现货 {record.symbol}，补仓名义 {settings.add_notional_usdt}"),
         ExecutionStep("set_perp_leverage", "pending", f"确认合约杠杆 {settings.default_leverage}x"),
         ExecutionStep("add_perp_short", "pending", f"基差 {item.basis_pct}% >= {decision.trigger_basis_pct}%，补空合约 {record.symbol}"),
     ]

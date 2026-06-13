@@ -21,7 +21,8 @@ def cash_carry_add_decision(
     total_notional_usdt: Decimal,
 ) -> CashCarryAddDecision:
     current_notional = record.quantity * current.spot_price
-    next_notional = current_notional + settings.order_notional_usdt
+    add_notional = settings.add_notional_usdt
+    next_notional = current_notional + add_notional
     trigger_basis = _next_trigger_basis(record, settings)
     if record.add_count >= settings.max_add_count:
         return _no("已达到最大补仓次数", trigger_basis, current_notional, next_notional)
@@ -33,7 +34,7 @@ def cash_carry_add_decision(
         return _no("补仓后超过单币最大仓位", trigger_basis, current_notional, next_notional)
     if next_notional > settings.single_exchange_max_notional_usdt:
         return _no("补仓后超过单所最大暴露", trigger_basis, current_notional, next_notional)
-    if total_notional_usdt + settings.order_notional_usdt > settings.max_total_notional_usdt:
+    if total_notional_usdt + add_notional > settings.max_total_notional_usdt:
         return _no("补仓后超过最大总仓位", trigger_basis, current_notional, next_notional)
     return CashCarryAddDecision(True, "基差继续走扩，触发正向期现补仓", trigger_basis, current_notional, next_notional)
 

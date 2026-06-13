@@ -3,7 +3,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ExchangeName(str, Enum):
@@ -171,6 +171,7 @@ class BotSettings(BaseSchema):
     max_slippage_pct: Decimal = Decimal("0.2")
     min_funding_net_usdt: Decimal = Decimal("0.01")
     max_add_count: int = 2
+    add_notional_usdt: Decimal = Decimal("0")
     add_trigger_spread_pct: Decimal = Decimal("2.2")
     single_exchange_max_notional_usdt: Decimal = Decimal("1000")
     symbol_blacklist: list[str] = Field(default_factory=list)
@@ -210,6 +211,7 @@ class BotSettings(BaseSchema):
         "stop_loss_usdt",
         "max_slippage_pct",
         "min_funding_net_usdt",
+        "add_notional_usdt",
         "add_trigger_spread_pct",
         "single_exchange_max_notional_usdt",
     )
@@ -218,6 +220,12 @@ class BotSettings(BaseSchema):
         if value < 0:
             raise ValueError("numeric settings must not be negative")
         return value
+
+    @model_validator(mode="after")
+    def default_add_notional(self):
+        if self.add_notional_usdt <= 0:
+            self.add_notional_usdt = self.order_notional_usdt
+        return self
 
 
 class RiskEvent(BaseSchema):

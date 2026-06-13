@@ -183,9 +183,10 @@ class ArbitrageEngine:
             or settings.max_add_count <= 0
             or settings.add_trigger_spread_pct <= 0
             or settings.order_notional_usdt <= 0
+            or settings.add_notional_usdt <= 0
         ):
             return []
-        first_add_required = settings.order_notional_usdt * Decimal("2")
+        first_add_required = settings.order_notional_usdt + settings.add_notional_usdt
         reasons = []
         if settings.max_symbol_notional_usdt < first_add_required:
             reasons.append(f"单币最大仓位 {settings.max_symbol_notional_usdt}U 小于首仓+一次补仓所需 {first_add_required}U")
@@ -243,6 +244,7 @@ class ArbitrageEngine:
                 "cash_carry_close_basis_pct": str(settings.cash_carry_close_basis_pct),
                 "take_profit_usdt": str(settings.take_profit_usdt),
                 "stop_loss_usdt": str(settings.stop_loss_usdt),
+                "add_notional_usdt": str(settings.add_notional_usdt),
             },
         }
 

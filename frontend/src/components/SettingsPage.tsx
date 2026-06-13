@@ -27,6 +27,7 @@ type DecimalKey =
   | "stop_loss_usdt"
   | "max_slippage_pct"
   | "min_funding_net_usdt"
+  | "add_notional_usdt"
   | "add_trigger_spread_pct"
   | "single_exchange_max_notional_usdt";
 
@@ -164,7 +165,7 @@ export function SettingsPage({ settings, onSaved }: Props) {
         <label className="field">
           <span>补仓金额</span>
           <div className="input-row">
-            <input value={draft.order_notional_usdt} readOnly />
+            <input value={draft.add_notional_usdt} inputMode="decimal" onChange={(event) => updateDecimal("add_notional_usdt", event.target.value)} />
             <small>USDT</small>
           </div>
         </label>
