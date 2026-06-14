@@ -11,7 +11,8 @@ from app.core.credentials import CredentialStore
 from app.core.env import ai_status, credential_statuses, env_bool
 from app.core.models import AIInsight, BotSettings, DataSource, DeepSeekCredentialInput, ExchangeCredentialInput, ExchangeName, Mt4CredentialInput, RealtimeSnapshot, RiskEvent
 from app.services.exchange_factory import build_ccxt_exchange, sanitize_exchange_error
-from app.services.live_market_types import SPOT_EXCHANGE_IDS, SWAP_EXCHANGE_IDS
+from app.services.cross_spread_scan_cache import CrossSpreadScanCache
+from app.services.live_market_types import LiveOpportunityScan, SPOT_EXCHANGE_IDS, SWAP_EXCHANGE_IDS
 from app.services.mt4_bridge import Mt4QuoteIn, mt4_token_ok
 from app.services.arbitrage_engine import ArbitrageEngine
 from app.services.settings_store import SettingsStore
@@ -19,6 +20,7 @@ from app.services.settings_store import SettingsStore
 router = APIRouter(prefix="/api")
 engine = ArbitrageEngine(SettingsStore())
 credential_store = CredentialStore()
+cross_spread_cache = CrossSpreadScanCache(engine.cross_spread_scanner, engine.live_read.live_data_enabled)
 _SNAPSHOT_TTL_SECONDS = 1.0
 _snapshot_lock = threading.Lock()
 _snapshot_cache: RealtimeSnapshot | None = None
@@ -31,6 +33,23 @@ logger = logging.getLogger(__name__)
 @router.get("/snapshot", response_model=RealtimeSnapshot)
 async def get_snapshot() -> RealtimeSnapshot:
     return await _snapshot()
+
+
+@router.get("/dashboard")
+async def get_dashboard():
+    return []
+
+
+@router.get("/opportunities")
+async def get_opportunities():
+    settings = await run_in_threadpool(engine.settings_store.load)
+    return _cross_spread_scan(settings).opportunities
+
+
+@router.get("/opportunity-candidates")
+async def get_opportunity_candidates():
+    settings = await run_in_threadpool(engine.settings_store.load)
+    return _cross_spread_scan(settings).candidates
 
 
 @router.get("/cash-carry/opportunities")
@@ -273,8 +292,11 @@ def _lightweight_snapshot() -> RealtimeSnapshot:
     now = datetime.now(timezone.utc)
     live_enabled = engine.live_read.live_data_enabled()
     runtime = engine.live_runtime.get(settings) if live_enabled and _lightweight_cash_carry_enabled() else None
+    cross_scan = _cross_spread_scan(settings) if live_enabled else LiveOpportunityScan(issues=["实盘数据未启用，五所价差扫描未启动"])
     balances = runtime.account.balances if runtime else []
     positions = runtime.account.positions if runtime else []
+    cross_opps = _trim(cross_scan.opportunities, 20)
+    cross_candidates = _trim(cross_scan.candidates, 50)
     cash_opps = _trim(runtime.cash_carry.opportunities if runtime else [], 20)
     cash_candidates = _trim(runtime.cash_carry.candidates if runtime else [], 50)
     cash_prices = [*cash_opps, *cash_candidates]
@@ -289,6 +311,17 @@ def _lightweight_snapshot() -> RealtimeSnapshot:
             created_at=now,
         )
     ]
+    for index, issue in enumerate(cross_scan.issues):
+        risk_events.append(
+            RiskEvent(
+                id=f"cross-spread-issue-{index}",
+                severity="warning",
+                title="五所价差扫描接口异常",
+                detail=issue,
+                action="检查交易所行情、资金费率、币种链路和盘口深度接口；API 余额读取已单独测试。",
+                created_at=now,
+            )
+        )
     risk_events.extend(
         engine.get_risk_events(
             settings,
@@ -301,6 +334,9 @@ def _lightweight_snapshot() -> RealtimeSnapshot:
     return RealtimeSnapshot(
         balances=balances,
         positions=positions,
+        dashboard=[],
+        opportunities=cross_opps,
+        opportunity_candidates=cross_candidates,
         cash_carry_opportunities=cash_opps,
         cash_carry_candidates=cash_candidates,
         cash_carry_positions=cash_positions,
@@ -337,3 +373,7 @@ def _lightweight_cash_carry_enabled() -> bool:
 
 def _trim(items: list, limit: int) -> list:
     return list(items[:limit])
+
+
+def _cross_spread_scan(settings: BotSettings) -> LiveOpportunityScan:
+    return cross_spread_cache.get(settings)

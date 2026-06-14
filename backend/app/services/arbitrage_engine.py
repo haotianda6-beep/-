@@ -20,6 +20,7 @@ from app.services.cash_carry_positions import CashCarryPositionBuilder
 from app.services.cash_carry_scanner import CashCarryScanner
 from app.services.execution_state import recent_execution_results
 from app.services.live_read import LiveReadService
+from app.services.live_opportunities import LiveOpportunityScanner
 from app.services.live_runtime import LiveRuntimeCache
 from app.services.mt4_bridge import Mt4QuoteStore, Mt4SpreadScanner
 from app.services.settings_store import SettingsStore
@@ -32,6 +33,7 @@ class ArbitrageEngine:
         self.settings_store = settings_store
         self.live_read = LiveReadService()
         self.ticker_cache = WSTickerCache()
+        self.cross_spread_scanner = LiveOpportunityScanner()
         self.cash_carry_scanner = CashCarryScanner()
         self.cash_carry_positions = CashCarryPositionBuilder(self.ticker_cache)
         self.mt4_quote_store = Mt4QuoteStore()

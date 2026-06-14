@@ -73,6 +73,56 @@ class CashCarryPositionRow(BaseSchema):
     next_add_trigger_basis_pct: Decimal | None = None
     updated_at: datetime
 
+
+class DashboardRow(BaseSchema):
+    trade_pair_id: str
+    symbol: str
+    long_exchange: ExchangeName
+    short_exchange: ExchangeName
+    long_quantity: Decimal
+    short_quantity: Decimal
+    leverage: Decimal
+    long_unrealized_pnl: Decimal
+    short_unrealized_pnl: Decimal
+    open_fee: Decimal
+    estimated_close_fee: Decimal
+    realized_funding_net: Decimal
+    estimated_funding_net: Decimal
+    entry_spread_pct: Decimal
+    current_spread_pct: Decimal
+    add_count: int
+    current_net_profit: Decimal
+    data_source: DataSource = DataSource.MOCK
+    updated_at: datetime
+
+
+class Opportunity(BaseSchema):
+    symbol: str
+    long_exchange: ExchangeName
+    short_exchange: ExchangeName
+    long_price: Decimal
+    short_price: Decimal
+    spread_pct: Decimal
+    long_volume_24h_usdt: Decimal
+    short_volume_24h_usdt: Decimal
+    min_volume_24h_usdt: Decimal
+    estimated_open_close_fee: Decimal
+    estimated_funding_net: Decimal
+    estimated_net_profit: Decimal
+    notional_usdt: Decimal = Decimal("0")
+    margin_required_usdt: Decimal = Decimal("0")
+    leverage: Decimal = Decimal("1")
+    spot_transfer_ok: bool
+    depth_ok: bool
+    risk_tags: list[str] = Field(default_factory=list)
+    data_source: DataSource = DataSource.MOCK
+    updated_at: datetime
+
+
+class OpportunityCandidate(Opportunity):
+    blocked_reasons: list[str] = Field(default_factory=list)
+
+
 class CashCarryOpportunity(BaseSchema):
     exchange: ExchangeName
     symbol: str
@@ -126,7 +176,7 @@ class Mt4SpreadOpportunity(BaseSchema):
 
 class TradeHistory(BaseSchema):
     trade_pair_id: str
-    strategy_type: Literal["cash_carry", "mt4_spread"] = "cash_carry"
+    strategy_type: Literal["perp_spread", "cash_carry", "mt4_spread"] = "cash_carry"
     symbol: str
     quantity: Decimal
     opened_at: datetime
@@ -156,6 +206,7 @@ class BotSettings(BaseSchema):
     default_leverage: Decimal = Decimal("2")
     max_leverage: Decimal = Decimal("3")
     margin_mode: Literal["isolated", "cross"] = "isolated"
+    min_open_spread_pct: Decimal = Decimal("1.5")
     cash_carry_min_basis_pct: Decimal = Decimal("0.8")
     cash_carry_close_basis_pct: Decimal = Decimal("0.2")
     cash_carry_min_funding_rate_pct: Decimal = Decimal("0")
@@ -166,9 +217,11 @@ class BotSettings(BaseSchema):
     mt4_notional_usdt: Decimal = Decimal("100")
     mt4_default_leverage: Decimal = Decimal("5")
     mt4_max_quote_age_seconds: Decimal = Decimal("10")
+    target_close_spread_pct: Decimal = Decimal("0.3")
     take_profit_usdt: Decimal = Decimal("8")
     stop_loss_usdt: Decimal = Decimal("12")
     max_slippage_pct: Decimal = Decimal("0.2")
+    min_24h_volume_usdt: Decimal = Decimal("300000")
     min_funding_net_usdt: Decimal = Decimal("0.01")
     max_add_count: int = 2
     add_notional_usdt: Decimal = Decimal("0")
@@ -176,6 +229,8 @@ class BotSettings(BaseSchema):
     single_exchange_max_notional_usdt: Decimal = Decimal("1000")
     symbol_blacklist: list[str] = Field(default_factory=list)
     exchange_blacklist: list[ExchangeName] = Field(default_factory=list)
+    auto_open_enabled: bool = False
+    auto_close_enabled: bool = False
     cash_carry_enabled: bool = True
     cash_carry_auto_open_enabled: bool = False
     cash_carry_auto_close_enabled: bool = False
@@ -198,6 +253,7 @@ class BotSettings(BaseSchema):
         "max_symbol_notional_usdt",
         "default_leverage",
         "max_leverage",
+        "min_open_spread_pct",
         "cash_carry_min_basis_pct",
         "cash_carry_close_basis_pct",
         "cash_carry_min_funding_rate_pct",
@@ -207,9 +263,11 @@ class BotSettings(BaseSchema):
         "mt4_notional_usdt",
         "mt4_default_leverage",
         "mt4_max_quote_age_seconds",
+        "target_close_spread_pct",
         "take_profit_usdt",
         "stop_loss_usdt",
         "max_slippage_pct",
+        "min_24h_volume_usdt",
         "min_funding_net_usdt",
         "add_notional_usdt",
         "add_trigger_spread_pct",
@@ -285,6 +343,9 @@ class AIInsight(BaseSchema):
 class RealtimeSnapshot(BaseSchema):
     balances: list[ExchangeBalance]
     positions: list[PositionSnapshot]
+    dashboard: list[DashboardRow] = Field(default_factory=list)
+    opportunities: list[Opportunity] = Field(default_factory=list)
+    opportunity_candidates: list[OpportunityCandidate] = Field(default_factory=list)
     cash_carry_opportunities: list[CashCarryOpportunity]
     cash_carry_candidates: list[CashCarryOpportunity]
     cash_carry_positions: list[CashCarryPositionRow]

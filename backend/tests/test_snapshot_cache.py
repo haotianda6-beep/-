@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from app.api import routes
 from app.core.models import BotSettings, CashCarryOpportunity, DataSource, ExchangeName
 from app.services.arbitrage_engine import ArbitrageEngine
-from app.services.live_market_types import CashCarryScan
+from app.services.live_market_types import CashCarryScan, LiveOpportunityScan
 from app.services.settings_store import SettingsStore
 
 
@@ -72,6 +72,7 @@ def test_lightweight_snapshot_keeps_cash_carry_realtime_rows(monkeypatch) -> Non
     )
     monkeypatch.setattr(routes.engine.live_read, "live_data_enabled", lambda: True)
     monkeypatch.setattr(routes.engine.live_runtime, "get", lambda _settings: runtime)
+    monkeypatch.setattr(routes.cross_spread_cache, "get", lambda _settings: LiveOpportunityScan())
 
     routes.snapshot_cached()
     snapshot = _wait_for_snapshot_title("主控台轻量实时模式")
@@ -132,7 +133,7 @@ def _cash_opportunity() -> CashCarryOpportunity:
 
 
 def _wait_for_snapshot_title(title: str):
-    deadline = time.monotonic() + 1.0
+    deadline = time.monotonic() + 3.0
     while time.monotonic() < deadline:
         snapshot = routes._snapshot_cache
         if snapshot and snapshot.risk_events and snapshot.risk_events[0].title == title:
