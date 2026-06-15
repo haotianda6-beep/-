@@ -4,6 +4,7 @@ input string BridgeBaseUrl = "http://127.0.0.1:8011";
 input string BridgeToken = "";
 input string TradeSymbol = "XAUUSD";
 input int PollMs = 50;
+input int QuotePushMs = 500;
 input int MagicNumber = 260612;
 input double DefaultLots = 0.01;
 input bool UploadHistoryOnStart = true;
@@ -12,6 +13,7 @@ input int HistoryTimeframeMinutes = 1;
 input int HistoryChunkBars = 300;
 
 datetime lastTickSent = 0;
+uint lastQuotePushTick = 0;
 bool historyStarted = false;
 bool historyDone = false;
 int historyNextShift = 0;
@@ -51,12 +53,19 @@ void OnDeinit(const int reason)
 
 void OnTick()
 {
-   if (Symbol() != TradeSymbol) return;
    PostTick();
+   lastQuotePushTick = GetTickCount();
 }
 
 void OnTimer()
 {
+   uint nowTick = GetTickCount();
+   if (QuotePushMs > 0 && (lastQuotePushTick == 0 || nowTick - lastQuotePushTick >= (uint)QuotePushMs))
+   {
+      PostTick();
+      lastQuotePushTick = nowTick;
+   }
+
    if (UploadHistoryOnStart && !historyDone)
    {
       if (!historyStarted) PrepareHistoryUpload();
@@ -85,11 +94,15 @@ void OnTimer()
 void PostTick()
 {
    RefreshRates();
+   double bid = MarketInfo(TradeSymbol, MODE_BID);
+   double ask = MarketInfo(TradeSymbol, MODE_ASK);
+   int digits = (int)MarketInfo(TradeSymbol, MODE_DIGITS);
+   if (bid <= 0 || ask <= 0) return;
    string positions = PositionsJson();
    string json = "{";
    json += "\"symbol\":\"" + JsonEscape(TradeSymbol) + "\",";
-   json += "\"bid\":" + DoubleToString(Bid, Digits) + ",";
-   json += "\"ask\":" + DoubleToString(Ask, Digits) + ",";
+   json += "\"bid\":" + DoubleToString(bid, digits) + ",";
+   json += "\"ask\":" + DoubleToString(ask, digits) + ",";
    json += "\"swap_long_per_lot\":" + DoubleToString(MarketInfo(TradeSymbol, MODE_SWAPLONG), 8) + ",";
    json += "\"swap_short_per_lot\":" + DoubleToString(MarketInfo(TradeSymbol, MODE_SWAPSHORT), 8) + ",";
    json += "\"swap_type\":" + IntegerToString((int)MarketInfo(TradeSymbol, MODE_SWAPTYPE)) + ",";
