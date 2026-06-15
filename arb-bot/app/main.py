@@ -63,7 +63,30 @@ async def startup() -> None:
 async def shutdown() -> None:
     if _loop_task:
         _loop_task.cancel()
+    await _cancel_unfilled_active_order_on_shutdown()
     await binance_client.stop()
+
+
+async def _cancel_unfilled_active_order_on_shutdown() -> None:
+    order = strategy.active_order
+    if settings.is_dry_run or order is None:
+        return
+    try:
+        latest = await binance_client.get_order(order.order_id)
+        if latest is not None:
+            order = latest
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("failed to refresh active Binance order during shutdown: %s", str(exc)[:160])
+    if order.executed_qty > 0:
+        logger.warning("active Binance order has fills during shutdown order_id=%s executed_qty=%s", order.order_id, order.executed_qty)
+        return
+    if order.status in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED}:
+        return
+    try:
+        await binance_client.cancel_order(order.order_id)
+        logger.info("canceled unfilled active Binance order during shutdown order_id=%s", order.order_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("failed to cancel active Binance order during shutdown: %s", str(exc)[:160])
 
 
 @app.get("/health")
@@ -317,6 +340,9 @@ def _position_metrics() -> PositionMetrics:
         binance_funding_rate=funding.funding_rate if funding else None,
         binance_next_funding_time_ms=funding.next_funding_time_ms if funding else None,
         mt4_next_rollover_time_ms=swap_info.next_rollover_time_ms,
+        mt4_swap_long_per_lot=swap_info.swap_long_per_lot,
+        mt4_swap_short_per_lot=swap_info.swap_short_per_lot,
+        mt4_swap_type=swap_info.swap_type,
     )
     if not pair:
         return metrics
@@ -420,9 +446,12 @@ def _execution_plan() -> ExecutionPlanStatus:
         price_limit = plan.mt4_price_limit if plan else None
         return ExecutionPlanStatus(
             summary=f"币安当前挂单：{_side_text(order.side)} {order.orig_qty} XAU，价格 {order.price}，状态 {_order_status_text(order.status.value)}。",
+            active_binance_order=True,
+            binance_order_status=order.status,
             binance_order_side=order.side,
             binance_order_price=order.price,
             binance_order_qty=order.orig_qty,
+            binance_order_executed_qty=order.executed_qty,
             mt4_follow_side=follow_side,
             mt4_price_limit=price_limit,
             max_follow_seconds=max_follow_seconds,

@@ -245,6 +245,9 @@ class PositionMetrics(BaseModel):
     binance_next_funding_time_ms: int | None = None
     binance_funding_estimate: Decimal | None = None
     mt4_next_rollover_time_ms: int | None = None
+    mt4_swap_long_per_lot: Decimal | None = None
+    mt4_swap_short_per_lot: Decimal | None = None
+    mt4_swap_type: int | None = None
     mt4_swap_estimate: Decimal | None = None
     mt4_accrued_swap: Decimal | None = None
     estimated_close_gross: Decimal | None = None
@@ -254,9 +257,12 @@ class PositionMetrics(BaseModel):
 
 class ExecutionPlanStatus(BaseModel):
     summary: str
+    active_binance_order: bool = False
+    binance_order_status: OrderStatus | None = None
     binance_order_side: Side | None = None
     binance_order_price: Decimal | None = None
     binance_order_qty: Decimal | None = None
+    binance_order_executed_qty: Decimal | None = None
     mt4_follow_side: Side | None = None
     mt4_price_limit: Decimal | None = None
     max_follow_seconds: Decimal

@@ -302,6 +302,12 @@
         white-space: nowrap;
       }
 
+      .compact-row span.wrap {
+        overflow: visible;
+        text-overflow: clip;
+        white-space: normal;
+      }
+
       .log {
         min-height: 54px;
         max-height: 84px;
@@ -460,6 +466,36 @@
               <div class="compact-row">
                 <strong>当前价差</strong>
                 <span id="spreadLine">-</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>当前币安限价单</h2>
+            <div class="compact-list">
+              <div class="compact-row">
+                <strong>挂单状态</strong>
+                <span id="limitOrderState">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>方向数量</strong>
+                <span id="limitOrderSideQty">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>挂单价格</strong>
+                <span id="limitOrderPrice">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>距离成交</strong>
+                <span id="limitOrderDistance">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>MT4 跟随</strong>
+                <span id="limitOrderMt4Follow">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>说明</strong>
+                <span class="wrap" id="limitOrderSummary">-</span>
               </div>
             </div>
           </div>
@@ -806,6 +842,7 @@
         $("mt4Line").textContent = m ? `买 ${fmt(m.bid)} / 卖 ${fmt(m.ask)} / ${age(m.timestamp_ms)}` : "等待报价";
         $("spreadLine").textContent = b && m ? `开仓差 ${fmt(Number(b.ask) - Number(m.ask))} 美元；反向差 ${fmt(Number(m.bid) - Number(b.bid))} 美元` : "-";
         renderAccounts(data);
+        renderLimitOrder(data);
 
         const pair = data.open_pair;
         const metrics = data.position_metrics || {};
@@ -818,6 +855,43 @@
         $("executionPlan").textContent = data.execution_plan?.summary || "-";
         $("followLimit").textContent = data.execution_plan ? `币安成交后 MT4 需要在 ${fmt(data.execution_plan.max_follow_seconds)} 秒内回报；EA 当前建议轮询 0.05 秒。` : "-";
         renderConfig(data.config);
+      }
+
+      function renderLimitOrder(data) {
+        const plan = data.execution_plan || {};
+        const quote = data.binance_quote;
+        const hasOrder = Boolean(plan.active_binance_order);
+        const hasPlannedPrice = plan.binance_order_price !== null && plan.binance_order_price !== undefined;
+        if (!hasOrder && !hasPlannedPrice) {
+          $("limitOrderState").textContent = "当前未挂单";
+          $("limitOrderSideQty").textContent = "-";
+          $("limitOrderPrice").textContent = "-";
+          $("limitOrderDistance").textContent = "-";
+          $("limitOrderMt4Follow").textContent = "-";
+          $("limitOrderSummary").textContent = plan.summary || "等待价差达到开仓条件";
+          return;
+        }
+
+        const status = hasOrder ? translateOrderStatus(plan.binance_order_status) : "计划挂单";
+        const postOnly = hasOrder ? "Post Only 已挂出" : "条件满足时才会挂出";
+        $("limitOrderState").textContent = `${status}，${postOnly}`;
+        $("limitOrderSideQty").textContent = `${translateAction(plan.binance_order_side)} ${fmt(plan.binance_order_qty)} XAU，已成交 ${fmt(plan.binance_order_executed_qty || 0)} XAU`;
+        $("limitOrderPrice").textContent = `${fmt(plan.binance_order_price)} 美元`;
+        $("limitOrderDistance").textContent = orderDistanceText(plan, quote);
+        $("limitOrderMt4Follow").textContent = plan.mt4_follow_side ? `${translateAction(plan.mt4_follow_side)}，保护价 ${fmt(plan.mt4_price_limit)}，${fmt(plan.max_follow_seconds)} 秒内回报` : "-";
+        $("limitOrderSummary").textContent = plan.summary || "-";
+      }
+
+      function orderDistanceText(plan, quote) {
+        if (!quote || plan.binance_order_price === null || plan.binance_order_price === undefined || !plan.binance_order_side) return "等待币安报价";
+        const price = Number(plan.binance_order_price);
+        if (!Number.isFinite(price)) return "-";
+        if (plan.binance_order_side === "SELL") {
+          const distance = price - Number(quote.ask);
+          return distance > 0 ? `还差 ${fmt(distance)} 美元上涨到挂单价` : "已触达挂单价，等待交易所成交回报";
+        }
+        const distance = Number(quote.bid) - price;
+        return distance > 0 ? `还差 ${fmt(distance)} 美元下跌到挂单价` : "已触达挂单价，等待交易所成交回报";
       }
 
       function renderAccounts(data) {
@@ -843,10 +917,31 @@
 
       function renderMt4Swap(metrics, pair) {
         if (!metrics) return "-";
+        const parts = [];
+        if (metrics.mt4_swap_long_per_lot !== null && metrics.mt4_swap_long_per_lot !== undefined) {
+          parts.push(`多单 ${signedUsd(metrics.mt4_swap_long_per_lot)}/手`);
+        }
+        if (metrics.mt4_swap_short_per_lot !== null && metrics.mt4_swap_short_per_lot !== undefined) {
+          parts.push(`空单 ${signedUsd(metrics.mt4_swap_short_per_lot)}/手`);
+        }
+        if (metrics.mt4_swap_type !== null && metrics.mt4_swap_type !== undefined) {
+          parts.push(`类型 ${mt4SwapTypeText(metrics.mt4_swap_type)}`);
+        }
         const next = metrics.mt4_next_rollover_time_ms ? `倒计时 ${countdown(metrics.mt4_next_rollover_time_ms)}` : "等待新版 EA 上报过夜时间";
         const estimate = pair && metrics.mt4_swap_estimate !== null && metrics.mt4_swap_estimate !== undefined ? `，下次预估 ${signedUsd(metrics.mt4_swap_estimate)}` : "";
         const accrued = metrics.mt4_accrued_swap !== null && metrics.mt4_accrued_swap !== undefined ? `，已产生 ${signedUsd(metrics.mt4_accrued_swap)}` : "";
-        return `${next}${estimate}${accrued}`;
+        parts.push(next);
+        return `${parts.join("，")}${estimate}${accrued}`;
+      }
+
+      function mt4SwapTypeText(value) {
+        const map = {
+          0: "按点数",
+          1: "按基准货币",
+          2: "按利息",
+          3: "按保证金币种",
+        };
+        return map[Number(value)] || String(value);
       }
 
       function renderConfig(config) {
@@ -1006,6 +1101,18 @@
           BUY: "买入",
           SELL: "卖出",
           CLOSE: "平仓",
+        };
+        return map[value] || value || "-";
+      }
+
+      function translateOrderStatus(value) {
+        const map = {
+          NEW: "等待成交",
+          PARTIALLY_FILLED: "部分成交",
+          FILLED: "已成交",
+          CANCELED: "已撤单",
+          REJECTED: "已拒绝",
+          EXPIRED: "已过期",
         };
         return map[value] || value || "-";
       }
