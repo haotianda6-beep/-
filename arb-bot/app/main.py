@@ -429,8 +429,12 @@ def _runtime_config() -> RuntimeConfig:
         binance_leverage=settings.binance_leverage,
         binance_entry_offset_usd=settings.binance_entry_offset_usd,
         open_min_edge=settings.open_min_edge,
+        cancel_min_edge=settings.cancel_min_edge,
         close_max_spread=settings.close_max_spread,
         min_locked_edge=settings.min_locked_edge,
+        entry_confirm_ms=settings.entry_confirm_ms,
+        min_order_live_ms=settings.min_order_live_ms,
+        requote_cooldown_ms=settings.requote_cooldown_ms,
         max_order_age_ms=settings.max_order_age_ms,
         max_quote_age_ms=settings.max_quote_age_ms,
         max_hedge_delay_ms=settings.max_hedge_delay_ms,
@@ -603,8 +607,10 @@ def _execution_plan() -> ExecutionPlanStatus:
             return ExecutionPlanStatus(summary=f"{quote_block_reason}，暂不挂开仓单。", max_follow_seconds=max_follow_seconds)
         entry_plan = build_entry_plan(settings, binance_client.filters, binance_quote, mt4_quote)
         if entry_plan:
+            confirm_left = max(0, settings.entry_confirm_ms - strategy.entry_candidate_age_ms())
+            confirm_text = "已通过稳定确认" if confirm_left == 0 else f"还需稳定 {confirm_left} 毫秒"
             return ExecutionPlanStatus(
-                summary=f"开仓条件已满足：币安挂 {_side_text(entry_plan.binance_side)} 限价 {entry_plan.limit_price}，数量 {entry_plan.quantity_oz} XAU；成交后 MT4 {_side_text(entry_plan.mt4_hedge_side)} 市价对冲，保护价 {entry_plan.mt4_price_limit}。",
+                summary=f"开仓条件已满足：{confirm_text}；币安将挂 {_side_text(entry_plan.binance_side)} 限价 {entry_plan.limit_price}，数量 {entry_plan.quantity_oz} XAU；成交后 MT4 {_side_text(entry_plan.mt4_hedge_side)} 市价对冲，保护价 {entry_plan.mt4_price_limit}。",
                 binance_order_side=entry_plan.binance_side,
                 binance_order_price=entry_plan.limit_price,
                 binance_order_qty=entry_plan.quantity_oz,
@@ -615,7 +621,7 @@ def _execution_plan() -> ExecutionPlanStatus:
         high_edge = binance_quote.ask - mt4_quote.ask
         low_edge = mt4_quote.bid - binance_quote.bid
         return ExecutionPlanStatus(
-            summary=f"等待开仓：币安高价差 {high_edge:.4f} 美元，币安低价差 {low_edge:.4f} 美元；任一方向达到 {settings.open_min_edge} 美元才挂单，挂单距离当前价 {settings.binance_entry_offset_usd} 美元。",
+            summary=f"等待开仓：币安高价差 {high_edge:.4f} 美元，币安低价差 {low_edge:.4f} 美元；任一方向达到 {settings.open_min_edge} 美元并稳定 {settings.entry_confirm_ms} 毫秒才挂单，挂单偏移 {settings.binance_entry_offset_usd} 美元，挂单后低于 {settings.cancel_min_edge} 美元才考虑撤单。",
             max_follow_seconds=max_follow_seconds,
         )
     return ExecutionPlanStatus(summary="等待 Binance 和 MT4 报价齐全。", max_follow_seconds=max_follow_seconds)

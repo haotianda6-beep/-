@@ -16,8 +16,12 @@ CONFIG_FIELD_TO_ENV = {
     "binance_leverage": "BINANCE_LEVERAGE",
     "binance_entry_offset_usd": "BINANCE_ENTRY_OFFSET_USD",
     "open_min_edge": "OPEN_MIN_EDGE",
+    "cancel_min_edge": "CANCEL_MIN_EDGE",
     "close_max_spread": "CLOSE_MAX_SPREAD",
     "min_locked_edge": "MIN_LOCKED_EDGE",
+    "entry_confirm_ms": "ENTRY_CONFIRM_MS",
+    "min_order_live_ms": "MIN_ORDER_LIVE_MS",
+    "requote_cooldown_ms": "REQUOTE_COOLDOWN_MS",
     "max_order_age_ms": "MAX_ORDER_AGE_MS",
     "max_quote_age_ms": "MAX_QUOTE_AGE_MS",
     "max_hedge_delay_ms": "MAX_HEDGE_DELAY_MS",
@@ -59,12 +63,16 @@ class Settings(BaseSettings):
     binance_qty_step: Decimal = Field(default=Decimal("0.001"), alias="BINANCE_QTY_STEP")
     binance_min_qty: Decimal = Field(default=Decimal("0.001"), alias="BINANCE_MIN_QTY")
     binance_leverage: int = Field(default=20, alias="BINANCE_LEVERAGE")
-    binance_entry_offset_usd: Decimal = Field(default=Decimal("3"), alias="BINANCE_ENTRY_OFFSET_USD")
+    binance_entry_offset_usd: Decimal = Field(default=Decimal("1"), alias="BINANCE_ENTRY_OFFSET_USD")
 
     mt4_bridge_token: SecretStr | None = Field(default=None, alias="MT4_BRIDGE_TOKEN")
     open_min_edge: Decimal = Field(default=Decimal("1.50"), alias="OPEN_MIN_EDGE")
+    cancel_min_edge: Decimal = Field(default=Decimal("1.20"), alias="CANCEL_MIN_EDGE")
     close_max_spread: Decimal = Field(default=Decimal("0.30"), alias="CLOSE_MAX_SPREAD")
     min_locked_edge: Decimal = Field(default=Decimal("0.80"), alias="MIN_LOCKED_EDGE")
+    entry_confirm_ms: int = Field(default=1500, alias="ENTRY_CONFIRM_MS")
+    min_order_live_ms: int = Field(default=3000, alias="MIN_ORDER_LIVE_MS")
+    requote_cooldown_ms: int = Field(default=2000, alias="REQUOTE_COOLDOWN_MS")
     max_order_age_ms: int = Field(default=300, alias="MAX_ORDER_AGE_MS")
     max_quote_age_ms: int = Field(default=1500, alias="MAX_QUOTE_AGE_MS")
     max_hedge_delay_ms: int = Field(default=800, alias="MAX_HEDGE_DELAY_MS")
@@ -81,6 +89,7 @@ class Settings(BaseSettings):
     @field_validator(
         "open_min_edge",
         "close_max_spread",
+        "cancel_min_edge",
         "min_locked_edge",
         "max_unhedged_loss_usd_per_oz",
         "daily_loss_limit_usdt",
@@ -101,6 +110,22 @@ class Settings(BaseSettings):
     def valid_leverage(cls, value: int) -> int:
         if value < 1 or value > 125:
             raise ValueError("binance leverage must be between 1 and 125")
+        return value
+
+    @field_validator(
+        "entry_confirm_ms",
+        "min_order_live_ms",
+        "requote_cooldown_ms",
+        "max_order_age_ms",
+        "max_quote_age_ms",
+        "max_hedge_delay_ms",
+        "loop_interval_ms",
+        "paper_fill_delay_ms",
+    )
+    @classmethod
+    def non_negative_or_positive_timing(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("timing values must not be negative")
         return value
 
     @property

@@ -95,6 +95,9 @@ class StrategyEngine:
         self.risk = risk
         self.storage = storage
         self.state = StrategyState.IDLE
+        self.candidate_plan: EntryPlan | None = None
+        self.candidate_started_ms = 0
+        self.last_entry_cancel_ms = 0
         self.active_plan: EntryPlan | None = None
         self.active_order: OrderUpdate | None = None
         self.order_created_ms = 0
@@ -140,8 +143,15 @@ class StrategyEngine:
         self._reset_all()
         self.last_error = None
 
+    def entry_candidate_age_ms(self) -> int:
+        if not self.candidate_plan or self.candidate_started_ms <= 0:
+            return 0
+        return max(0, utc_now_ms() - self.candidate_started_ms)
+
     async def _maybe_enter(self, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> None:
         if not binance_quote or not mt4_quote:
+            return
+        if self.last_entry_cancel_ms and utc_now_ms() - self.last_entry_cancel_ms < self.settings.requote_cooldown_ms:
             return
         if not self.settings.is_dry_run:
             live_check = self.risk.live_ready(
@@ -154,8 +164,12 @@ class StrategyEngine:
                 return
         plan = build_entry_plan(self.settings, self.binance.filters, binance_quote, mt4_quote)
         if not plan:
+            self._clear_entry_candidate()
+            return
+        if not self._entry_candidate_ready(plan):
             return
         if not await self._live_entry_guard_ok():
+            self._clear_entry_candidate()
             return
         order = await self.binance.place_post_only_order(
             OrderRequest(
@@ -167,7 +181,9 @@ class StrategyEngine:
             )
         )
         self.storage.record_event("entry_order", order.model_dump(mode="json"))
+        self._clear_entry_candidate()
         if order.status == OrderStatus.REJECTED:
+            self.last_entry_cancel_ms = utc_now_ms()
             return
         self.active_plan = plan
         self.active_order = order
@@ -178,7 +194,8 @@ class StrategyEngine:
         if not self.active_order or not self.active_plan:
             self.state = StrategyState.IDLE
             return
-        if utc_now_ms() - self.order_created_ms > self.settings.max_order_age_ms:
+        entry_max_age_ms = max(self.settings.max_order_age_ms, self.settings.min_order_live_ms)
+        if utc_now_ms() - self.order_created_ms > entry_max_age_ms:
             order = await self._cancel_entry_order(self.active_order)
             if order is None:
                 return
@@ -194,7 +211,7 @@ class StrategyEngine:
             self._clear_entry()
             return
         if order.status in {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED} and self.active_plan:
-            if not self._entry_plan_still_valid():
+            if not self._entry_plan_still_valid() and self._entry_order_can_cancel_for_spread():
                 order = await self._cancel_entry_order(order)
                 if order is None:
                     return
@@ -215,8 +232,27 @@ class StrategyEngine:
         mt4_quote = self.mt4.latest_quote()
         if not binance_quote or not mt4_quote:
             return False
-        current_plan = build_entry_plan(self.settings, self.binance.filters, binance_quote, mt4_quote)
-        return bool(current_plan and current_plan.direction == self.active_plan.direction)
+        if self.active_plan.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            return binance_quote.ask - mt4_quote.ask >= self.settings.cancel_min_edge
+        return mt4_quote.bid - binance_quote.bid >= self.settings.cancel_min_edge
+
+    def _entry_order_can_cancel_for_spread(self) -> bool:
+        if self.settings.min_order_live_ms <= 0:
+            return True
+        return utc_now_ms() - self.order_created_ms >= self.settings.min_order_live_ms
+
+    def _entry_candidate_ready(self, plan: EntryPlan) -> bool:
+        now = utc_now_ms()
+        if not self.candidate_plan or self.candidate_plan.direction != plan.direction:
+            self.candidate_plan = plan
+            self.candidate_started_ms = now
+            return self.settings.entry_confirm_ms <= 0
+        self.candidate_plan = plan
+        return now - self.candidate_started_ms >= self.settings.entry_confirm_ms
+
+    def _clear_entry_candidate(self) -> None:
+        self.candidate_plan = None
+        self.candidate_started_ms = 0
 
     async def _cancel_stale_entry_quote(self) -> None:
         reason = self.last_error or "quote stale during entry"
@@ -486,6 +522,8 @@ class StrategyEngine:
         return True
 
     def _clear_entry(self) -> None:
+        self.last_entry_cancel_ms = utc_now_ms()
+        self._clear_entry_candidate()
         self.active_plan = None
         self.active_order = None
         self.hedged_qty = Decimal("0")
@@ -493,6 +531,7 @@ class StrategyEngine:
         self.state = StrategyState.IDLE
 
     def _reset_all(self) -> None:
+        self._clear_entry_candidate()
         self.active_plan = None
         self.active_order = None
         self.open_pair = None

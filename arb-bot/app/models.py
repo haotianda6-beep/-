@@ -275,8 +275,12 @@ class RuntimeConfig(BaseModel):
     binance_leverage: int
     binance_entry_offset_usd: Decimal
     open_min_edge: Decimal
+    cancel_min_edge: Decimal
     close_max_spread: Decimal
     min_locked_edge: Decimal
+    entry_confirm_ms: int
+    min_order_live_ms: int
+    requote_cooldown_ms: int
     max_order_age_ms: int
     max_quote_age_ms: int
     max_hedge_delay_ms: int
@@ -294,8 +298,12 @@ class RuntimeConfigUpdate(BaseModel):
     binance_leverage: int | None = None
     binance_entry_offset_usd: Decimal | None = None
     open_min_edge: Decimal | None = None
+    cancel_min_edge: Decimal | None = None
     close_max_spread: Decimal | None = None
     min_locked_edge: Decimal | None = None
+    entry_confirm_ms: int | None = None
+    min_order_live_ms: int | None = None
+    requote_cooldown_ms: int | None = None
     max_order_age_ms: int | None = None
     max_quote_age_ms: int | None = None
     max_hedge_delay_ms: int | None = None
@@ -310,6 +318,7 @@ class RuntimeConfigUpdate(BaseModel):
 
     @field_validator(
         "open_min_edge",
+        "cancel_min_edge",
         "close_max_spread",
         "min_locked_edge",
         "max_unhedged_loss_usd_per_oz",
@@ -328,13 +337,16 @@ class RuntimeConfigUpdate(BaseModel):
         "max_order_age_ms",
         "max_quote_age_ms",
         "max_hedge_delay_ms",
+        "entry_confirm_ms",
+        "min_order_live_ms",
+        "requote_cooldown_ms",
         "loop_interval_ms",
         "paper_fill_delay_ms",
     )
     @classmethod
     def positive_int(cls, value: int | None) -> int | None:
-        if value is not None and value <= 0:
-            raise ValueError("必须大于 0")
+        if value is not None and value < 0:
+            raise ValueError("不能小于 0")
         return value
 
     @field_validator("mt4_slippage_points")

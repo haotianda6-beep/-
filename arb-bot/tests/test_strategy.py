@@ -17,6 +17,10 @@ def settings(tmp_path, **kwargs) -> Settings:
         "LIVE_TRADING": False,
         "SQLITE_PATH": tmp_path / "test.sqlite3",
         "PAPER_AUTO_FILL": False,
+        "ENTRY_CONFIRM_MS": 0,
+        "MIN_ORDER_LIVE_MS": 0,
+        "REQUOTE_COOLDOWN_MS": 0,
+        "CANCEL_MIN_EDGE": Decimal("1.20"),
         "TARGET_OZ": Decimal("1"),
         "MT4_LOT_SIZE_OZ": Decimal("100"),
         **kwargs,
@@ -99,6 +103,81 @@ async def test_unfilled_entry_order_cancels_when_spread_no_longer_valid(tmp_path
     canceled = await client.get_order(order.order_id)
     assert canceled is not None
     assert canceled.status == OrderStatus.CANCELED
+
+
+@pytest.mark.asyncio
+async def test_entry_requires_confirm_time_before_order(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path, settings_kwargs={"ENTRY_CONFIRM_MS": 1000})
+
+    await engine.step()
+
+    assert engine.state == StrategyState.IDLE
+    assert engine.active_order is None
+    assert engine.candidate_plan is not None
+
+    engine.candidate_started_ms -= 1000
+    await engine.step()
+
+    assert engine.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert engine.active_order is not None
+
+
+@pytest.mark.asyncio
+async def test_cancel_hysteresis_keeps_order_until_cancel_edge_breaks(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        settings_kwargs={
+            "OPEN_MIN_EDGE": Decimal("2.00"),
+            "CANCEL_MIN_EDGE": Decimal("1.70"),
+            "MIN_ORDER_LIVE_MS": 0,
+        },
+    )
+    await engine.step()
+    order = engine.active_order
+    assert order is not None
+
+    client.set_quote(Decimal("2001.7"), Decimal("2001.8"))
+    await engine.step()
+
+    assert engine.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert engine.active_order is not None
+    still_open = await client.get_order(order.order_id)
+    assert still_open is not None
+    assert still_open.status == OrderStatus.NEW
+
+    client.set_quote(Decimal("2001.5"), Decimal("2001.6"))
+    await engine.step()
+
+    assert engine.state == StrategyState.IDLE
+    canceled = await client.get_order(order.order_id)
+    assert canceled is not None
+    assert canceled.status == OrderStatus.CANCELED
+
+
+@pytest.mark.asyncio
+async def test_requote_cooldown_blocks_immediate_reentry_after_cancel(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        settings_kwargs={"REQUOTE_COOLDOWN_MS": 2000, "CANCEL_MIN_EDGE": Decimal("1.20")},
+    )
+    await engine.step()
+    order = engine.active_order
+    assert order is not None
+
+    client.set_quote(Decimal("2000.4"), Decimal("2000.5"))
+    await engine.step()
+    assert engine.state == StrategyState.IDLE
+
+    client.set_quote(Decimal("2001"), Decimal("2002"))
+    await engine.step()
+    assert engine.active_order is None
+
+    engine.last_entry_cancel_ms -= 2000
+    await engine.step()
+
+    assert engine.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert engine.active_order is not None
+    assert engine.active_order.order_id != order.order_id
 
 
 @pytest.mark.asyncio
@@ -240,8 +319,15 @@ class NotVisibleOncePaperClient(PaperBinanceClient):
         return await super().get_order(order_id)
 
 
-async def make_engine(tmp_path, client_cls=PaperBinanceClient):
-    cfg = settings(tmp_path, PAPER_MODE=False, LIVE_TRADING=True, BINANCE_API_KEY="test-key", BINANCE_API_SECRET="test-secret")
+async def make_engine(tmp_path, client_cls=PaperBinanceClient, settings_kwargs=None):
+    cfg = settings(
+        tmp_path,
+        PAPER_MODE=False,
+        LIVE_TRADING=True,
+        BINANCE_API_KEY="test-key",
+        BINANCE_API_SECRET="test-secret",
+        **(settings_kwargs or {}),
+    )
     client = client_cls(cfg)
     client.set_quote(Decimal("2001"), Decimal("2002"))
     mt4 = Mt4Bridge(cfg)

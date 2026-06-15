@@ -19,6 +19,9 @@ def settings(tmp_path, **kwargs) -> Settings:
         PAPER_AUTO_FILL=False,
         SQLITE_PATH=tmp_path / "test.sqlite3",
         MAX_QUOTE_AGE_MS=500,
+        ENTRY_CONFIRM_MS=0,
+        MIN_ORDER_LIVE_MS=0,
+        REQUOTE_COOLDOWN_MS=0,
         **kwargs,
     )
 

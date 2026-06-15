@@ -617,6 +617,22 @@
                   <td><div class="input-row"><input id="cfgOpenMinEdge" inputmode="decimal" /><small>美元</small></div></td>
                 </tr>
                 <tr>
+                  <th>开仓确认时间</th>
+                  <td><div class="input-row"><input id="cfgEntryConfirmMs" inputmode="numeric" /><small>毫秒</small></div></td>
+                </tr>
+                <tr>
+                  <th>撤单价差下限</th>
+                  <td><div class="input-row"><input id="cfgCancelMinEdge" inputmode="decimal" /><small>美元</small></div></td>
+                </tr>
+                <tr>
+                  <th>挂单最短保留</th>
+                  <td><div class="input-row"><input id="cfgMinOrderLiveMs" inputmode="numeric" /><small>毫秒</small></div></td>
+                </tr>
+                <tr>
+                  <th>撤后冷却</th>
+                  <td><div class="input-row"><input id="cfgRequoteCooldownMs" inputmode="numeric" /><small>毫秒</small></div></td>
+                </tr>
+                <tr>
                   <th>平仓收敛价差</th>
                   <td><div class="input-row"><input id="cfgCloseMaxSpread" inputmode="decimal" /><small>美元</small></div></td>
                 </tr>
@@ -680,6 +696,10 @@
         ["cfgTargetOz", "target_oz", "number"],
         ["cfgBinanceEntryOffset", "binance_entry_offset_usd", "number"],
         ["cfgOpenMinEdge", "open_min_edge", "number"],
+        ["cfgEntryConfirmMs", "entry_confirm_ms", "number"],
+        ["cfgCancelMinEdge", "cancel_min_edge", "number"],
+        ["cfgMinOrderLiveMs", "min_order_live_ms", "number"],
+        ["cfgRequoteCooldownMs", "requote_cooldown_ms", "number"],
         ["cfgCloseMaxSpread", "close_max_spread", "number"],
         ["cfgMinLockedEdge", "min_locked_edge", "number"],
         ["cfgMt4LotSize", "mt4_lot_size_oz", "number"],
