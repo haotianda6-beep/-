@@ -362,6 +362,13 @@ def _assert_live_preflight() -> None:
 
 
 async def _prepare_live_stop() -> None:
+    await _cancel_orphan_arb_orders("manual_stop")
+    try:
+        qty = await binance_client.position_quantity()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"停止实盘前检查币安持仓失败：{str(exc)[:160]}") from exc
+    if qty != 0 and strategy.open_pair is None:
+        raise HTTPException(status_code=400, detail=f"币安仍有 {settings.binance_symbol} 持仓 {qty}，不能直接停止；请先确认并平仓")
     if strategy.open_pair is not None:
         raise HTTPException(status_code=400, detail="当前有组合持仓，不能直接停止实盘；请先完成平仓")
     order = strategy.active_order

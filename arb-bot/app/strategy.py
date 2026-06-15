@@ -155,6 +155,8 @@ class StrategyEngine:
         plan = build_entry_plan(self.settings, self.binance.filters, binance_quote, mt4_quote)
         if not plan:
             return
+        if not await self._live_entry_guard_ok():
+            return
         order = await self.binance.place_post_only_order(
             OrderRequest(
                 symbol=self.settings.binance_symbol,
@@ -178,6 +180,8 @@ class StrategyEngine:
             return
         if utc_now_ms() - self.order_created_ms > self.settings.max_order_age_ms:
             order = await self._cancel_entry_order(self.active_order)
+            if order is None:
+                return
             if await self._handle_entry_cancel_fill(order, "币安开仓挂单超时，撤单时发现已有成交", allow_mt4_hedge=True):
                 return
             self._clear_entry()
@@ -192,6 +196,8 @@ class StrategyEngine:
         if order.status in {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED} and self.active_plan:
             if not self._entry_plan_still_valid():
                 order = await self._cancel_entry_order(order)
+                if order is None:
+                    return
                 if await self._handle_entry_cancel_fill(order, "币安开仓价差失效，撤单时发现已有成交", allow_mt4_hedge=True):
                     return
                 if order.executed_qty <= self.hedged_qty + self.pending_hedge_qty:
@@ -217,6 +223,8 @@ class StrategyEngine:
         order = await self._refresh_entry_order()
         if order:
             order = await self._cancel_entry_order(order)
+            if order is None:
+                return
             if await self._handle_entry_cancel_fill(order, reason, allow_mt4_hedge=False):
                 return
         self.storage.record_event("entry_quote_stale_cancel", {"reason": reason, "order_id": order.order_id if order else None})
@@ -230,19 +238,22 @@ class StrategyEngine:
             order = await self.binance.get_order(self.active_order.order_id)
         except BinanceError as exc:
             if _binance_order_missing(exc):
+                age_ms = utc_now_ms() - self.order_created_ms
                 self.storage.record_event(
-                    "entry_order_missing",
-                    {"order_id": self.active_order.order_id, "error": str(exc)[:160]},
+                    "entry_order_not_visible",
+                    {"order_id": self.active_order.order_id, "age_ms": age_ms, "error": str(exc)[:160]},
                 )
-                self.last_error = "币安挂单不存在，已清理本地跟踪"
-                self._clear_entry()
+                if age_ms > self.settings.max_order_age_ms + 10000:
+                    self.state = StrategyState.PAUSED
+                    self.last_error = "币安挂单长时间查询不到，已暂停，需人工确认币安挂单/持仓"
+                    return None
                 return None
             raise
         if order:
             self.active_order = order
         return order
 
-    async def _cancel_entry_order(self, order: OrderUpdate) -> OrderUpdate:
+    async def _cancel_entry_order(self, order: OrderUpdate) -> OrderUpdate | None:
         if order.status in TERMINAL_ORDER_STATUSES:
             self.active_order = order
             return order
@@ -252,8 +263,10 @@ class StrategyEngine:
                 self.active_order = canceled
                 return canceled
         except BinanceError as exc:
-            if not _binance_order_missing(exc):
-                raise
+            if _binance_order_missing(exc):
+                self.storage.record_event("entry_order_cancel_not_visible", {"order_id": order.order_id, "error": str(exc)[:160]})
+                return None
+            raise
         try:
             refreshed = await self.binance.get_order(order.order_id)
             if refreshed:
@@ -263,7 +276,7 @@ class StrategyEngine:
             if not _binance_order_missing(exc):
                 raise
             self.storage.record_event("entry_order_missing_after_cancel", {"order_id": order.order_id, "error": str(exc)[:160]})
-        return order
+        return None
 
     async def _handle_entry_cancel_fill(self, order: OrderUpdate, reason: str, allow_mt4_hedge: bool) -> bool:
         unhedged_qty = order.executed_qty - self.hedged_qty - self.pending_hedge_qty
@@ -286,6 +299,43 @@ class StrategyEngine:
             await self._queue_mt4_hedge(unhedged_qty, order.avg_price)
             return True
         await self._emergency_close(reason)
+        return True
+
+    async def _live_entry_guard_ok(self) -> bool:
+        if self.settings.is_dry_run:
+            return True
+        try:
+            open_orders = await self.binance.open_orders()
+            position_qty = await self.binance.position_quantity()
+        except Exception as exc:  # noqa: BLE001
+            self.state = StrategyState.PAUSED
+            self.last_error = f"开仓前检查币安挂单/持仓失败，已暂停：{str(exc)[:120]}"
+            self.storage.record_event("live_entry_guard_failed", {"error": str(exc)[:160]})
+            return False
+        arb_orders = [
+            order
+            for order in open_orders
+            if order.client_order_id.startswith("arb_") and not order.reduce_only
+        ]
+        if position_qty != 0 or arb_orders:
+            self.state = StrategyState.PAUSED
+            self.last_error = "开仓前发现币安已有黄金持仓或遗留程序挂单，已暂停自动开仓"
+            self.storage.record_event(
+                "live_entry_guard_blocked",
+                {
+                    "position_qty": str(position_qty),
+                    "open_orders": [
+                        {
+                            "order_id": order.order_id,
+                            "side": order.side.value,
+                            "price": str(order.price),
+                            "executed_qty": str(order.executed_qty),
+                        }
+                        for order in arb_orders
+                    ],
+                },
+            )
+            return False
         return True
 
     async def _queue_mt4_hedge(self, qty: Decimal, fill_price: Decimal) -> None:

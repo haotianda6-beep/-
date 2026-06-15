@@ -468,6 +468,8 @@ class BinanceFuturesClient(BinanceBaseClient):
             "quantity": str(request.quantity),
             "newClientOrderId": request.client_order_id,
         }
+        if order_type == "MARKET":
+            params["newOrderRespType"] = "RESULT"
         if request.price is not None and order_type == "LIMIT":
             params["price"] = str(request.price)
         if request.reduce_only:

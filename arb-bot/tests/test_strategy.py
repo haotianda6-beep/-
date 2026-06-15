@@ -2,9 +2,9 @@ from decimal import Decimal
 
 import pytest
 
-from app.binance_client import PaperBinanceClient
+from app.binance_client import BinanceError, PaperBinanceClient
 from app.config import Settings
-from app.models import ExchangeFilters, MarketQuote, Mt4Report, Mt4Tick, OrderStatus, PairDirection, Side, StrategyState, utc_now_ms
+from app.models import ExchangeFilters, MarketQuote, Mt4Report, Mt4Tick, OrderStatus, OrderUpdate, PairDirection, Side, StrategyState, utc_now_ms
 from app.mt4_bridge import Mt4Bridge
 from app.risk import RiskManager
 from app.storage import Storage
@@ -102,6 +102,43 @@ async def test_unfilled_entry_order_cancels_when_spread_no_longer_valid(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_entry_order_temporarily_not_visible_keeps_tracking_original_order(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path, NotVisibleOncePaperClient)
+    await engine.step()
+    first_order = engine.active_order
+    assert first_order is not None
+
+    await engine.step()
+
+    assert engine.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert engine.active_order is not None
+    assert engine.active_order.order_id == first_order.order_id
+    assert len([order for order in client._orders.values() if order.status == OrderStatus.NEW]) == 1
+
+
+@pytest.mark.asyncio
+async def test_live_entry_guard_blocks_when_orphan_binance_order_exists(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path)
+    client._orders["orphan"] = OrderUpdate(
+        order_id="orphan",
+        client_order_id="arb_orphan",
+        symbol=client.settings.binance_symbol,
+        side=Side.SELL,
+        status=OrderStatus.NEW,
+        price=Decimal("2005"),
+        orig_qty=Decimal("1"),
+    )
+
+    await engine.step()
+
+    assert engine.state == StrategyState.PAUSED
+    assert engine.active_order is None
+    live_orders = [order for order in client._orders.values() if order.status == OrderStatus.NEW]
+    assert len(live_orders) == 1
+    assert live_orders[0].order_id == "orphan"
+
+
+@pytest.mark.asyncio
 async def test_cancel_race_fill_queues_mt4_hedge(tmp_path):
     engine, client, mt4 = await make_engine(tmp_path, FillOnCancelPaperClient)
     await engine.step()
@@ -189,6 +226,18 @@ class FillOnCancelPaperClient(PaperBinanceClient):
             )
             self._orders[order_id] = order
         return order
+
+
+class NotVisibleOncePaperClient(PaperBinanceClient):
+    def __init__(self, settings):
+        super().__init__(settings)
+        self.missing_once = True
+
+    async def get_order(self, order_id: str):
+        if self.missing_once:
+            self.missing_once = False
+            raise BinanceError('{"code":-2013,"msg":"Order does not exist."}')
+        return await super().get_order(order_id)
 
 
 async def make_engine(tmp_path, client_cls=PaperBinanceClient):
