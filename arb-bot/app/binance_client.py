@@ -54,6 +54,12 @@ class BinanceBaseClient:
     async def get_order(self, order_id: str) -> OrderUpdate | None:
         raise NotImplementedError
 
+    async def open_orders(self) -> list[OrderUpdate]:
+        raise NotImplementedError
+
+    async def position_quantity(self) -> Decimal:
+        raise NotImplementedError
+
     async def account_snapshot(self) -> AccountSnapshot | None:
         raise NotImplementedError
 
@@ -161,6 +167,16 @@ class PaperBinanceClient(BinanceBaseClient):
     async def get_order(self, order_id: str) -> OrderUpdate | None:
         await self._auto_fill(order_id)
         return self._orders.get(order_id)
+
+    async def open_orders(self) -> list[OrderUpdate]:
+        return [
+            order
+            for order in self._orders.values()
+            if order.status in {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED}
+        ]
+
+    async def position_quantity(self) -> Decimal:
+        return Decimal("0")
 
     async def account_snapshot(self) -> AccountSnapshot | None:
         if not self._use_live_market_data:
@@ -338,6 +354,15 @@ class BinanceFuturesClient(BinanceBaseClient):
     async def get_order(self, order_id: str) -> OrderUpdate | None:
         raw = await self._signed("GET", "/fapi/v1/order", {"symbol": self.settings.binance_symbol, "orderId": order_id})
         return self._parse_order(raw)
+
+    async def open_orders(self) -> list[OrderUpdate]:
+        raw = await self._signed("GET", "/fapi/v1/openOrders", {"symbol": self.settings.binance_symbol})
+        return [self._parse_order(item) for item in raw]
+
+    async def position_quantity(self) -> Decimal:
+        raw = await self._signed("GET", "/fapi/v2/positionRisk", {"symbol": self.settings.binance_symbol})
+        item = raw[0] if isinstance(raw, list) and raw else raw
+        return Decimal(str(item.get("positionAmt") or "0"))
 
     async def account_snapshot(self) -> AccountSnapshot | None:
         now = utc_now_ms()

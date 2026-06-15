@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
-from app.binance_client import BinanceBaseClient
+from app.binance_client import BinanceBaseClient, BinanceError
 from app.config import Settings
 from app.models import (
     EntryPlan,
@@ -24,6 +24,7 @@ from app.storage import Storage
 
 
 logger = logging.getLogger(__name__)
+TERMINAL_ORDER_STATUSES = {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED, OrderStatus.FILLED}
 
 
 def round_down(value: Decimal, step: Decimal) -> Decimal:
@@ -72,6 +73,11 @@ def build_entry_plan(
             mt4_price_limit=price + settings.min_locked_edge,
         )
     return None
+
+
+def _binance_order_missing(exc: BinanceError) -> bool:
+    text = str(exc)
+    return "-2013" in text or "-2011" in text or "Order does not exist" in text or "Unknown order" in text
 
 
 class StrategyEngine:
@@ -171,10 +177,12 @@ class StrategyEngine:
             self.state = StrategyState.IDLE
             return
         if utc_now_ms() - self.order_created_ms > self.settings.max_order_age_ms:
-            await self.binance.cancel_order(self.active_order.order_id)
+            order = await self._cancel_entry_order(self.active_order)
+            if await self._handle_entry_cancel_fill(order, "币安开仓挂单超时，撤单时发现已有成交", allow_mt4_hedge=True):
+                return
             self._clear_entry()
             return
-        order = await self.binance.get_order(self.active_order.order_id)
+        order = await self._refresh_entry_order()
         if not order:
             return
         self.active_order = order
@@ -183,8 +191,10 @@ class StrategyEngine:
             return
         if order.status in {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED} and self.active_plan:
             if not self._entry_plan_still_valid():
-                await self.binance.cancel_order(order.order_id)
-                if order.executed_qty == 0:
+                order = await self._cancel_entry_order(order)
+                if await self._handle_entry_cancel_fill(order, "币安开仓价差失效，撤单时发现已有成交", allow_mt4_hedge=True):
+                    return
+                if order.executed_qty <= self.hedged_qty + self.pending_hedge_qty:
                     self._clear_entry()
                     return
         if order.executed_qty > self.hedged_qty + self.pending_hedge_qty:
@@ -204,20 +214,79 @@ class StrategyEngine:
 
     async def _cancel_stale_entry_quote(self) -> None:
         reason = self.last_error or "quote stale during entry"
-        order = self.active_order
+        order = await self._refresh_entry_order()
         if order:
-            remote_order = await self.binance.get_order(order.order_id)
-            if remote_order:
-                self.active_order = remote_order
-                order = remote_order
-            if order.executed_qty > self.hedged_qty + self.pending_hedge_qty:
-                await self._emergency_close(reason)
+            order = await self._cancel_entry_order(order)
+            if await self._handle_entry_cancel_fill(order, reason, allow_mt4_hedge=False):
                 return
-            if order.status not in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED}:
-                await self.binance.cancel_order(order.order_id)
         self.storage.record_event("entry_quote_stale_cancel", {"reason": reason, "order_id": order.order_id if order else None})
         self._clear_entry()
         self.last_error = reason
+
+    async def _refresh_entry_order(self) -> OrderUpdate | None:
+        if not self.active_order:
+            return None
+        try:
+            order = await self.binance.get_order(self.active_order.order_id)
+        except BinanceError as exc:
+            if _binance_order_missing(exc):
+                self.storage.record_event(
+                    "entry_order_missing",
+                    {"order_id": self.active_order.order_id, "error": str(exc)[:160]},
+                )
+                self.last_error = "币安挂单不存在，已清理本地跟踪"
+                self._clear_entry()
+                return None
+            raise
+        if order:
+            self.active_order = order
+        return order
+
+    async def _cancel_entry_order(self, order: OrderUpdate) -> OrderUpdate:
+        if order.status in TERMINAL_ORDER_STATUSES:
+            self.active_order = order
+            return order
+        try:
+            canceled = await self.binance.cancel_order(order.order_id)
+            if canceled:
+                self.active_order = canceled
+                return canceled
+        except BinanceError as exc:
+            if not _binance_order_missing(exc):
+                raise
+        try:
+            refreshed = await self.binance.get_order(order.order_id)
+            if refreshed:
+                self.active_order = refreshed
+                return refreshed
+        except BinanceError as exc:
+            if not _binance_order_missing(exc):
+                raise
+            self.storage.record_event("entry_order_missing_after_cancel", {"order_id": order.order_id, "error": str(exc)[:160]})
+        return order
+
+    async def _handle_entry_cancel_fill(self, order: OrderUpdate, reason: str, allow_mt4_hedge: bool) -> bool:
+        unhedged_qty = order.executed_qty - self.hedged_qty - self.pending_hedge_qty
+        if unhedged_qty <= 0:
+            return False
+        self.active_order = order
+        self.storage.record_event(
+            "entry_cancel_race_fill",
+            {
+                "reason": reason,
+                "order_id": order.order_id,
+                "side": order.side.value,
+                "executed_qty": str(order.executed_qty),
+                "unhedged_qty": str(unhedged_qty),
+                "avg_price": str(order.avg_price),
+                "allow_mt4_hedge": allow_mt4_hedge,
+            },
+        )
+        if allow_mt4_hedge:
+            await self._queue_mt4_hedge(unhedged_qty, order.avg_price)
+            return True
+        await self._emergency_close(reason)
+        return True
 
     async def _queue_mt4_hedge(self, qty: Decimal, fill_price: Decimal) -> None:
         if not self.active_plan or qty <= 0:

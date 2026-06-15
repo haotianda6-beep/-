@@ -20,6 +20,7 @@ from app.models import (
     Mt4HistoryPayload,
     Mt4Report,
     Mt4Tick,
+    OrderRequest,
     OrderStatus,
     PairDirection,
     PositionMetrics,
@@ -27,6 +28,7 @@ from app.models import (
     RuntimeConfigUpdate,
     Side,
     SpreadAnalysis,
+    StrategyState,
 )
 from app.mt4_bridge import Mt4Bridge
 from app.risk import RiskManager
@@ -54,6 +56,7 @@ MT4_DIR = Path(__file__).resolve().parents[1] / "mt4"
 async def startup() -> None:
     global _loop_task
     await binance_client.start()
+    await _reconcile_live_startup_state()
     mode = "dry-run" if settings.is_dry_run else "live"
     logger.info("arb executor starting mode=%s symbol=%s/%s", mode, settings.binance_symbol, settings.mt4_symbol)
     _loop_task = asyncio.create_task(_strategy_loop())
@@ -64,6 +67,7 @@ async def shutdown() -> None:
     if _loop_task:
         _loop_task.cancel()
     await _cancel_unfilled_active_order_on_shutdown()
+    await _cancel_orphan_arb_orders("shutdown")
     await binance_client.stop()
 
 
@@ -77,16 +81,120 @@ async def _cancel_unfilled_active_order_on_shutdown() -> None:
             order = latest
     except Exception as exc:  # noqa: BLE001
         logger.warning("failed to refresh active Binance order during shutdown: %s", str(exc)[:160])
+    if order.status not in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED, OrderStatus.FILLED}:
+        try:
+            canceled = await binance_client.cancel_order(order.order_id)
+            if canceled is not None:
+                order = canceled
+            logger.info("canceled active Binance order during shutdown order_id=%s", order.order_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("failed to cancel active Binance order during shutdown: %s", str(exc)[:160])
     if order.executed_qty > 0:
-        logger.warning("active Binance order has fills during shutdown order_id=%s executed_qty=%s", order.order_id, order.executed_qty)
+        unhedged_qty = order.executed_qty - strategy.hedged_qty - strategy.pending_hedge_qty
+        logger.warning(
+            "active Binance order has fills during shutdown order_id=%s executed_qty=%s unhedged_qty=%s",
+            order.order_id,
+            order.executed_qty,
+            unhedged_qty,
+        )
+        if strategy.open_pair is None and unhedged_qty > 0:
+            await _emergency_close_binance_fill(order, unhedged_qty, "服务关闭时发现币安已有未对冲成交")
         return
     if order.status in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED}:
         return
+
+
+async def _reconcile_live_startup_state() -> None:
+    if settings.is_dry_run:
+        return
+    await _cancel_orphan_arb_orders("startup")
     try:
-        await binance_client.cancel_order(order.order_id)
-        logger.info("canceled unfilled active Binance order during shutdown order_id=%s", order.order_id)
+        qty = await binance_client.position_quantity()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("failed to cancel active Binance order during shutdown: %s", str(exc)[:160])
+        logger.warning("failed to inspect Binance position on startup: %s", str(exc)[:160])
+        strategy.state = StrategyState.PAUSED
+        strategy.last_error = "启动时检查币安持仓失败，已暂停自动挂单"
+        return
+    if qty != 0 and strategy.open_pair is None:
+        strategy.state = StrategyState.PAUSED
+        strategy.last_error = f"启动时检测到币安已有 {settings.binance_symbol} 持仓 {qty}，已暂停自动挂单"
+        storage.record_event(
+            "startup_existing_binance_position",
+            {"symbol": settings.binance_symbol, "position_qty": str(qty)},
+        )
+
+
+async def _cancel_orphan_arb_orders(reason: str) -> None:
+    if settings.is_dry_run:
+        return
+    try:
+        orders = await binance_client.open_orders()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("failed to inspect open Binance orders during %s: %s", reason, str(exc)[:160])
+        strategy.state = StrategyState.PAUSED
+        strategy.last_error = "检查币安遗留挂单失败，已暂停自动挂单"
+        return
+    for order in orders:
+        if not order.client_order_id.startswith("arb_"):
+            continue
+        final_order = order
+        try:
+            if order.status not in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED, OrderStatus.FILLED}:
+                canceled = await binance_client.cancel_order(order.order_id)
+                if canceled is not None:
+                    final_order = canceled
+            storage.record_event(
+                "orphan_binance_order_canceled",
+                {
+                    "reason": reason,
+                    "order_id": final_order.order_id,
+                    "client_order_id": final_order.client_order_id,
+                    "side": final_order.side.value,
+                    "status": final_order.status.value,
+                    "executed_qty": str(final_order.executed_qty),
+                    "reduce_only": final_order.reduce_only,
+                },
+            )
+            if not final_order.reduce_only and final_order.executed_qty > 0:
+                await _emergency_close_binance_fill(final_order, final_order.executed_qty, f"{reason} 时发现遗留开仓单已有成交")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("failed to cancel orphan Binance order during %s: %s", reason, str(exc)[:160])
+            strategy.state = StrategyState.PAUSED
+            strategy.last_error = "处理币安遗留挂单失败，已暂停自动挂单"
+
+
+async def _emergency_close_binance_fill(order, quantity: Decimal, reason: str) -> None:
+    if quantity <= 0:
+        return
+    close_side = Side.BUY if order.side == Side.SELL else Side.SELL
+    close_order = await binance_client.place_market_order(
+        OrderRequest(
+            symbol=settings.binance_symbol,
+            side=close_side,
+            quantity=quantity,
+            post_only=False,
+            reduce_only=True,
+        )
+    )
+    storage.record_event(
+        "binance_emergency_close",
+        {
+            "reason": reason,
+            "source_order_id": order.order_id,
+            "close_order_id": close_order.order_id,
+            "side": close_side.value,
+            "quantity": str(quantity),
+            "status": close_order.status.value,
+            "avg_price": str(close_order.avg_price),
+        },
+    )
+    logger.warning(
+        "emergency closed unhedged Binance fill reason=%s source_order_id=%s quantity=%s close_order_id=%s",
+        reason,
+        order.order_id,
+        quantity,
+        close_order.order_id,
+    )
 
 
 @app.get("/health")

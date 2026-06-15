@@ -102,6 +102,39 @@ async def test_unfilled_entry_order_cancels_when_spread_no_longer_valid(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_cancel_race_fill_queues_mt4_hedge(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path, FillOnCancelPaperClient)
+    await engine.step()
+    order = engine.active_order
+    assert order is not None
+
+    client.set_quote(Decimal("2000.4"), Decimal("2000.5"))
+    await engine.step()
+
+    command = mt4.next_command()
+    assert command["action"] == "BUY"
+    assert Decimal(str(command["lots"])) == Decimal("0.01")
+    assert engine.state == StrategyState.HEDGING_MT4
+
+
+@pytest.mark.asyncio
+async def test_stale_quote_cancel_race_fill_emergency_closes_binance(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path, FillOnCancelPaperClient)
+    await engine.step()
+    order = engine.active_order
+    assert order is not None
+
+    engine.last_error = "quote stale 3000ms"
+    await engine._cancel_stale_entry_quote()
+
+    emergency = [item for item in client._orders.values() if item.is_maker is False and item.reduce_only]
+    assert emergency
+    assert emergency[-1].side == Side.BUY
+    assert emergency[-1].executed_qty == Decimal("1")
+    assert engine.state == StrategyState.PAUSED
+
+
+@pytest.mark.asyncio
 async def test_mt4_failure_triggers_emergency_close(tmp_path):
     engine, client, mt4 = await make_engine(tmp_path)
     await engine.step()
@@ -141,9 +174,26 @@ async def test_dry_run_does_not_send_real_mt4_order(tmp_path):
     assert engine.open_pair.quantity_oz == Decimal("0.4")
 
 
-async def make_engine(tmp_path):
+class FillOnCancelPaperClient(PaperBinanceClient):
+    async def cancel_order(self, order_id: str):
+        order = self._orders.get(order_id)
+        if not order:
+            return None
+        if order.status in {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED}:
+            order = order.model_copy(
+                update={
+                    "status": OrderStatus.FILLED,
+                    "executed_qty": order.orig_qty,
+                    "avg_price": order.price,
+                }
+            )
+            self._orders[order_id] = order
+        return order
+
+
+async def make_engine(tmp_path, client_cls=PaperBinanceClient):
     cfg = settings(tmp_path, PAPER_MODE=False, LIVE_TRADING=True, BINANCE_API_KEY="test-key", BINANCE_API_SECRET="test-secret")
-    client = PaperBinanceClient(cfg)
+    client = client_cls(cfg)
     client.set_quote(Decimal("2001"), Decimal("2002"))
     mt4 = Mt4Bridge(cfg)
     mt4.update_tick(Mt4Tick(symbol="XAUUSD", bid=Decimal("1999"), ask=Decimal("2000")))
