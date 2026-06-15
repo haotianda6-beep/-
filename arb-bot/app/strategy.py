@@ -181,18 +181,26 @@ class StrategyEngine:
         if order.status == OrderStatus.REJECTED:
             self._clear_entry()
             return
-        if order.status == OrderStatus.PARTIALLY_FILLED and self.active_plan:
-            current_plan = None
-            binance_quote = self.binance.latest_quote()
-            mt4_quote = self.mt4.latest_quote()
-            if binance_quote and mt4_quote:
-                current_plan = build_entry_plan(self.settings, self.binance.filters, binance_quote, mt4_quote)
-            if not current_plan or current_plan.direction != self.active_plan.direction:
+        if order.status in {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED} and self.active_plan:
+            if not self._entry_plan_still_valid():
                 await self.binance.cancel_order(order.order_id)
+                if order.executed_qty == 0:
+                    self._clear_entry()
+                    return
         if order.executed_qty > self.hedged_qty + self.pending_hedge_qty:
             await self._queue_mt4_hedge(order.executed_qty - self.hedged_qty - self.pending_hedge_qty, order.avg_price)
         if order.status == OrderStatus.CANCELED and order.executed_qty == self.hedged_qty:
             self._clear_entry()
+
+    def _entry_plan_still_valid(self) -> bool:
+        if not self.active_plan:
+            return False
+        binance_quote = self.binance.latest_quote()
+        mt4_quote = self.mt4.latest_quote()
+        if not binance_quote or not mt4_quote:
+            return False
+        current_plan = build_entry_plan(self.settings, self.binance.filters, binance_quote, mt4_quote)
+        return bool(current_plan and current_plan.direction == self.active_plan.direction)
 
     async def _cancel_stale_entry_quote(self) -> None:
         reason = self.last_error or "quote stale during entry"

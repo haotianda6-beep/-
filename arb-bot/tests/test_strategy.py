@@ -85,6 +85,23 @@ async def test_partial_fill_hedges_only_filled_quantity(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_unfilled_entry_order_cancels_when_spread_no_longer_valid(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path)
+    await engine.step()
+    order = engine.active_order
+    assert order is not None
+
+    client.set_quote(Decimal("2000.4"), Decimal("2000.5"))
+    await engine.step()
+
+    assert engine.state == StrategyState.IDLE
+    assert engine.active_order is None
+    canceled = await client.get_order(order.order_id)
+    assert canceled is not None
+    assert canceled.status == OrderStatus.CANCELED
+
+
+@pytest.mark.asyncio
 async def test_mt4_failure_triggers_emergency_close(tmp_path):
     engine, client, mt4 = await make_engine(tmp_path)
     await engine.step()
