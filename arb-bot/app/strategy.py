@@ -112,9 +112,7 @@ class StrategyEngine:
             await self._maybe_enter(binance_quote, mt4_quote)
         elif self.state == StrategyState.QUOTING_BINANCE_ENTRY:
             if not self._quotes_fresh(binance_quote, mt4_quote):
-                if self.active_order:
-                    await self.binance.cancel_order(self.active_order.order_id)
-                self.state = StrategyState.PAUSED
+                await self._cancel_stale_entry_quote()
                 return
             await self._check_entry_order()
         elif self.state == StrategyState.HEDGING_MT4:
@@ -195,6 +193,23 @@ class StrategyEngine:
             await self._queue_mt4_hedge(order.executed_qty - self.hedged_qty - self.pending_hedge_qty, order.avg_price)
         if order.status == OrderStatus.CANCELED and order.executed_qty == self.hedged_qty:
             self._clear_entry()
+
+    async def _cancel_stale_entry_quote(self) -> None:
+        reason = self.last_error or "quote stale during entry"
+        order = self.active_order
+        if order:
+            remote_order = await self.binance.get_order(order.order_id)
+            if remote_order:
+                self.active_order = remote_order
+                order = remote_order
+            if order.executed_qty > self.hedged_qty + self.pending_hedge_qty:
+                await self._emergency_close(reason)
+                return
+            if order.status not in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED}:
+                await self.binance.cancel_order(order.order_id)
+        self.storage.record_event("entry_quote_stale_cancel", {"reason": reason, "order_id": order.order_id if order else None})
+        self._clear_entry()
+        self.last_error = reason
 
     async def _queue_mt4_hedge(self, qty: Decimal, fill_price: Decimal) -> None:
         if not self.active_plan or qty <= 0:

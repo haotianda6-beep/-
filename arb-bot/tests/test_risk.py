@@ -32,7 +32,7 @@ def test_live_guard_requires_explicit_live_and_credentials(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_stale_quote_cancels_and_pauses(tmp_path):
+async def test_stale_quote_cancels_unfilled_entry_and_waits_again(tmp_path):
     cfg = settings(tmp_path)
     client = PaperBinanceClient(cfg)
     client.set_quote(Decimal("2001"), Decimal("2002"))
@@ -42,6 +42,7 @@ async def test_stale_quote_cancels_and_pauses(tmp_path):
     engine = StrategyEngine(cfg, client, mt4, RiskManager(cfg, store), store)
     await engine.step()
     assert engine.active_order is not None
+    order_id = engine.active_order.order_id
     client._quote = MarketQuote(
         symbol=cfg.binance_symbol,
         bid=Decimal("2001"),
@@ -49,7 +50,8 @@ async def test_stale_quote_cancels_and_pauses(tmp_path):
         timestamp_ms=utc_now_ms() - 1000,
     )
     await engine.step()
-    assert engine.state == StrategyState.PAUSED
-    canceled = await client.get_order(engine.active_order.order_id)
+    assert engine.state == StrategyState.IDLE
+    assert engine.active_order is None
+    canceled = await client.get_order(order_id)
     assert canceled is not None
     assert canceled.status == OrderStatus.CANCELED
