@@ -637,6 +637,8 @@
       let lastCommand = null;
       let lastConfig = null;
       let configDirty = false;
+      let backendWasDown = false;
+      let liveModeRestarting = false;
       const configFields = [
         ["cfgBinanceLeverage", "binance_leverage", "number"],
         ["cfgTargetOz", "target_oz", "number"],
@@ -663,7 +665,14 @@
           },
         }).then(async (response) => {
           const text = await response.text();
-          const body = text ? JSON.parse(text) : {};
+          let body = {};
+          if (text) {
+            try {
+              body = JSON.parse(text);
+            } catch {
+              body = { detail: text.slice(0, 160) || response.statusText };
+            }
+          }
           if (!response.ok) throw new Error(body.detail || `${response.status}`);
           return body;
         });
@@ -761,11 +770,16 @@
       async function loadStatus() {
         try {
           const data = await api("status");
+          if (backendWasDown) appendLog("后端连接已恢复");
+          backendWasDown = false;
+          liveModeRestarting = false;
           render(data);
           setStatus($("backend"), "后端已连接", "ok");
         } catch (error) {
-          setStatus($("backend"), "后端异常", "bad");
-          appendLog(`状态读取失败：${translateError(error.message)}`);
+          const message = translateError(error.message);
+          setStatus($("backend"), liveModeRestarting ? "服务重启中" : "后端异常", liveModeRestarting ? "warn" : "bad");
+          if (!backendWasDown) appendLog(`状态读取失败：${message}`);
+          backendWasDown = true;
         }
       }
 
@@ -945,9 +959,11 @@
         if (!ok) return;
         $("startLiveBtn").disabled = true;
         const result = await api("control/live/start", { method: "POST" });
+        liveModeRestarting = true;
         appendLog(result.message || "实盘模式正在启动");
         setStatus($("backend"), "服务重启中", "warn");
-        setTimeout(loadStatus, 2500);
+        setTimeout(loadStatus, 1500);
+        setTimeout(() => window.location.reload(), 3500);
       }
 
       async function stopLiveMode() {
@@ -955,9 +971,11 @@
         if (!ok) return;
         $("stopLiveBtn").disabled = true;
         const result = await api("control/live/stop", { method: "POST" });
+        liveModeRestarting = true;
         appendLog(result.message || "正在切回模拟模式");
         setStatus($("backend"), "服务重启中", "warn");
-        setTimeout(loadStatus, 2500);
+        setTimeout(loadStatus, 1500);
+        setTimeout(() => window.location.reload(), 3500);
       }
 
       function translateState(value) {
@@ -1004,6 +1022,9 @@
           ["MT4 command failed", "MT4 命令执行失败"],
           ["only available in paper mode", "只允许在模拟模式使用"],
           ["Internal Server Error", "服务器内部异常"],
+          ["Bad Gateway", "服务正在重启，请稍等几秒"],
+          ["502", "服务正在重启，请稍等几秒"],
+          ["Unexpected token '<'", "服务返回了网页错误，通常是重启中的临时状态"],
           ["Not Found", "接口不存在"],
           ["Forbidden", "没有访问权限"],
           ["MT4 quote missing", "MT4 报价缺失"],
