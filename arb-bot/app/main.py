@@ -460,7 +460,10 @@ def _execution_plan() -> ExecutionPlanStatus:
     pair = strategy.open_pair
     binance_quote = binance_client.latest_quote()
     mt4_quote = mt4_bridge.latest_quote()
+    quote_block_reason = _quote_plan_block_reason(binance_quote, mt4_quote)
     if pair and binance_quote and mt4_quote:
+        if quote_block_reason:
+            return ExecutionPlanStatus(summary=f"当前有组合持仓，但{quote_block_reason}，暂不挂平仓单。", max_follow_seconds=max_follow_seconds)
         spread = abs(binance_quote.mid - mt4_quote.mid)
         close_ready = spread <= settings.close_max_spread
         if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
@@ -481,6 +484,8 @@ def _execution_plan() -> ExecutionPlanStatus:
     if strategy.state.value == "PAUSED":
         return ExecutionPlanStatus(summary="系统已暂停，不会自动新挂单；恢复后才会继续按价差条件执行。", max_follow_seconds=max_follow_seconds)
     if binance_quote and mt4_quote:
+        if quote_block_reason:
+            return ExecutionPlanStatus(summary=f"{quote_block_reason}，暂不挂开仓单。", max_follow_seconds=max_follow_seconds)
         entry_plan = build_entry_plan(settings, binance_client.filters, binance_quote, mt4_quote)
         if entry_plan:
             return ExecutionPlanStatus(
@@ -499,6 +504,23 @@ def _execution_plan() -> ExecutionPlanStatus:
             max_follow_seconds=max_follow_seconds,
         )
     return ExecutionPlanStatus(summary="等待 Binance 和 MT4 报价齐全。", max_follow_seconds=max_follow_seconds)
+
+
+def _quote_plan_block_reason(binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> str | None:
+    checks = (("币安", binance_quote), ("MT4", mt4_quote))
+    for label, quote in checks:
+        check = risk.quote_fresh(quote)
+        if not check.ok:
+            return f"{label}报价未刷新（{_risk_reason_text(check.reason)}）"
+    return None
+
+
+def _risk_reason_text(reason: str) -> str:
+    if reason.startswith("quote stale "):
+        return "报价过期 " + reason.removeprefix("quote stale ")
+    if reason == "quote missing":
+        return "报价缺失"
+    return reason
 
 
 def _side_text(side: Side) -> str:
