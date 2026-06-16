@@ -223,7 +223,7 @@ class CashCarryScanner:
     def _exchange_opportunities(self, data: CashCarryExchangeData, settings: BotSettings) -> list[CashCarryOpportunity]:
         opportunities: list[CashCarryOpportunity] = []
         for symbol in sorted(set(data.spot_markets) & set(data.swap_markets)):
-            if symbol in settings.symbol_blacklist:
+            if _symbol_blacklisted(symbol, settings.symbol_blacklist):
                 continue
             item = self._build_opportunity(symbol, data, settings)
             if item:
@@ -361,3 +361,13 @@ class CashCarryScanner:
             and spot_market.deposit_enabled is False
             and spot_market.withdraw_enabled is False
         )
+
+
+def _symbol_blacklisted(symbol: str, blacklist: list[str]) -> bool:
+    normalized_symbol = _normalize_blacklist_token(symbol)
+    base_asset = normalized_symbol.removesuffix("USDT")
+    return any(_normalize_blacklist_token(item) in {normalized_symbol, base_asset} for item in blacklist)
+
+
+def _normalize_blacklist_token(value: str) -> str:
+    return value.upper().replace("/", "").replace(":", "").replace("-", "").strip()

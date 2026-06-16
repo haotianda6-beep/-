@@ -15,9 +15,9 @@ class CashCarryFastRefresher:
         self.ticker_cache = ticker_cache
 
     def refresh(self, scan: CashCarryScan, settings: BotSettings) -> CashCarryScan:
-        items = self._unique_items(scan)
+        items = [item for item in self._unique_items(scan) if not _symbol_blacklisted(item.symbol, settings.symbol_blacklist)]
         if not items:
-            return scan
+            return CashCarryScan(issues=scan.issues)
         refreshed = [self._refresh_one(item, settings) for item in items]
         opportunities = [item for item in refreshed if not item.blocked_reasons]
         candidates = sorted(refreshed, key=lambda item: (len(item.blocked_reasons), -item.estimated_net_profit))[:50]
@@ -121,3 +121,13 @@ class CashCarryFastRefresher:
             seen.add(reason)
             result.append(reason)
         return result
+
+
+def _symbol_blacklisted(symbol: str, blacklist: list[str]) -> bool:
+    normalized_symbol = _normalize_blacklist_token(symbol)
+    base_asset = normalized_symbol.removesuffix("USDT")
+    return any(_normalize_blacklist_token(item) in {normalized_symbol, base_asset} for item in blacklist)
+
+
+def _normalize_blacklist_token(value: str) -> str:
+    return value.upper().replace("/", "").replace(":", "").replace("-", "").strip()

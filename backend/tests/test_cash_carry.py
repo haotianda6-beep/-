@@ -36,6 +36,16 @@ def test_cash_carry_applies_strategy_specific_volume_threshold() -> None:
     assert "现货/合约最低24h成交量低于 2000000U" in item.blocked_reasons
 
 
+def test_cash_carry_symbol_blacklist_accepts_base_asset_name() -> None:
+    scanner = CashCarryScanner()
+    data = _data("101", "0.0002")
+    settings = BotSettings(symbol_blacklist=["ABC"])
+
+    rows = scanner._exchange_opportunities(data, settings)
+
+    assert rows == []
+
+
 def test_cash_carry_blocks_same_symbol_with_different_base_id() -> None:
     scanner = CashCarryScanner()
     item = scanner._build_opportunity(
@@ -73,6 +83,16 @@ def test_cash_carry_fast_refresh_uses_ws_prices() -> None:
     assert refreshed.opportunities
     assert refreshed.opportunities[0].basis_pct == Decimal("1.5000")
     assert refreshed.opportunities[0].estimated_net_profit == Decimal("1.2200")
+
+
+def test_cash_carry_fast_refresh_drops_blacklisted_symbol() -> None:
+    scanner = CashCarryScanner()
+    item = scanner._build_opportunity("ABCUSDT", _data("101", "0.0002"), BotSettings(order_notional_usdt=Decimal("100")))
+
+    refreshed = CashCarryFastRefresher(_ticker_cache()).refresh(CashCarryScan(opportunities=[item]), BotSettings(symbol_blacklist=["ABC"]))
+
+    assert refreshed.opportunities == []
+    assert refreshed.candidates == []
 
 
 def test_cash_carry_depth_zero_blocks_ready_opportunity() -> None:
