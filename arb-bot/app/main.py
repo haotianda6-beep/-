@@ -303,6 +303,8 @@ async def paper_binance_fill(order_id: str, quantity: Decimal, price: Decimal | 
 
 @app.post("/control/resume")
 async def resume() -> dict:
+    if not settings.is_dry_run:
+        await _assert_resume_safe()
     strategy.resume()
     return {"status": "ok", "state": strategy.state}
 
@@ -381,6 +383,16 @@ async def _prepare_live_stop() -> None:
     if remote_order is not None and remote_order.status not in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED}:
         await _cancel_stop_order(remote_order.order_id)
     strategy.clear_runtime_state()
+
+
+async def _assert_resume_safe() -> None:
+    await _cancel_orphan_arb_orders("resume")
+    try:
+        qty = await binance_client.position_quantity()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"恢复前检查币安持仓失败：{str(exc)[:160]}") from exc
+    if strategy.open_pair is None and qty != 0:
+        raise HTTPException(status_code=400, detail=f"币安仍有 {settings.binance_symbol} 持仓 {qty}，不能恢复自动挂单")
 
 
 async def _fetch_stop_order(order_id: str):

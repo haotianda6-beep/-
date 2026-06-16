@@ -135,9 +135,16 @@ class StrategyEngine:
             await self._check_exit_order()
 
     def resume(self) -> None:
-        if self.state == StrategyState.PAUSED:
-            self.state = StrategyState.IDLE
-            self.last_error = None
+        if self.state != StrategyState.PAUSED:
+            return
+        if self.open_pair:
+            self.active_plan = None
+            self.active_order = None
+            self.pending_hedge_qty = Decimal("0")
+            self.state = StrategyState.PAIR_OPEN
+        else:
+            self._clear_entry()
+        self.last_error = None
 
     def clear_runtime_state(self) -> None:
         self._reset_all()

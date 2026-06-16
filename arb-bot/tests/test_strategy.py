@@ -74,6 +74,29 @@ def test_binance_low_entry_formula_uses_maker_offset(tmp_path):
     assert plan.mt4_price_limit == Decimal("1995.8")
 
 
+def test_resume_paused_engine_clears_stale_entry_state(tmp_path):
+    cfg = settings(tmp_path)
+    engine = StrategyEngine(cfg, PaperBinanceClient(cfg), Mt4Bridge(cfg), RiskManager(cfg), Storage(cfg.sqlite_path))
+    engine.state = StrategyState.PAUSED
+    engine.last_error = "MT4 buy ask above max"
+    engine.active_order = OrderUpdate(
+        order_id="old_order",
+        client_order_id="arb_old",
+        symbol="XAUUSDT",
+        side=Side.SELL,
+        status=OrderStatus.FILLED,
+        price=Decimal("4347.54"),
+        orig_qty=Decimal("1"),
+        executed_qty=Decimal("1"),
+    )
+
+    engine.resume()
+
+    assert engine.state == StrategyState.IDLE
+    assert engine.last_error is None
+    assert engine.active_order is None
+
+
 @pytest.mark.asyncio
 async def test_partial_fill_hedges_only_filled_quantity(tmp_path):
     engine, client, mt4 = await make_engine(tmp_path)
