@@ -16,7 +16,7 @@
   "emergency_close_enabled": false,
   "exchange_blacklist": [],
   "manual_confirm_required": true,
-  "margin_mode": "isolated",
+  "margin_mode": "cross",
   "max_add_count": 2,
   "add_notional_usdt": "100",
   "max_leverage": "3",

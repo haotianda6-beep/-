@@ -37,6 +37,19 @@ def test_cash_carry_add_submits_spot_buy_and_perp_short_when_basis_widens(tmp_pa
     assert saved["add_orders"][0]["perp_order_id"] == "perp-add"
 
 
+def test_cash_carry_add_passes_cross_margin_to_leverage_and_order(tmp_path) -> None:
+    state = _state_with_open_position(tmp_path, add_count=0)
+    executor = _RecordingExecutor(state)
+    settings = _settings(margin_mode="cross")
+
+    result = executor.evaluate([_opportunity(basis="3.3", perp="103.3")], settings, [_position_row(basis="3.3")], allow_open=False, allow_add=True)
+
+    assert result is not None
+    assert result.status == "add_submitted"
+    assert executor.swap.leverage_calls[0]["params"] == {"marginMode": "cross"}
+    assert executor.swap.orders[0]["params"]["marginMode"] == "cross"
+
+
 def test_cash_carry_add_ignores_same_position_open_scope_reason(tmp_path) -> None:
     state = _state_with_open_position(tmp_path, add_count=0)
     executor = _RecordingExecutor(state)
@@ -90,11 +103,12 @@ def test_cash_carry_add_stops_at_max_add_count(tmp_path) -> None:
     assert json.loads(state.read_text(encoding="utf-8"))["positions"][0]["add_count"] == 2
 
 
-def _settings(max_add_count: int = 4, add_notional: Decimal = Decimal("100")) -> BotSettings:
+def _settings(max_add_count: int = 4, add_notional: Decimal = Decimal("100"), margin_mode: str = "isolated") -> BotSettings:
     return BotSettings(
         manual_confirm_required=False,
         cash_carry_auto_open_enabled=True,
         cash_carry_auto_trade_enabled=True,
+        margin_mode=margin_mode,
         order_notional_usdt=Decimal("100"),
         add_notional_usdt=add_notional,
         add_trigger_spread_pct=Decimal("2.2"),
@@ -205,10 +219,11 @@ class _RecordingSpot:
 
 
 class _RecordingSwap:
-    id = "fake"
+    id = "gateio"
 
     def __init__(self) -> None:
         self.orders = []
+        self.leverage_calls = []
 
     def load_markets(self):
         return None
@@ -218,6 +233,11 @@ class _RecordingSwap:
 
     def amount_to_precision(self, symbol, amount):
         return str(int(amount))
+
+    def set_leverage(self, leverage, symbol, params=None):
+        call = {"leverage": leverage, "symbol": symbol, "params": params or {}}
+        self.leverage_calls.append(call)
+        return call
 
     def create_order(self, symbol, order_type, side, amount, price=None, params=None):
         order = {"id": "perp-add", "symbol": symbol, "side": side, "amount": amount, "average": "103.3", "params": params}

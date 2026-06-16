@@ -68,7 +68,7 @@ def _execute_add(
         spot_order = fetch_order_snapshot(spot, spot_symbol, spot_order_raw)
         base_qty = filled_base_quantity(spot, spot_symbol, spot_order, base_qty)
         contract_qty = contract_order_amount(swap, swap_symbol, base_qty)
-        executor._run(steps[2], lambda: executor._set_leverage(swap, swap_symbol, settings.default_leverage), True)
+        executor._run(steps[2], lambda: executor._set_leverage(swap, swap_symbol, settings.default_leverage, settings.margin_mode), True)
         perp_order_raw = executor._run(
             steps[3],
             lambda: swap.create_order(swap_symbol, "market", "sell", contract_qty, None, {"reduceOnly": False, "marginMode": settings.margin_mode}),

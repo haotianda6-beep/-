@@ -190,8 +190,8 @@ export function SettingsPage({ settings, onSaved }: Props) {
             value={draft.margin_mode}
             onChange={(event) => updateDraft((current) => ({ ...current, margin_mode: event.target.value as "isolated" | "cross" }))}
           >
-            <option value="isolated">isolated</option>
-            <option value="cross">cross</option>
+            <option value="cross">全仓</option>
+            <option value="isolated">逐仓</option>
           </select>
         </label>
       </div>
