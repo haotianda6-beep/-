@@ -5,7 +5,7 @@ import { dateTime, money, qty, valueTone } from "../lib/format";
 
 type Props = {
   trades: TradeHistory[];
-  strategy: TradeHistory["strategy_type"];
+  strategy: Extract<TradeHistory["strategy_type"], "cash_carry" | "mt4_spread">;
   title?: string;
   emptyText?: string;
   loading?: boolean;
@@ -25,42 +25,7 @@ export function Trades({
   if (strategy === "mt4_spread") {
     return <Mt4Trades trades={trades} title={title} emptyText={emptyText} loading={loading} error={error} onRefresh={onRefresh} />;
   }
-  if (strategy === "perp_spread") {
-    return <PerpTrades trades={trades} title={title} emptyText={emptyText} loading={loading} error={error} onRefresh={onRefresh} />;
-  }
   return <CashCarryTrades trades={trades} title={title} emptyText={emptyText} loading={loading} error={error} onRefresh={onRefresh} />;
-}
-
-function PerpTrades({ trades, title, emptyText, loading, error, onRefresh }: Omit<Props, "strategy">) {
-  return (
-    <TradePanel title={title} emptyText={emptyText} isEmpty={trades.length === 0} loading={loading} error={error} onRefresh={onRefresh}>
-      <table>
-        <thead>
-          <tr>
-            <th>币种</th>
-            <th>数量</th>
-            <th>开仓时间</th>
-            <th>平仓时间</th>
-            <th>做多所</th>
-            <th>做空所</th>
-            <th>多开仓价</th>
-            <th>多平仓价</th>
-            <th>空开仓价</th>
-            <th>空平仓价</th>
-            <th>实际手续费</th>
-            <th>多空总盈亏</th>
-            <th>多单盈亏</th>
-            <th>空单盈亏</th>
-            <th>资金费率收支</th>
-            <th>实际净利</th>
-            <th>平仓原因</th>
-            <th>对账</th>
-          </tr>
-        </thead>
-        <tbody>{trades.map((item) => <HedgedTradeRow key={item.trade_pair_id} item={item} />)}</tbody>
-      </table>
-    </TradePanel>
-  );
 }
 
 function CashCarryTrades({ trades, title, emptyText, loading, error, onRefresh }: Omit<Props, "strategy">) {

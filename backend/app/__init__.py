@@ -1,2 +1,1 @@
-"""Perpetual arbitrage backend package."""
-
+"""Arbitrage backend package."""

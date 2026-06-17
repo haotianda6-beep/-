@@ -1,12 +1,12 @@
-# Perpetual Spread Arbitrage Bot
+# Arbitrage Control Platform
 
-Five-exchange USDT perpetual spread arbitrage system scaffold for OKX, Gate,
-Bitget, Bybit, and Binance.
+Arbitrage execution and monitoring platform for single-exchange cash-carry,
+MT4-to-exchange spread monitoring, and the independent XAU executor.
 
 The implementation is intentionally guarded by global safety switches:
 
 - dashboard API and WebSocket
-- opportunity ranking with deterministic filters
+- opportunity ranking with deterministic filters for active strategies
 - verified-trade history model
 - editable risk and execution settings
 - encrypted API credential vault with frontend API management
@@ -71,8 +71,8 @@ Open `http://localhost:5173`.
 
 ## Safety Defaults
 
-- `auto_open_enabled` is off.
-- `auto_close_enabled` is off.
+- `cash_carry_auto_open_enabled` is off.
+- `cash_carry_auto_close_enabled` is off.
 - `manual_confirm_required` is on.
 - `max_leverage` defaults to `3`.
 - exchange and AI secrets should be entered through `API 管理` or supplied via

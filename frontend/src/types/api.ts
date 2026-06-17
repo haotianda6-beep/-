@@ -49,55 +49,6 @@ export type CashCarryPositionRow = {
   updated_at: string;
 };
 
-export type DashboardRow = {
-  trade_pair_id: string;
-  symbol: string;
-  long_exchange: ExchangeName;
-  short_exchange: ExchangeName;
-  long_quantity: string;
-  short_quantity: string;
-  leverage: string;
-  long_unrealized_pnl: string;
-  short_unrealized_pnl: string;
-  open_fee: string;
-  estimated_close_fee: string;
-  realized_funding_net: string;
-  estimated_funding_net: string;
-  entry_spread_pct: string;
-  current_spread_pct: string;
-  add_count: number;
-  current_net_profit: string;
-  data_source: "mock" | "live";
-  updated_at: string;
-};
-
-export type Opportunity = {
-  symbol: string;
-  long_exchange: ExchangeName;
-  short_exchange: ExchangeName;
-  long_price: string;
-  short_price: string;
-  spread_pct: string;
-  long_volume_24h_usdt: string;
-  short_volume_24h_usdt: string;
-  min_volume_24h_usdt: string;
-  estimated_open_close_fee: string;
-  estimated_funding_net: string;
-  estimated_net_profit: string;
-  notional_usdt: string;
-  margin_required_usdt: string;
-  leverage: string;
-  spot_transfer_ok: boolean;
-  depth_ok: boolean;
-  risk_tags: string[];
-  data_source: "mock" | "live";
-  updated_at: string;
-};
-
-export type OpportunityCandidate = Opportunity & {
-  blocked_reasons: string[];
-};
-
 export type CashCarryOpportunity = {
   exchange: ExchangeName;
   symbol: string;
@@ -123,7 +74,7 @@ export type CashCarryOpportunity = {
 
 export type TradeHistory = {
   trade_pair_id: string;
-  strategy_type: "perp_spread" | "cash_carry" | "mt4_spread";
+  strategy_type: "cash_carry" | "mt4_spread";
   symbol: string;
   quantity: string;
   opened_at: string;
@@ -153,7 +104,6 @@ export type BotSettings = {
   default_leverage: string;
   max_leverage: string;
   margin_mode: "isolated" | "cross";
-  min_open_spread_pct: string;
   cash_carry_min_basis_pct: string;
   cash_carry_close_basis_pct: string;
   cash_carry_min_funding_rate_pct: string;
@@ -164,11 +114,9 @@ export type BotSettings = {
   mt4_notional_usdt: string;
   mt4_default_leverage: string;
   mt4_max_quote_age_seconds: string;
-  target_close_spread_pct: string;
   take_profit_usdt: string;
   stop_loss_usdt: string;
   max_slippage_pct: string;
-  min_24h_volume_usdt: string;
   min_funding_net_usdt: string;
   max_add_count: number;
   add_notional_usdt: string;
@@ -176,8 +124,6 @@ export type BotSettings = {
   single_exchange_max_notional_usdt: string;
   symbol_blacklist: string[];
   exchange_blacklist: ExchangeName[];
-  auto_open_enabled: boolean;
-  auto_close_enabled: boolean;
   cash_carry_enabled: boolean;
   cash_carry_auto_open_enabled: boolean;
   cash_carry_auto_close_enabled: boolean;
@@ -261,9 +207,6 @@ export type AIInsight = {
 export type RealtimeSnapshot = {
   balances: ExchangeBalance[];
   positions: PositionSnapshot[];
-  dashboard: DashboardRow[];
-  opportunities: Opportunity[];
-  opportunity_candidates: OpportunityCandidate[];
   cash_carry_opportunities: CashCarryOpportunity[];
   cash_carry_candidates: CashCarryOpportunity[];
   cash_carry_positions: CashCarryPositionRow[];

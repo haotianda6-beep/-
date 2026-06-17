@@ -14,7 +14,6 @@ type DecimalKey =
   | "max_symbol_notional_usdt"
   | "default_leverage"
   | "max_leverage"
-  | "min_open_spread_pct"
   | "cash_carry_min_basis_pct"
   | "cash_carry_close_basis_pct"
   | "cash_carry_min_funding_rate_pct"
@@ -24,11 +23,9 @@ type DecimalKey =
   | "mt4_notional_usdt"
   | "mt4_default_leverage"
   | "mt4_max_quote_age_seconds"
-  | "target_close_spread_pct"
   | "take_profit_usdt"
   | "stop_loss_usdt"
   | "max_slippage_pct"
-  | "min_24h_volume_usdt"
   | "min_funding_net_usdt"
   | "add_notional_usdt"
   | "add_trigger_spread_pct"
@@ -46,12 +43,6 @@ const sharedDecimalFields: Array<{ key: DecimalKey; label: string; suffix: strin
   { key: "stop_loss_usdt", label: "止损金额", suffix: "USDT" },
   { key: "max_slippage_pct", label: "最大滑点", suffix: "%" },
   { key: "min_funding_net_usdt", label: "最小净收益", suffix: "USDT" },
-];
-
-const perpDecimalFields: Array<{ key: DecimalKey; label: string; suffix: string }> = [
-  { key: "min_open_spread_pct", label: "最小开仓价差", suffix: "%" },
-  { key: "target_close_spread_pct", label: "目标平仓价差", suffix: "%" },
-  { key: "min_24h_volume_usdt", label: "最低 24h 成交量", suffix: "USDT" },
 ];
 
 const cashCarryDecimalFields: Array<{ key: DecimalKey; label: string; suffix: string }> = [
@@ -76,10 +67,6 @@ const toggleGroups: Array<{ title: string; toggles: ToggleField[] }> = [
       { key: "manual_confirm_required", label: "需要人工确认" },
       { key: "ai_risk_monitor_enabled", label: "AI 风险监控" },
       { key: "emergency_close_enabled", label: "紧急平仓开关" },
-    ] },
-  { title: "五所永续价差套利开关", toggles: [
-      { key: "auto_open_enabled", label: "五所永续允许自动开仓" },
-      { key: "auto_close_enabled", label: "五所永续允许自动平仓" },
     ] },
   { title: "各所期现正向套利开关", toggles: [
       { key: "cash_carry_enabled", label: "启用正向期现扫描" },
@@ -157,7 +144,6 @@ export function SettingsPage({ settings, onSaved }: Props) {
       </div>
 
       <SettingsGroup title="通用资金和风控参数" fields={sharedDecimalFields} draft={draft} onChange={updateDecimal} />
-      <SettingsGroup title="五所永续价差套利参数" fields={perpDecimalFields} draft={draft} onChange={updateDecimal} />
       <SettingsGroup title="各所期现正向套利参数" fields={cashCarryDecimalFields} draft={draft} onChange={updateDecimal} />
       <SettingsGroup title="MT4 与五所价差套利参数" fields={mt4SpreadDecimalFields} draft={draft} onChange={updateDecimal} />
 

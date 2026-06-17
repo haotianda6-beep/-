@@ -3,10 +3,8 @@ import { Activity, History, KeyRound, ListFilter, Settings } from "lucide-react"
 import { ApiCredentialsPage } from "./components/ApiCredentialsPage";
 import { AiPanel } from "./components/AiPanel";
 import { CashCarry, CashCarryDashboard } from "./components/CashCarry";
-import { Dashboard } from "./components/Dashboard";
 import { HomePage } from "./components/HomePage";
 import { Mt4Spread, Mt4SpreadDashboard } from "./components/Mt4Spread";
-import { Opportunities } from "./components/Opportunities";
 import { RiskPanel } from "./components/RiskPanel";
 import { SettingsPage } from "./components/SettingsPage";
 import { Trades } from "./components/Trades";
@@ -14,7 +12,7 @@ import { createRealtimeSocket, fetchSnapshot, fetchTrades } from "./lib/api";
 import type { AIInsight, RealtimeSnapshot, RiskEvent, TradeHistory } from "./types/api";
 
 type Tab = "dashboard" | "opportunities" | "trades";
-type Module = "home" | "perp-spread" | "cash-carry" | "mt4-spread" | "settings" | "api-credentials";
+type Module = "home" | "cash-carry" | "mt4-spread" | "settings" | "api-credentials";
 
 const tabs: Array<{ id: Tab; label: string; icon: typeof Activity }> = [
   { id: "dashboard", label: "仪表盘", icon: Activity },
@@ -84,7 +82,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (activeTab !== "trades" || (activeModule !== "perp-spread" && activeModule !== "cash-carry" && activeModule !== "mt4-spread")) return;
+    if (activeTab !== "trades" || (activeModule !== "cash-carry" && activeModule !== "mt4-spread")) return;
     let stopped = false;
     let timer: number | undefined;
 
@@ -155,7 +153,7 @@ export function App() {
             <KeyRound size={17} />
             <span>API 管理</span>
           </button>
-          {(activeModule === "perp-spread" || activeModule === "cash-carry" || activeModule === "mt4-spread") && tabs.map((tab) => {
+          {(activeModule === "cash-carry" || activeModule === "mt4-spread") && tabs.map((tab) => {
             const Icon = tab.icon;
             return (
               <button key={tab.id} className={activeTab === tab.id ? "active" : ""} onClick={() => setActiveTab(tab.id)} title={tab.label}>
@@ -175,30 +173,6 @@ export function App() {
               onOpen={(module) => {
                 setActiveModule(module);
                 setActiveTab("dashboard");
-              }}
-            />
-          )}
-          {activeModule === "perp-spread" && activeTab === "dashboard" && <Dashboard snapshot={snapshot} />}
-          {activeModule === "perp-spread" && activeTab === "opportunities" && (
-            <Opportunities opportunities={snapshot.opportunities ?? []} candidates={snapshot.opportunity_candidates ?? []} />
-          )}
-          {activeModule === "perp-spread" && activeTab === "trades" && (
-            <Trades
-              trades={filterTrades(trades.length ? trades : snapshot.trades, "perp_spread")}
-              strategy="perp_spread"
-              title="五所永续价差套利做单历史"
-              emptyText="五所永续价差套利还没有经过交易所成交回执核验的真实历史单。"
-              loading={tradesLoading}
-              error={tradesError}
-              onRefresh={() => {
-                setTradesLoading(true);
-                fetchTrades()
-                  .then((next) => {
-                    setTrades(next);
-                    setTradesError("");
-                  })
-                  .catch((reason) => setTradesError(String(reason)))
-                  .finally(() => setTradesLoading(false));
               }}
             />
           )}
@@ -274,7 +248,6 @@ export function App() {
 }
 
 function titleFor(module: Module): string {
-  if (module === "perp-spread") return "五所永续价差套利";
   if (module === "cash-carry") return "各所期现正向套利";
   if (module === "mt4-spread") return "MT4 与五所合约价差套利";
   if (module === "settings") return "全局参数设置";

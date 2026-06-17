@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router, snapshot_json_cached
 
 logger = logging.getLogger(__name__)
-app = FastAPI(title="Perpetual Spread Arbitrage Bot", version="0.1.0")
+app = FastAPI(title="Arbitrage Control Backend", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,

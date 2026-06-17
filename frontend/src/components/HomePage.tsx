@@ -1,8 +1,8 @@
-import { ArrowDownUp, ArrowUpRight, Landmark, LayoutDashboard } from "lucide-react";
+import { ArrowUpRight, Landmark, LayoutDashboard } from "lucide-react";
 import { money, valueTone } from "../lib/format";
 import type { RealtimeSnapshot } from "../types/api";
 
-type ModuleId = "perp-spread" | "cash-carry" | "mt4-spread";
+type ModuleId = "cash-carry" | "mt4-spread";
 
 type Props = {
   snapshot: RealtimeSnapshot;
@@ -11,25 +11,11 @@ type Props = {
 
 export function HomePage({ snapshot, onOpen }: Props) {
   const cashProfit = sumProfit(snapshot.cash_carry_opportunities);
-  const perpProfit = sumProfit(snapshot.opportunities);
   const mt4Profit = sumProfit(snapshot.mt4_spread_opportunities);
   const cashRunning = snapshot.settings.cash_carry_enabled;
   const mt4Running = snapshot.settings.mt4_spread_enabled;
   return (
     <section className="module-grid">
-      <button className="module-card" onClick={() => onOpen("perp-spread")}>
-        <div className="module-head">
-          <ArrowDownUp size={18} />
-          <span>{snapshot.settings.auto_open_enabled ? "自动运行" : "监控中"}</span>
-        </div>
-        <h2>五所永续价差套利</h2>
-        <div className="module-metrics">
-          <span>可开仓 <strong>{snapshot.opportunities.length}</strong></span>
-          <span>候选 <strong>{snapshot.opportunity_candidates.length}</strong></span>
-        </div>
-        <div className={`module-profit ${valueTone(perpProfit)}`}>预估盈利 {money(perpProfit, 4)} USDT</div>
-      </button>
-
       <button className="module-card" onClick={() => onOpen("cash-carry")}>
         <div className="module-head">
           <Landmark size={18} />
