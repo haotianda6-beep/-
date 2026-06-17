@@ -509,6 +509,18 @@
             <h2>当前持仓</h2>
             <div class="compact-list">
               <div class="compact-row">
+                <strong>币安实仓</strong>
+                <span id="binancePositionLine">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>MT4实仓</strong>
+                <span class="wrap" id="mt4PositionsLine">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>单腿提醒</strong>
+                <span class="wrap" id="orphanPositionLine">-</span>
+              </div>
+              <div class="compact-row">
                 <strong>方向</strong>
                 <span id="pairDirection">-</span>
               </div>
@@ -869,6 +881,7 @@
         $("spreadLine").textContent = b && m ? `开仓差 ${fmt(Number(b.ask) - Number(m.ask))} 美元；反向差 ${fmt(Number(m.bid) - Number(b.bid))} 美元` : "-";
         renderAccounts(data);
         renderLimitOrder(data);
+        renderPositions(data);
 
         const pair = data.open_pair;
         const metrics = data.position_metrics || {};
@@ -933,6 +946,43 @@
         $("mt4Available").textContent = mt4 ? accountMoney(mt4.available, mt4.currency) : "-";
         $("mt4Margin").textContent = mt4 ? accountMoney(mt4.used_margin, mt4.currency) : "-";
         $("mt4Unrealized").textContent = mt4 ? accountSigned(mt4.unrealized_pnl, mt4.currency) : "-";
+      }
+
+      function renderPositions(data) {
+        const pair = data.open_pair;
+        const binanceQty = data.binance_position_qty;
+        const mt4Positions = data.mt4_positions || [];
+        $("binancePositionLine").textContent = renderBinancePosition(binanceQty);
+        $("mt4PositionsLine").textContent = renderMt4Positions(mt4Positions);
+        $("orphanPositionLine").textContent = renderOrphanPositionWarning(pair, binanceQty, mt4Positions);
+      }
+
+      function renderBinancePosition(qtyValue) {
+        if (qtyValue === null || qtyValue === undefined) return "等待币安仓位数据";
+        const qty = Number(qtyValue);
+        if (!Number.isFinite(qty)) return `${qtyValue} XAU`;
+        if (Math.abs(qty) < 0.0000001) return "无持仓";
+        return `${qty > 0 ? "多仓" : "空仓"} ${fmt(Math.abs(qty))} XAU`;
+      }
+
+      function renderMt4Positions(positions) {
+        if (!positions.length) return "无持仓";
+        return positions.map((position) => {
+          const ticket = position.ticket ? `单号 ${position.ticket}，` : "";
+          return `${ticket}${translateAction(position.side)} ${fmt(position.lots)} 手，开仓 ${fmt(position.open_price)}，浮盈 ${signedUsd(position.profit)}，隔夜费 ${signedUsd(position.swap)}`;
+        }).join("；");
+      }
+
+      function renderOrphanPositionWarning(pair, binanceQtyValue, mt4Positions) {
+        const binanceQty = Number(binanceQtyValue || 0);
+        const hasBinance = Number.isFinite(binanceQty) && Math.abs(binanceQty) >= 0.0000001;
+        const hasMt4 = mt4Positions.length > 0;
+        if (!pair && hasBinance && hasMt4) return "策略没有组合记录，但币安和 MT4 都有实仓，请人工核对是否同一组持仓。";
+        if (!pair && hasBinance) return "检测到币安单腿持仓，系统不会继续自动开仓，请先人工确认。";
+        if (!pair && hasMt4) return "检测到 MT4 单腿持仓，币安侧当前没有组合记录，请先人工确认。";
+        if (pair && !hasMt4) return "策略有组合记录，但没有收到 MT4 对应持仓，需确认 EA 上报是否正常。";
+        if (pair && !hasBinance) return "策略有组合记录，但币安当前仓位为 0，需确认币安是否已被平掉。";
+        return "无单腿风险";
       }
 
       function renderFunding(metrics, pair) {

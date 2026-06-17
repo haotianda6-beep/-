@@ -101,6 +101,7 @@ class StrategyEngine:
         self.active_plan: EntryPlan | None = None
         self.active_order: OrderUpdate | None = None
         self.order_created_ms = 0
+        self.hedge_started_ms = 0
         self.pending_hedge_qty = Decimal("0")
         self.hedged_qty = Decimal("0")
         self.open_pair: OpenPair | None = None
@@ -355,6 +356,28 @@ class StrategyEngine:
             self.last_error = f"开仓前检查币安挂单/持仓失败，已暂停：{str(exc)[:120]}"
             self.storage.record_event("live_entry_guard_failed", {"error": str(exc)[:160]})
             return False
+        mt4_positions = self.mt4.positions()
+        mt4_account = self.mt4.account_snapshot()
+        mt4_used_margin = mt4_account.used_margin if mt4_account else None
+        if mt4_positions or (mt4_used_margin is not None and mt4_used_margin != 0):
+            self.state = StrategyState.PAUSED
+            self.last_error = "开仓前发现 MT4 已有持仓或保证金占用，已暂停自动开仓，请先人工确认"
+            self.storage.record_event(
+                "live_entry_guard_blocked_mt4_position",
+                {
+                    "positions": [
+                        {
+                            "ticket": position.ticket,
+                            "symbol": position.symbol,
+                            "side": position.side.value,
+                            "lots": str(position.lots),
+                        }
+                        for position in mt4_positions
+                    ],
+                    "used_margin": str(mt4_used_margin) if mt4_used_margin is not None else None,
+                },
+            )
+            return False
         arb_orders = [
             order
             for order in open_orders
@@ -411,17 +434,22 @@ class StrategyEngine:
             return
         lots = qty / self.settings.mt4_lot_size_oz
         self.mt4.queue_market_order(self.active_plan.mt4_hedge_side, lots, "entry hedge", max_price, min_price)
+        self.hedge_started_ms = utc_now_ms()
         self.pending_hedge_qty += qty
         self.state = StrategyState.HEDGING_MT4
 
     async def _check_hedge_timeout(self) -> None:
-        if utc_now_ms() - self.order_created_ms > self.settings.max_hedge_delay_ms:
+        if self.hedge_started_ms <= 0:
+            return
+        if utc_now_ms() - self.hedge_started_ms > self.settings.max_hedge_delay_ms:
             await self._emergency_close("MT4 hedge timeout")
 
     async def _handle_mt4_reports(self) -> None:
         for report in self.mt4.drain_reports():
             self.storage.record_event("mt4_report", report.model_dump(mode="json"))
             if self.state not in {StrategyState.HEDGING_MT4, StrategyState.CLOSING_MT4}:
+                if report.status == "ok" and report.ticket is not None:
+                    self.last_error = "MT4 回报晚于当前策略状态，可能存在 MT4 单腿持仓，请人工确认"
                 continue
             if report.status != "ok" or report.fill_price is None:
                 await self._emergency_close(report.message or "MT4 command failed")
@@ -430,6 +458,8 @@ class StrategyEngine:
             if self.state == StrategyState.HEDGING_MT4:
                 self.hedged_qty += qty
                 self.pending_hedge_qty = max(Decimal("0"), self.pending_hedge_qty - qty)
+                if self.pending_hedge_qty == 0:
+                    self.hedge_started_ms = 0
                 if self.active_order and self.hedged_qty >= self.active_order.executed_qty:
                     self._mark_pair_open(report.fill_price, report.ticket)
             elif self.state == StrategyState.CLOSING_MT4 and self.open_pair:
@@ -450,6 +480,7 @@ class StrategyEngine:
         self.active_plan = None
         self.active_order = None
         self.pending_hedge_qty = Decimal("0")
+        self.hedge_started_ms = 0
         self.state = StrategyState.PAIR_OPEN
 
     async def _maybe_exit(self, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> None:
@@ -505,9 +536,10 @@ class StrategyEngine:
     async def _emergency_close(self, reason: str) -> None:
         self.last_error = reason
         self.state = StrategyState.EMERGENCY_CLOSE_BINANCE
+        close_order: OrderUpdate | None = None
         if self.active_order and self.active_order.executed_qty > 0:
             side = Side.BUY if self.active_order.side == Side.SELL else Side.SELL
-            await self.binance.place_market_order(
+            close_order = await self.binance.place_market_order(
                 OrderRequest(
                     symbol=self.settings.binance_symbol,
                     side=side,
@@ -516,7 +548,18 @@ class StrategyEngine:
                     reduce_only=True,
                 )
             )
-        self.storage.record_event("emergency_close", {"reason": reason})
+        self.storage.record_event(
+            "emergency_close",
+            {
+                "reason": reason,
+                "close_order_id": close_order.order_id if close_order else None,
+                "close_status": close_order.status.value if close_order else None,
+            },
+        )
+        self.active_plan = None
+        self.active_order = None
+        self.pending_hedge_qty = Decimal("0")
+        self.hedge_started_ms = 0
         self.state = StrategyState.PAUSED
 
     def _quotes_fresh(self, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> bool:
@@ -535,6 +578,7 @@ class StrategyEngine:
         self.active_order = None
         self.hedged_qty = Decimal("0")
         self.pending_hedge_qty = Decimal("0")
+        self.hedge_started_ms = 0
         self.state = StrategyState.IDLE
 
     def _reset_all(self) -> None:
@@ -544,4 +588,5 @@ class StrategyEngine:
         self.open_pair = None
         self.hedged_qty = Decimal("0")
         self.pending_hedge_qty = Decimal("0")
+        self.hedge_started_ms = 0
         self.state = StrategyState.IDLE

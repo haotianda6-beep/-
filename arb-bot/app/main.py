@@ -48,6 +48,8 @@ strategy = StrategyEngine(settings, binance_client, mt4_bridge, risk, storage)
 
 app = FastAPI(title="黄金价差执行器", version="0.1.0")
 _loop_task: asyncio.Task | None = None
+_binance_position_qty_cache: Decimal | None = None
+_binance_position_qty_cache_ms = 0
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 MT4_DIR = Path(__file__).resolve().parents[1] / "mt4"
 
@@ -233,6 +235,8 @@ async def status() -> EngineStatus:
         binance_funding=binance_client.latest_funding(),
         binance_account=await binance_client.account_snapshot(),
         mt4_account=mt4_bridge.account_snapshot(),
+        binance_position_qty=await _binance_position_quantity(),
+        mt4_positions=mt4_bridge.positions(),
         binance_quote=binance_client.latest_quote(),
         mt4_quote=mt4_bridge.latest_quote(),
         open_pair=strategy.open_pair,
@@ -241,6 +245,23 @@ async def status() -> EngineStatus:
         last_error=strategy.last_error,
         config=_runtime_config(),
     )
+
+
+async def _binance_position_quantity() -> Decimal | None:
+    global _binance_position_qty_cache, _binance_position_qty_cache_ms
+    now = _now_ms()
+    if _binance_position_qty_cache is not None and now - _binance_position_qty_cache_ms <= 1500:
+        return _binance_position_qty_cache
+    try:
+        _binance_position_qty_cache = await binance_client.position_quantity()
+        _binance_position_qty_cache_ms = now
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Binance position quantity unavailable: %s", str(exc)[:160])
+    return _binance_position_qty_cache
+
+
+def _now_ms() -> int:
+    return int(asyncio.get_running_loop().time() * 1000)
 
 
 @app.put("/config", response_model=RuntimeConfig)

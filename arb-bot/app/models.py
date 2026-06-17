@@ -376,6 +376,8 @@ class EngineStatus(BaseModel):
     binance_funding: BinanceFundingInfo | None = None
     binance_account: AccountSnapshot | None = None
     mt4_account: AccountSnapshot | None = None
+    binance_position_qty: Decimal | None = None
+    mt4_positions: list[Mt4Position] = Field(default_factory=list)
     binance_quote: MarketQuote | None = None
     mt4_quote: MarketQuote | None = None
     open_pair: OpenPair | None = None

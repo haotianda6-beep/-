@@ -4,7 +4,19 @@ import pytest
 
 from app.binance_client import BinanceError, PaperBinanceClient
 from app.config import Settings
-from app.models import ExchangeFilters, MarketQuote, Mt4Report, Mt4Tick, OrderStatus, OrderUpdate, PairDirection, Side, StrategyState, utc_now_ms
+from app.models import (
+    ExchangeFilters,
+    MarketQuote,
+    Mt4Position,
+    Mt4Report,
+    Mt4Tick,
+    OrderStatus,
+    OrderUpdate,
+    PairDirection,
+    Side,
+    StrategyState,
+    utc_now_ms,
+)
 from app.mt4_bridge import Mt4Bridge
 from app.risk import RiskManager
 from app.storage import Storage
@@ -109,6 +121,31 @@ async def test_partial_fill_hedges_only_filled_quantity(tmp_path):
     assert command["action"] == "BUY"
     assert Decimal(str(command["lots"])) == Decimal("0.004")
     assert engine.state == StrategyState.HEDGING_MT4
+
+
+@pytest.mark.asyncio
+async def test_hedge_timeout_starts_when_mt4_command_is_queued(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        settings_kwargs={"MAX_HEDGE_DELAY_MS": 800, "MAX_ORDER_AGE_MS": 5000, "MIN_ORDER_LIVE_MS": 5000},
+    )
+    await engine.step()
+    order = engine.active_order
+    assert order is not None
+    engine.order_created_ms = utc_now_ms() - 5000
+    await client.simulate_fill(order.order_id, Decimal("1"), Decimal("2002"))
+
+    await engine.step()
+    command = mt4.next_command()
+    assert command["action"] == "BUY"
+    assert engine.state == StrategyState.HEDGING_MT4
+    assert engine.hedge_started_ms > engine.order_created_ms
+
+    await engine.step()
+
+    assert engine.state == StrategyState.HEDGING_MT4
+    emergency = [item for item in client._orders.values() if item.is_maker is False and item.reduce_only]
+    assert emergency == []
 
 
 @pytest.mark.asyncio
@@ -241,6 +278,34 @@ async def test_live_entry_guard_blocks_when_orphan_binance_order_exists(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_live_entry_guard_blocks_when_mt4_position_exists(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path)
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("2000"),
+            positions=[
+                Mt4Position(
+                    ticket=123,
+                    symbol="XAUUSD",
+                    side=Side.BUY,
+                    lots=Decimal("0.01"),
+                    open_price=Decimal("2000"),
+                )
+            ],
+            account_margin=Decimal("4.34"),
+        )
+    )
+
+    await engine.step()
+
+    assert engine.state == StrategyState.PAUSED
+    assert engine.active_order is None
+    assert "MT4" in (engine.last_error or "")
+
+
+@pytest.mark.asyncio
 async def test_cancel_race_fill_queues_mt4_hedge(tmp_path):
     engine, client, mt4 = await make_engine(tmp_path, FillOnCancelPaperClient)
     await engine.step()
@@ -289,6 +354,8 @@ async def test_mt4_failure_triggers_emergency_close(tmp_path):
     assert emergency
     assert emergency[-1].side == Side.BUY
     assert emergency[-1].executed_qty == Decimal("0.4")
+    assert engine.active_order is None
+    assert engine.active_plan is None
 
 
 @pytest.mark.asyncio
