@@ -68,7 +68,7 @@ const toggleGroups: Array<{ title: string; toggles: ToggleField[] }> = [
       { key: "ai_risk_monitor_enabled", label: "AI 风险监控" },
       { key: "emergency_close_enabled", label: "紧急平仓开关" },
     ] },
-  { title: "各所期现正向套利开关", toggles: [
+  { title: "GATE / BITGET 期现正向套利开关", toggles: [
       { key: "cash_carry_enabled", label: "启用正向期现扫描" },
       { key: "cash_carry_auto_open_enabled", label: "正向期现允许自动开仓" },
       { key: "cash_carry_auto_close_enabled", label: "正向期现允许自动平仓" },
@@ -80,7 +80,7 @@ const toggleGroups: Array<{ title: string; toggles: ToggleField[] }> = [
     ] },
 ];
 
-const exchanges: ExchangeName[] = ["OKX", "GATE", "BITGET", "BYBIT", "BINANCE"];
+const exchanges: ExchangeName[] = ["GATE", "BITGET"];
 
 export function SettingsPage({ settings, onSaved }: Props) {
   const [draft, setDraft] = useState<BotSettings>(settings);
@@ -144,7 +144,7 @@ export function SettingsPage({ settings, onSaved }: Props) {
       </div>
 
       <SettingsGroup title="通用资金和风控参数" fields={sharedDecimalFields} draft={draft} onChange={updateDecimal} />
-      <SettingsGroup title="各所期现正向套利参数" fields={cashCarryDecimalFields} draft={draft} onChange={updateDecimal} />
+      <SettingsGroup title="GATE / BITGET 期现正向套利参数" fields={cashCarryDecimalFields} draft={draft} onChange={updateDecimal} />
       <SettingsGroup title="MT4 与五所价差套利参数" fields={mt4SpreadDecimalFields} draft={draft} onChange={updateDecimal} />
 
       <div className="settings-grid">

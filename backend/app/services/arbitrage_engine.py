@@ -17,6 +17,7 @@ from app.core.models import (
 from app.core.env import ai_status, credential_statuses, env_bool
 from app.services.ai_monitor import DeepSeekMonitor
 from app.services.cash_carry_positions import CashCarryPositionBuilder
+from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES
 from app.services.cash_carry_scanner import CashCarryScanner
 from app.services.execution_state import recent_execution_results
 from app.services.live_read import LiveReadService
@@ -96,11 +97,8 @@ class ArbitrageEngine:
     def get_balances(self) -> list[ExchangeBalance]:
         now = datetime.now(timezone.utc)
         return [
-            ExchangeBalance(exchange=ExchangeName.BINANCE, equity_usdt=Decimal("5200"), available_usdt=Decimal("4300"), margin_used_usdt=Decimal("900"), updated_at=now),
-            ExchangeBalance(exchange=ExchangeName.OKX, equity_usdt=Decimal("4800"), available_usdt=Decimal("4050"), margin_used_usdt=Decimal("750"), updated_at=now),
             ExchangeBalance(exchange=ExchangeName.GATE, equity_usdt=Decimal("2600"), available_usdt=Decimal("2450"), margin_used_usdt=Decimal("150"), updated_at=now),
             ExchangeBalance(exchange=ExchangeName.BITGET, equity_usdt=Decimal("3100"), available_usdt=Decimal("3020"), margin_used_usdt=Decimal("80"), updated_at=now),
-            ExchangeBalance(exchange=ExchangeName.BYBIT, equity_usdt=Decimal("3900"), available_usdt=Decimal("3300"), margin_used_usdt=Decimal("600"), updated_at=now),
         ]
 
     def get_positions(self, settings: BotSettings) -> list[PositionSnapshot]:
@@ -131,6 +129,7 @@ class ArbitrageEngine:
     def _refresh_cash_positions(self, positions: list[PositionSnapshot], cash_prices: list, settings: BotSettings) -> None:
         try:
             rows = self.cash_carry_positions.build(positions, cash_prices, settings)
+            rows = [item for item in rows if ExchangeName(item.exchange) in CASH_CARRY_EXCHANGES]
         except Exception:
             rows = []
         with self._cash_positions_lock:

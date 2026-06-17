@@ -41,7 +41,7 @@ def test_runtime_open_guard_allows_single_exchange_strategies_on_other_exchanges
     state.write_text('{"positions":[{"exchange":"GATE","symbol":"ABCUSDT","status":"mismatch"}]}', encoding="utf-8")
     runtime = _runtime(tmp_path, cash_executor=CashCarryExecutor(state))
     runtime._account = LiveAccountSnapshot(
-        balances=[_balance(ExchangeName.GATE), _balance(ExchangeName.BYBIT)],
+        balances=[_balance(ExchangeName.GATE), _balance(ExchangeName.BITGET), _balance(ExchangeName.BYBIT)],
         positions=[
             PositionSnapshot(
                 exchange=ExchangeName.GATE,
@@ -59,25 +59,44 @@ def test_runtime_open_guard_allows_single_exchange_strategies_on_other_exchanges
     assert runtime._auto_open_allowed(STRATEGY_CASH) is True
     allowed = runtime._allowed_single_exchange_open_exchanges()
     assert ExchangeName.GATE not in allowed
-    assert ExchangeName.BYBIT in allowed
+    assert ExchangeName.BITGET in allowed
+    assert ExchangeName.BYBIT not in allowed
 
 
 def test_runtime_open_guard_allows_when_no_active_position(tmp_path) -> None:
     runtime = _runtime(tmp_path)
-    runtime._account = LiveAccountSnapshot(balances=[_balance(ExchangeName.BYBIT)])
+    runtime._account = LiveAccountSnapshot(balances=[_balance(ExchangeName.BITGET)])
 
     assert runtime._auto_open_allowed(STRATEGY_CASH) is True
+
+
+def test_runtime_open_guard_blocks_when_only_removed_exchanges_are_healthy(tmp_path) -> None:
+    runtime = _runtime(tmp_path)
+    runtime._account = LiveAccountSnapshot(balances=[_balance(ExchangeName.BYBIT)])
+
+    assert runtime._auto_open_allowed(STRATEGY_CASH) is False
+    assert runtime._allowed_single_exchange_open_exchanges() == set()
 
 
 def test_runtime_single_exchange_open_ignores_unrelated_account_issue(tmp_path) -> None:
     runtime = _runtime(tmp_path)
     runtime._account = LiveAccountSnapshot(
-        balances=[_balance(ExchangeName.BYBIT)],
+        balances=[_balance(ExchangeName.BITGET), _balance(ExchangeName.BYBIT)],
         issues=["OKX: 接口临时异常"],
     )
 
     assert runtime._auto_open_allowed(STRATEGY_CASH) is True
-    assert runtime._allowed_single_exchange_open_exchanges() == {ExchangeName.BYBIT}
+    assert runtime._allowed_single_exchange_open_exchanges() == {ExchangeName.BITGET}
+
+
+def test_runtime_ignores_untracked_positions_outside_cash_carry_exchanges(tmp_path) -> None:
+    runtime = _runtime(tmp_path)
+    runtime._account = LiveAccountSnapshot(
+        balances=[_balance(ExchangeName.GATE)],
+        positions=[_position(ExchangeName.BYBIT, "OTHERUSDT")],
+    )
+
+    assert runtime._auto_open_allowed(STRATEGY_CASH) is True
 
 
 def test_runtime_marks_same_exchange_cash_carry_opportunities_blocked(tmp_path) -> None:
@@ -89,12 +108,12 @@ def test_runtime_marks_same_exchange_cash_carry_opportunities_blocked(tmp_path) 
         CashCarryScan(
             opportunities=[
                 _cash_opportunity(ExchangeName.BITGET, "SKYAIUSDT", "3"),
-                _cash_opportunity(ExchangeName.BYBIT, "XYZUSDT", "2"),
+                _cash_opportunity(ExchangeName.GATE, "XYZUSDT", "2"),
             ]
         )
     )
 
-    assert [(item.exchange, item.symbol) for item in scan.opportunities] == [(ExchangeName.BYBIT, "XYZUSDT")]
+    assert [(item.exchange, item.symbol) for item in scan.opportunities] == [(ExchangeName.GATE, "XYZUSDT")]
     bitget = next(item for item in scan.candidates if item.exchange == ExchangeName.BITGET)
     assert "一所一币规则" in " / ".join(bitget.blocked_reasons)
 

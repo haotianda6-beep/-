@@ -6,6 +6,7 @@ from typing import Any
 from app.core.models import BotSettings, CashCarryOpportunity, CashCarryPositionRow, ExchangeName
 from app.services.cash_carry_add_policy import CashCarryAddDecision, cash_carry_add_decision
 from app.services.cash_carry_execution_models import CashCarryPosition
+from app.services.cash_carry_scope import CASH_CARRY_EXCHANGE_SET
 from app.services.order_sizing import contract_order_amount, fetch_order_snapshot, filled_base_quantity, order_average_price, spot_market_buy
 from app.services.execution_models import ExecutionResult, ExecutionStep
 
@@ -23,6 +24,8 @@ def evaluate_cash_carry_add(
     records = executor.state.load_positions()
     total_notional = _active_notional(records, by_key)
     for record in records:
+        if record.exchange not in CASH_CARRY_EXCHANGE_SET:
+            continue
         current = _add_candidate(by_key.get((record.exchange, record.symbol)))
         live = live_by_key.get((record.exchange, record.symbol))
         if not current or not live or live.status != "matched":
@@ -136,6 +139,8 @@ def _add_fields(
 def _active_notional(records: list[CashCarryPosition], by_key: dict[tuple[ExchangeName, str], CashCarryOpportunity]) -> Decimal:
     total = Decimal("0")
     for record in records:
+        if record.exchange not in CASH_CARRY_EXCHANGE_SET:
+            continue
         current = by_key.get((record.exchange, record.symbol))
         total += record.quantity * (current.spot_price if current else record.spot_entry_price)
     return total

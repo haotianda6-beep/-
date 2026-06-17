@@ -49,7 +49,7 @@ def test_cash_carry_executor_skips_existing_exchange_and_checks_next_exchange(tm
     executor = CashCarryExecutor(state)
     settings = BotSettings(manual_confirm_required=False, cash_carry_auto_open_enabled=True, cash_carry_auto_trade_enabled=False)
 
-    result = executor.evaluate_open([_opportunity("ABCUSDT", "9"), _opportunity("XYZUSDT", "1", exchange=ExchangeName.BYBIT)], settings)
+    result = executor.evaluate_open([_opportunity("ABCUSDT", "9"), _opportunity("XYZUSDT", "1", exchange=ExchangeName.BITGET)], settings)
 
     assert result is not None
     assert result.status == "blocked_by_safety_gate"
@@ -63,6 +63,13 @@ def test_cash_carry_executor_does_not_duplicate_existing_ready_position(tmp_path
     settings = BotSettings(manual_confirm_required=False, cash_carry_auto_open_enabled=True, cash_carry_auto_trade_enabled=False)
 
     assert executor.evaluate_open([_opportunity("ABCUSDT", "9")], settings) is None
+
+
+def test_cash_carry_executor_ignores_removed_exchanges(tmp_path) -> None:
+    executor = CashCarryExecutor(tmp_path / "state.json")
+    settings = BotSettings(manual_confirm_required=False, cash_carry_auto_open_enabled=True, cash_carry_auto_trade_enabled=False)
+
+    assert executor.evaluate_open([_opportunity("XYZUSDT", "9", exchange=ExchangeName.BYBIT)], settings) is None
 
 
 def test_cash_carry_executor_blocks_same_exchange_new_symbol(tmp_path) -> None:
@@ -102,7 +109,7 @@ def test_cash_carry_executor_allows_other_exchange_when_one_exchange_is_active(t
         cash_carry_auto_trade_enabled=False,
     )
 
-    result = executor.evaluate_open([_opportunity("SKYAIUSDT", "3", exchange=ExchangeName.BYBIT)], settings)
+    result = executor.evaluate_open([_opportunity("SKYAIUSDT", "3", exchange=ExchangeName.GATE)], settings)
 
     assert result is not None
     assert result.status == "blocked_by_safety_gate"

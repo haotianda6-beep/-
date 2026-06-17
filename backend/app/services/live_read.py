@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 from app.core.env import ENV_PATH, credential_statuses, env_bool
 from app.core.models import ExchangeBalance, ExchangeName, PositionSnapshot
+from app.services.cash_carry_scope import CASH_CARRY_EXCHANGE_SET
 from app.services.exchange_factory import build_ccxt_exchange, sanitize_exchange_error
 
 
@@ -39,14 +40,17 @@ class LiveReadService:
         load_dotenv(ENV_PATH, override=False)
         snapshot = LiveAccountSnapshot()
         for status in credential_statuses():
+            exchange_name = ExchangeName(status.exchange)
+            if exchange_name not in CASH_CARRY_EXCHANGE_SET:
+                continue
             if not status.configured:
                 snapshot.issues.append(f"{status.exchange}: API 凭证未配置完整")
                 continue
             exchange = None
             try:
-                exchange = self._build_exchange(ExchangeName(status.exchange))
-                snapshot.balances.append(self._fetch_balance(exchange, ExchangeName(status.exchange)))
-                snapshot.positions.extend(self._fetch_positions(exchange, ExchangeName(status.exchange)))
+                exchange = self._build_exchange(exchange_name)
+                snapshot.balances.append(self._fetch_balance(exchange, exchange_name))
+                snapshot.positions.extend(self._fetch_positions(exchange, exchange_name))
             except Exception as exc:  # noqa: BLE001 - exchange libraries raise many custom errors.
                 snapshot.issues.append(f"{status.exchange}: {self._sanitize_error(str(exc))}")
             finally:

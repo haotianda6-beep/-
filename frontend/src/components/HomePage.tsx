@@ -21,7 +21,7 @@ export function HomePage({ snapshot, onOpen }: Props) {
           <Landmark size={18} />
           <span>{cashRunning ? (snapshot.settings.cash_carry_auto_open_enabled ? "自动运行" : "监控中") : "已关闭"}</span>
         </div>
-        <h2>各所期现正向套利</h2>
+        <h2>GATE / BITGET 期现正向套利</h2>
         <div className="module-metrics">
           <span>可开仓 <strong>{snapshot.cash_carry_opportunities.length}</strong></span>
           <span>候选 <strong>{snapshot.cash_carry_candidates.length}</strong></span>

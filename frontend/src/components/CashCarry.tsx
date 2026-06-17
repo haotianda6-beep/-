@@ -1,6 +1,8 @@
 import { Banknote, Landmark, Layers } from "lucide-react";
 import { dateTime, dateTimeMs, money, pct, qty, takeProfitProgress, takeProfitRemaining, valueTone } from "../lib/format";
-import type { CashCarryOpportunity, CashCarryPositionRow, RealtimeSnapshot } from "../types/api";
+import type { CashCarryOpportunity, CashCarryPositionRow, ExchangeName, RealtimeSnapshot } from "../types/api";
+
+const CASH_CARRY_EXCHANGES: ExchangeName[] = ["GATE", "BITGET"];
 
 type Props = {
   opportunities: CashCarryOpportunity[];
@@ -8,24 +10,26 @@ type Props = {
 };
 
 export function CashCarry({ opportunities, candidates }: Props) {
+  const ready = opportunities.filter((item) => CASH_CARRY_EXCHANGES.includes(item.exchange));
+  const blocked = candidates.filter((item) => CASH_CARRY_EXCHANGES.includes(item.exchange));
   return (
     <div className="page-grid">
       <section className="panel wide">
         <div className="section-title">
           <Landmark size={18} />
-          <h2>期现正向套利机会</h2>
+          <h2>GATE / BITGET 期现正向套利机会</h2>
         </div>
-        <CashCarryTable rows={opportunities} mode="ready" />
-        {opportunities.length === 0 && <div className="empty">暂无同时满足正资金费率和合约溢价阈值的期现机会。</div>}
+        <CashCarryTable rows={ready} mode="ready" />
+        {ready.length === 0 && <div className="empty">GATE / BITGET 暂无同时满足正资金费率和合约溢价阈值的期现机会。</div>}
       </section>
 
       <section className="panel wide">
         <div className="section-title">
           <Landmark size={18} />
-          <h2>期现候选与不能开仓原因</h2>
+          <h2>GATE / BITGET 候选与不能开仓原因</h2>
         </div>
-        <CashCarryTable rows={candidates} mode="blocked" />
-        {candidates.length === 0 && <div className="empty">期现扫描后台加载中或暂无候选。</div>}
+        <CashCarryTable rows={blocked} mode="blocked" />
+        {blocked.length === 0 && <div className="empty">GATE / BITGET 期现扫描后台加载中或暂无候选。</div>}
       </section>
     </div>
   );
@@ -34,12 +38,14 @@ export function CashCarry({ opportunities, candidates }: Props) {
 export function CashCarryDashboard({ snapshot }: { snapshot: RealtimeSnapshot }) {
   const ready = snapshot.cash_carry_opportunities ?? [];
   const groups = snapshot.cash_carry_positions ?? [];
+  const balances = snapshot.balances.filter((item) => CASH_CARRY_EXCHANGES.includes(item.exchange));
+  const positions = snapshot.positions.filter((item) => CASH_CARRY_EXCHANGES.includes(item.exchange));
   return (
     <div className="page-grid">
       <section className="panel">
         <div className="section-title">
           <Banknote size={18} />
-          <h2>五所余额</h2>
+          <h2>GATE / BITGET 余额</h2>
         </div>
         <div className="table-wrap">
           <table>
@@ -53,7 +59,7 @@ export function CashCarryDashboard({ snapshot }: { snapshot: RealtimeSnapshot })
               </tr>
             </thead>
             <tbody>
-              {snapshot.balances.map((item) => (
+              {balances.map((item) => (
                 <tr key={item.exchange}>
                   <td className="strong">{item.exchange}</td>
                   <td>{money(item.equity_usdt)}</td>
@@ -70,7 +76,7 @@ export function CashCarryDashboard({ snapshot }: { snapshot: RealtimeSnapshot })
       <section className="panel">
         <div className="section-title">
           <Layers size={18} />
-          <h2>期现正向持仓组合</h2>
+          <h2>GATE / BITGET 期现正向持仓组合</h2>
         </div>
         <CashCarryPositionTable rows={groups} takeProfit={snapshot.settings.take_profit_usdt} />
         {groups.length === 0 && <div className="empty">当前没有读取到正向期现组合持仓。</div>}
@@ -99,7 +105,7 @@ export function CashCarryDashboard({ snapshot }: { snapshot: RealtimeSnapshot })
               </tr>
             </thead>
             <tbody>
-              {snapshot.positions.map((item) => (
+              {positions.map((item) => (
                 <tr key={`${item.exchange}-${item.symbol}-${item.side}`}>
                   <td className="strong">{item.symbol}</td>
                   <td>{item.exchange}</td>
@@ -119,13 +125,13 @@ export function CashCarryDashboard({ snapshot }: { snapshot: RealtimeSnapshot })
             </tbody>
           </table>
         </div>
-        {snapshot.positions.length === 0 && <div className="empty">当前没有从交易所读取到合约持仓。</div>}
+        {positions.length === 0 && <div className="empty">当前没有从 GATE / BITGET 读取到合约持仓。</div>}
       </section>
 
       <section className="panel wide">
         <div className="section-title">
           <Landmark size={18} />
-          <h2>期现正向套利监控</h2>
+          <h2>GATE / BITGET 期现正向套利监控</h2>
         </div>
         <CashCarryTable rows={ready} mode="ready" />
         {ready.length === 0 && <div className="empty">暂无满足期现正向套利参数的可开仓机会。</div>}

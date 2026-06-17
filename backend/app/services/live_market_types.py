@@ -4,6 +4,7 @@ from typing import Any
 
 from app.core.models import CashCarryOpportunity, ExchangeName
 from app.services.asset_identity import MarketAsset
+from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES, CASH_CARRY_EXCHANGE_SET
 from app.services.market_checks import TransferNetworks
 
 
@@ -22,7 +23,6 @@ SPOT_EXCHANGE_IDS = {
     ExchangeName.BITGET: "bitget",
     ExchangeName.BYBIT: "bybit",
 }
-
 
 @dataclass
 class SwapMarket:

@@ -194,8 +194,8 @@ export function App() {
             <Trades
               trades={filterTrades(trades.length ? trades : snapshot.trades, "cash_carry")}
               strategy="cash_carry"
-              title="各所期现正向套利做单历史"
-              emptyText="各所期现正向套利还没有经过交易所成交回执核验的真实历史单。"
+              title="GATE / BITGET 期现正向套利做单历史"
+              emptyText="GATE / BITGET 期现正向套利还没有经过交易所成交回执核验的真实历史单。"
               loading={tradesLoading}
               error={tradesError}
               onRefresh={() => {
@@ -248,7 +248,7 @@ export function App() {
 }
 
 function titleFor(module: Module): string {
-  if (module === "cash-carry") return "各所期现正向套利";
+  if (module === "cash-carry") return "GATE / BITGET 期现正向套利";
   if (module === "mt4-spread") return "MT4 与五所合约价差套利";
   if (module === "settings") return "全局参数设置";
   if (module === "api-credentials") return "API 管理";

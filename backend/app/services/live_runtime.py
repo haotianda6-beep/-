@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from app.core.credential_utils import env_bool
 from app.core.models import BotSettings, CashCarryOpportunity, ExchangeName
+from app.services.cash_carry_scope import CASH_CARRY_EXCHANGE_SET
 from app.services.cash_carry_executor import CashCarryExecutor
 from app.services.cash_carry_fast_refresh import CashCarryFastRefresher
 from app.services.cash_carry_positions import CashCarryPositionBuilder
@@ -344,7 +345,8 @@ class LiveRuntimeCache:
             account_has_issues = bool(self._account.issues)
             healthy_exchanges = self._healthy_account_exchanges_locked()
             live_positions = list(self._account.positions)
-        if not healthy_exchanges:
+        healthy_cash_exchanges = healthy_exchanges & CASH_CARRY_EXCHANGE_SET
+        if not healthy_cash_exchanges:
             return False
         if self._has_untracked_live_positions(live_positions):
             return False
@@ -373,14 +375,19 @@ class LiveRuntimeCache:
         with self._lock:
             healthy = self._healthy_account_exchanges_locked()
         used = self.cash_carry_executor.state.active_exchanges()
-        return healthy - used
+        return (healthy & CASH_CARRY_EXCHANGE_SET) - used
 
     def _healthy_account_exchanges_locked(self) -> set[ExchangeName]:
         return {ExchangeName(item.exchange) for item in self._account.balances}
 
     def _has_untracked_live_positions(self, positions) -> bool:
         tracked = self._tracked_live_position_keys()
-        return any(item.quantity > 0 and (ExchangeName(item.exchange), item.symbol) not in tracked for item in positions)
+        return any(
+            item.quantity > 0
+            and ExchangeName(item.exchange) in CASH_CARRY_EXCHANGE_SET
+            and (ExchangeName(item.exchange), item.symbol) not in tracked
+            for item in positions
+        )
 
     def _tracked_live_position_keys(self) -> set[tuple[ExchangeName, str]]:
         return set(self.cash_carry_executor.state.active_keys())

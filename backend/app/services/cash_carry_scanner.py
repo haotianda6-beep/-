@@ -9,6 +9,7 @@ from app.core.models import BotSettings, CashCarryOpportunity, DataSource, Excha
 from app.core.pnl import calculate_spread_pct
 from app.services.asset_identity import MarketAsset, asset_from_market, local_identity_reasons
 from app.services.cash_carry_depth_estimator import estimate_max_safe_notional
+from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES
 from app.services.exchange_factory import build_ccxt_exchange
 from app.services.live_market_types import CashCarryScan, SPOT_EXCHANGE_IDS, SWAP_EXCHANGE_IDS
 from app.services.live_read import decimal_from
@@ -51,7 +52,7 @@ class CashCarryScanner:
     def scan(self, settings: BotSettings) -> CashCarryScan:
         if not settings.cash_carry_enabled:
             return CashCarryScan()
-        exchanges = [exchange for exchange in ExchangeName if exchange not in set(settings.exchange_blacklist)]
+        exchanges = [exchange for exchange in CASH_CARRY_EXCHANGES if exchange not in set(settings.exchange_blacklist)]
         with ThreadPoolExecutor(max_workers=max(1, min(3, len(exchanges)))) as executor:
             data = list(executor.map(self._load_exchange_data, exchanges))
         try:

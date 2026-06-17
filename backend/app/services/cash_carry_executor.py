@@ -12,6 +12,7 @@ from app.services.cash_carry_close_policy import cash_carry_close_decision
 from app.services.cash_carry_execution_guard import forward_close_depth_guard, forward_open_depth_guard
 from app.services.cash_carry_execution_models import CashCarryPosition
 from app.services.cash_carry_reconciler import build_cash_carry_external_perp_close_history, build_cash_carry_history
+from app.services.cash_carry_scope import CASH_CARRY_EXCHANGE_SET
 from app.services.cash_carry_state import CashCarryStateStore
 from app.services.cash_carry_transfer import transfer_usdt_to_spot
 from app.services.exchange_factory import build_ccxt_exchange, sanitize_exchange_error
@@ -56,6 +57,7 @@ class CashCarryExecutor:
         ready = [
             item for item in rows
             if not item.blocked_reasons
+            and ExchangeName(item.exchange) in CASH_CARRY_EXCHANGE_SET
             and (item.exchange, item.symbol) not in blocked_keys
             and ExchangeName(item.exchange) not in self.state.active_exchanges()
             and (allowed_open_exchanges is None or ExchangeName(item.exchange) in allowed_open_exchanges)
@@ -80,6 +82,8 @@ class CashCarryExecutor:
             return None
         live_by_key = {(ExchangeName(row.exchange), row.symbol): row for row in position_rows or []}
         for record in self.state.load_positions(include_non_open=True):
+            if record.exchange not in CASH_CARRY_EXCHANGE_SET:
+                continue
             live = live_by_key.get((record.exchange, record.symbol))
             if not live:
                 if record.status in {"open", "mismatch"}:
@@ -100,6 +104,8 @@ class CashCarryExecutor:
         return None
 
     def _execute_open(self, item: CashCarryOpportunity, settings: BotSettings, steps: list[ExecutionStep]) -> ExecutionResult:
+        if ExchangeName(item.exchange) not in CASH_CARRY_EXCHANGE_SET:
+            return self.state.remember(ExecutionResult(str(uuid.uuid4()), "blocked_by_safety_gate", f"{item.exchange} 已不允许正向期现开仓", steps))
         spot = self._exchange(item.exchange, "spot")
         swap = self._exchange(item.exchange, "swap")
         base = self._base(item.symbol)

@@ -46,6 +46,36 @@ def test_cash_carry_symbol_blacklist_accepts_base_asset_name() -> None:
     assert rows == []
 
 
+def test_cash_carry_scan_only_uses_gate_and_bitget(monkeypatch) -> None:
+    scanner = CashCarryScanner()
+    loaded: list[ExchangeName] = []
+
+    def fake_load(exchange: ExchangeName) -> CashCarryExchangeData:
+        loaded.append(exchange)
+        return CashCarryExchangeData(exchange=exchange)
+
+    monkeypatch.setattr(scanner, "_load_exchange_data", fake_load)
+
+    scanner.scan(BotSettings())
+
+    assert loaded == [ExchangeName.GATE, ExchangeName.BITGET]
+
+
+def test_cash_carry_scan_respects_blacklist_inside_allowed_exchanges(monkeypatch) -> None:
+    scanner = CashCarryScanner()
+    loaded: list[ExchangeName] = []
+
+    def fake_load(exchange: ExchangeName) -> CashCarryExchangeData:
+        loaded.append(exchange)
+        return CashCarryExchangeData(exchange=exchange)
+
+    monkeypatch.setattr(scanner, "_load_exchange_data", fake_load)
+
+    scanner.scan(BotSettings(exchange_blacklist=[ExchangeName.GATE, ExchangeName.BYBIT]))
+
+    assert loaded == [ExchangeName.BITGET]
+
+
 def test_cash_carry_blocks_same_symbol_with_different_base_id() -> None:
     scanner = CashCarryScanner()
     item = scanner._build_opportunity(
