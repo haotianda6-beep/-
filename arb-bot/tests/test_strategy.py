@@ -120,6 +120,8 @@ async def test_partial_fill_hedges_only_filled_quantity(tmp_path):
     command = mt4.next_command()
     assert command["action"] == "BUY"
     assert Decimal(str(command["lots"])) == Decimal("0.004")
+    assert command["max_price"] is None
+    assert command["min_price"] is None
     assert engine.state == StrategyState.HEDGING_MT4
 
 

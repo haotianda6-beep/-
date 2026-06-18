@@ -411,17 +411,6 @@ class StrategyEngine:
         if not mt4_quote:
             await self._emergency_close("MT4 quote missing before hedge")
             return
-        if self.active_plan.mt4_hedge_side == Side.BUY:
-            check = self.risk.mt4_buy_price_ok(fill_price, mt4_quote.ask)
-            max_price = fill_price - self.settings.min_locked_edge
-            min_price = None
-        else:
-            check = self.risk.mt4_sell_price_ok(fill_price, mt4_quote.bid)
-            max_price = None
-            min_price = fill_price + self.settings.min_locked_edge
-        if not check.ok:
-            await self._emergency_close(check.reason)
-            return
         if self.settings.is_dry_run:
             fill = mt4_quote.ask if self.active_plan.mt4_hedge_side == Side.BUY else mt4_quote.bid
             hedge_side = self.active_plan.mt4_hedge_side
@@ -433,7 +422,7 @@ class StrategyEngine:
             )
             return
         lots = qty / self.settings.mt4_lot_size_oz
-        self.mt4.queue_market_order(self.active_plan.mt4_hedge_side, lots, "entry hedge", max_price, min_price)
+        self.mt4.queue_market_order(self.active_plan.mt4_hedge_side, lots, "entry hedge")
         self.hedge_started_ms = utc_now_ms()
         self.pending_hedge_qty += qty
         self.state = StrategyState.HEDGING_MT4

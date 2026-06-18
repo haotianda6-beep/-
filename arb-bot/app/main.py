@@ -595,9 +595,8 @@ def _execution_plan() -> ExecutionPlanStatus:
     plan = strategy.active_plan
     if order:
         follow_side = plan.mt4_hedge_side if plan else None
-        price_limit = plan.mt4_price_limit if plan else None
         return ExecutionPlanStatus(
-            summary=f"币安当前挂单：{_side_text(order.side)} {order.orig_qty} XAU，价格 {order.price}，状态 {_order_status_text(order.status.value)}。",
+            summary=f"币安当前挂单：{_side_text(order.side)} {order.orig_qty} XAU，价格 {order.price}，状态 {_order_status_text(order.status.value)}；成交后 MT4 立即市价对冲，不检查价差保护价。",
             active_binance_order=True,
             binance_order_status=order.status,
             binance_order_side=order.side,
@@ -605,7 +604,7 @@ def _execution_plan() -> ExecutionPlanStatus:
             binance_order_qty=order.orig_qty,
             binance_order_executed_qty=order.executed_qty,
             mt4_follow_side=follow_side,
-            mt4_price_limit=price_limit,
+            mt4_price_limit=None,
             max_follow_seconds=max_follow_seconds,
         )
 
@@ -643,12 +642,12 @@ def _execution_plan() -> ExecutionPlanStatus:
             confirm_left = max(0, settings.entry_confirm_ms - strategy.entry_candidate_age_ms())
             confirm_text = "已通过稳定确认" if confirm_left == 0 else f"还需稳定 {confirm_left} 毫秒"
             return ExecutionPlanStatus(
-                summary=f"开仓条件已满足：{confirm_text}；币安将挂 {_side_text(entry_plan.binance_side)} 限价 {entry_plan.limit_price}，数量 {entry_plan.quantity_oz} XAU；成交后 MT4 {_side_text(entry_plan.mt4_hedge_side)} 市价对冲，保护价 {entry_plan.mt4_price_limit}。",
+                summary=f"开仓条件已满足：{confirm_text}；币安将挂 {_side_text(entry_plan.binance_side)} 限价 {entry_plan.limit_price}，数量 {entry_plan.quantity_oz} XAU；成交后 MT4 {_side_text(entry_plan.mt4_hedge_side)} 立即市价对冲，不检查价差保护价。",
                 binance_order_side=entry_plan.binance_side,
                 binance_order_price=entry_plan.limit_price,
                 binance_order_qty=entry_plan.quantity_oz,
                 mt4_follow_side=entry_plan.mt4_hedge_side,
-                mt4_price_limit=entry_plan.mt4_price_limit,
+                mt4_price_limit=None,
                 max_follow_seconds=max_follow_seconds,
             )
         high_edge = binance_quote.ask - mt4_quote.ask

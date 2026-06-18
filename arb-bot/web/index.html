@@ -917,7 +917,7 @@
         $("limitOrderSideQty").textContent = `${translateAction(plan.binance_order_side)} ${fmt(plan.binance_order_qty)} XAU，已成交 ${fmt(plan.binance_order_executed_qty || 0)} XAU`;
         $("limitOrderPrice").textContent = `${fmt(plan.binance_order_price)} 美元`;
         $("limitOrderDistance").textContent = orderDistanceText(plan, quote);
-        $("limitOrderMt4Follow").textContent = plan.mt4_follow_side ? `${translateAction(plan.mt4_follow_side)}，保护价 ${fmt(plan.mt4_price_limit)}，${fmt(plan.max_follow_seconds)} 秒内回报` : "-";
+        $("limitOrderMt4Follow").textContent = plan.mt4_follow_side ? `${translateAction(plan.mt4_follow_side)}，立即市价跟随，不设保护价，${fmt(plan.max_follow_seconds)} 秒内回报` : "-";
         $("limitOrderSummary").textContent = plan.summary || "-";
       }
 
