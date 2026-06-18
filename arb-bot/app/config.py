@@ -27,6 +27,8 @@ CONFIG_FIELD_TO_ENV = {
     "max_hedge_delay_ms": "MAX_HEDGE_DELAY_MS",
     "max_unhedged_loss_usd_per_oz": "MAX_UNHEDGED_LOSS_USD_PER_OZ",
     "daily_loss_limit_usdt": "DAILY_LOSS_LIMIT_USDT",
+    "add_edge_growth_pct": "ADD_EDGE_GROWTH_PCT",
+    "max_add_count": "MAX_ADD_COUNT",
     "target_oz": "TARGET_OZ",
     "mt4_lot_size_oz": "MT4_LOT_SIZE_OZ",
     "mt4_slippage_points": "MT4_SLIPPAGE_POINTS",
@@ -78,6 +80,8 @@ class Settings(BaseSettings):
     max_hedge_delay_ms: int = Field(default=800, alias="MAX_HEDGE_DELAY_MS")
     max_unhedged_loss_usd_per_oz: Decimal = Field(default=Decimal("0.80"), alias="MAX_UNHEDGED_LOSS_USD_PER_OZ")
     daily_loss_limit_usdt: Decimal = Field(default=Decimal("50"), alias="DAILY_LOSS_LIMIT_USDT")
+    add_edge_growth_pct: Decimal = Field(default=Decimal("1"), alias="ADD_EDGE_GROWTH_PCT")
+    max_add_count: int = Field(default=3, alias="MAX_ADD_COUNT")
     target_oz: Decimal = Field(default=Decimal("1"), alias="TARGET_OZ")
     mt4_lot_size_oz: Decimal = Field(default=Decimal("100"), alias="MT4_LOT_SIZE_OZ")
     mt4_slippage_points: int = Field(default=30, alias="MT4_SLIPPAGE_POINTS")
@@ -93,6 +97,7 @@ class Settings(BaseSettings):
         "min_locked_edge",
         "max_unhedged_loss_usd_per_oz",
         "daily_loss_limit_usdt",
+        "add_edge_growth_pct",
         "target_oz",
         "mt4_lot_size_oz",
         "binance_entry_offset_usd",
@@ -126,6 +131,13 @@ class Settings(BaseSettings):
     def non_negative_or_positive_timing(cls, value: int) -> int:
         if value < 0:
             raise ValueError("timing values must not be negative")
+        return value
+
+    @field_validator("max_add_count")
+    @classmethod
+    def non_negative_add_count(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("max add count must not be negative")
         return value
 
     @property

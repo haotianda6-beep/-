@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from decimal import Decimal
@@ -22,6 +23,7 @@ from app.models import (
     Mt4OrderHistoryPayload,
     Mt4Report,
     Mt4Tick,
+    OpenPair,
     OrderRequest,
     OrderStatus,
     PairDirection,
@@ -38,7 +40,7 @@ from app.models import (
 from app.mt4_bridge import Mt4Bridge
 from app.risk import RiskManager
 from app.storage import Storage
-from app.strategy import StrategyEngine, build_entry_plan, round_down, round_up
+from app.strategy import StrategyEngine, build_directional_entry_plan, build_entry_plan, round_down, round_up
 
 
 setup_logging()
@@ -55,14 +57,17 @@ app = FastAPI(title="黄金价差执行器", version="0.1.0")
 _loop_task: asyncio.Task | None = None
 _binance_position_qty_cache: Decimal | None = None
 _binance_position_qty_cache_ms = 0
+_runtime_state_cache: str | None = None
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 MT4_DIR = Path(__file__).resolve().parents[1] / "mt4"
+RUNTIME_STATE_PATH = settings.sqlite_path.parent / "runtime_state.json"
 
 
 @app.on_event("startup")
 async def startup() -> None:
     global _loop_task
     await binance_client.start()
+    _load_runtime_state()
     await _reconcile_live_startup_state()
     mode = "dry-run" if settings.is_dry_run else "live"
     logger.info("arb executor starting mode=%s symbol=%s/%s", mode, settings.binance_symbol, settings.mt4_symbol)
@@ -342,6 +347,7 @@ async def resume() -> dict:
     if not settings.is_dry_run:
         await _assert_resume_safe()
     strategy.resume()
+    _persist_runtime_state()
     return {"status": "ok", "state": strategy.state}
 
 
@@ -352,6 +358,7 @@ async def clear_paper_state() -> dict:
     if isinstance(binance_client, PaperBinanceClient):
         binance_client.clear_orders()
     strategy.clear_runtime_state()
+    _persist_runtime_state()
     return {"status": "ok", "state": strategy.state}
 
 
@@ -361,6 +368,7 @@ async def start_live_mode() -> dict:
     if isinstance(binance_client, PaperBinanceClient):
         binance_client.clear_orders()
     strategy.clear_runtime_state()
+    _persist_runtime_state()
     update_mode_file(live_trading=True, paper_mode=False)
     asyncio.create_task(_restart_after_response())
     return {"status": "restarting", "mode": "live", "message": "实盘模式已写入，服务正在重启"}
@@ -512,6 +520,7 @@ async def _prepare_live_stop() -> None:
     if remote_order is not None and remote_order.status not in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED}:
         await _cancel_stop_order(remote_order.order_id)
     strategy.clear_runtime_state()
+    _persist_runtime_state()
 
 
 async def _assert_resume_safe() -> None:
@@ -559,7 +568,50 @@ async def _strategy_loop() -> None:
         except Exception as exc:  # noqa: BLE001
             strategy.last_error = str(exc)[:240]
             logger.exception("strategy loop error")
+        _persist_runtime_state()
         await asyncio.sleep(settings.loop_interval_ms / 1000)
+
+
+def _load_runtime_state() -> None:
+    if not RUNTIME_STATE_PATH.exists():
+        return
+    try:
+        data = json.loads(RUNTIME_STATE_PATH.read_text(encoding="utf-8"))
+        pair_data = data.get("open_pair")
+        if pair_data:
+            strategy.open_pair = OpenPair.model_validate(pair_data)
+            state_value = data.get("state") or StrategyState.PAIR_OPEN.value
+            try:
+                restored_state = StrategyState(state_value)
+            except ValueError:
+                restored_state = StrategyState.PAUSED
+            strategy.state = restored_state if restored_state in {StrategyState.PAIR_OPEN, StrategyState.PAUSED} else StrategyState.PAUSED
+            strategy.last_error = data.get("last_error")
+            storage.record_event("runtime_state_restored", {"pair_id": strategy.open_pair.pair_id, "state": strategy.state.value})
+    except Exception as exc:  # noqa: BLE001
+        strategy.state = StrategyState.PAUSED
+        strategy.last_error = "读取运行状态失败，已暂停自动挂单"
+        logger.warning("failed to load runtime state: %s", str(exc)[:160])
+
+
+def _persist_runtime_state() -> None:
+    global _runtime_state_cache
+    if strategy.open_pair is None:
+        if _runtime_state_cache is not None or RUNTIME_STATE_PATH.exists():
+            RUNTIME_STATE_PATH.unlink(missing_ok=True)
+        _runtime_state_cache = None
+        return
+    payload = {
+        "state": strategy.state.value,
+        "last_error": strategy.last_error,
+        "open_pair": strategy.open_pair.model_dump(mode="json"),
+    }
+    text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    if text == _runtime_state_cache:
+        return
+    RUNTIME_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RUNTIME_STATE_PATH.write_text(text + "\n", encoding="utf-8")
+    _runtime_state_cache = text
 
 
 def _runtime_config() -> RuntimeConfig:
@@ -581,6 +633,8 @@ def _runtime_config() -> RuntimeConfig:
         max_hedge_delay_ms=settings.max_hedge_delay_ms,
         max_unhedged_loss_usd_per_oz=settings.max_unhedged_loss_usd_per_oz,
         daily_loss_limit_usdt=settings.daily_loss_limit_usdt,
+        add_edge_growth_pct=settings.add_edge_growth_pct,
+        max_add_count=settings.max_add_count,
         target_oz=settings.target_oz,
         mt4_lot_size_oz=settings.mt4_lot_size_oz,
         mt4_slippage_points=settings.mt4_slippage_points,
@@ -662,8 +716,9 @@ def _mt4_accrued_swap(pair) -> Decimal | None:
     positions = mt4_bridge.positions()
     if not positions:
         return None
-    if pair.mt4_ticket is not None:
-        matched = [position for position in positions if position.ticket == pair.mt4_ticket]
+    tickets = set(pair.mt4_tickets or ([] if pair.mt4_ticket is None else [pair.mt4_ticket]))
+    if tickets:
+        matched = [position for position in positions if position.ticket in tickets]
     else:
         expected_side = Side.BUY if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.SELL
         matched = [position for position in positions if position.symbol == settings.mt4_symbol and position.side == expected_side]
@@ -720,9 +775,29 @@ def _execution_plan() -> ExecutionPlanStatus:
     binance_quote = binance_client.latest_quote()
     mt4_quote = mt4_bridge.latest_quote()
     quote_block_reason = _quote_plan_block_reason(binance_quote, mt4_quote)
+    if strategy.state.value == "PAUSED":
+        if pair and binance_quote and mt4_quote:
+            add_summary = _pair_add_summary(pair, binance_quote, mt4_quote)
+            return ExecutionPlanStatus(
+                summary=f"系统已暂停，不会自动补仓或平仓；当前仍有组合持仓。{add_summary}",
+                max_follow_seconds=max_follow_seconds,
+            )
+        return ExecutionPlanStatus(summary="系统已暂停，不会自动新挂单；恢复后才会继续按价差条件执行。", max_follow_seconds=max_follow_seconds)
     if pair and binance_quote and mt4_quote:
         if quote_block_reason:
             return ExecutionPlanStatus(summary=f"当前有组合持仓，但{quote_block_reason}，暂不挂平仓单。", max_follow_seconds=max_follow_seconds)
+        add_summary = _pair_add_summary(pair, binance_quote, mt4_quote)
+        add_plan = _pair_add_plan(pair, binance_quote, mt4_quote)
+        if add_plan:
+            return ExecutionPlanStatus(
+                summary=f"补仓条件已满足：{add_summary}；币安将同向挂 {_side_text(add_plan.binance_side)} 限价 {add_plan.limit_price}，数量 {add_plan.quantity_oz} XAU；成交后 MT4 同向 {_side_text(add_plan.mt4_hedge_side)} 市价跟随。",
+                binance_order_side=add_plan.binance_side,
+                binance_order_price=add_plan.limit_price,
+                binance_order_qty=add_plan.quantity_oz,
+                mt4_follow_side=add_plan.mt4_hedge_side,
+                mt4_price_limit=None,
+                max_follow_seconds=max_follow_seconds,
+            )
         spread = abs(binance_quote.mid - mt4_quote.mid)
         close_ready = spread <= settings.close_max_spread
         if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
@@ -732,7 +807,7 @@ def _execution_plan() -> ExecutionPlanStatus:
             side = Side.SELL
             price = round_up(binance_quote.ask, binance_client.filters.tick_size)
         return ExecutionPlanStatus(
-            summary=f"平仓逻辑：两边中间价差小于等于 {settings.close_max_spread} 美元时，币安挂 {_side_text(side)} 限价 {price}；当前价差 {spread:.4f}，{'已满足' if close_ready else '未满足'}。",
+            summary=f"平仓逻辑：两边中间价差小于等于 {settings.close_max_spread} 美元时，币安挂 {_side_text(side)} 限价 {price}；当前价差 {spread:.4f}，{'已满足' if close_ready else '未满足'}。{add_summary}",
             binance_order_side=side,
             binance_order_price=price,
             binance_order_qty=pair.quantity_oz,
@@ -740,8 +815,6 @@ def _execution_plan() -> ExecutionPlanStatus:
             max_follow_seconds=max_follow_seconds,
         )
 
-    if strategy.state.value == "PAUSED":
-        return ExecutionPlanStatus(summary="系统已暂停，不会自动新挂单；恢复后才会继续按价差条件执行。", max_follow_seconds=max_follow_seconds)
     if binance_quote and mt4_quote:
         if quote_block_reason:
             return ExecutionPlanStatus(summary=f"{quote_block_reason}，暂不挂开仓单。", max_follow_seconds=max_follow_seconds)
@@ -765,6 +838,29 @@ def _execution_plan() -> ExecutionPlanStatus:
             max_follow_seconds=max_follow_seconds,
         )
     return ExecutionPlanStatus(summary="等待 Binance 和 MT4 报价齐全。", max_follow_seconds=max_follow_seconds)
+
+
+def _pair_add_plan(pair, binance_quote: MarketQuote, mt4_quote: MarketQuote):
+    if settings.max_add_count <= 0 or pair.add_count >= settings.max_add_count:
+        return None
+    base_edge = pair.last_add_edge or pair.base_edge
+    if base_edge is None:
+        return None
+    trigger_edge = base_edge * (Decimal("1") + settings.add_edge_growth_pct / Decimal("100"))
+    return build_directional_entry_plan(settings, binance_client.filters, binance_quote, mt4_quote, pair.direction, trigger_edge)
+
+
+def _pair_add_summary(pair, binance_quote: MarketQuote, mt4_quote: MarketQuote) -> str:
+    if settings.max_add_count <= 0:
+        return "补仓已关闭。"
+    if pair.add_count >= settings.max_add_count:
+        return f"补仓次数 {pair.add_count}/{settings.max_add_count}，已达上限。"
+    base_edge = pair.last_add_edge or pair.base_edge
+    if base_edge is None:
+        return "补仓基准价差缺失，暂不补仓。"
+    trigger_edge = base_edge * (Decimal("1") + settings.add_edge_growth_pct / Decimal("100"))
+    current_edge = binance_quote.ask - mt4_quote.ask if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else mt4_quote.bid - binance_quote.bid
+    return f"补仓观察：已补 {pair.add_count}/{settings.max_add_count} 次，上次价差 {base_edge:.4f}，下次触发 {trigger_edge:.4f}，当前同向价差 {current_edge:.4f}。"
 
 
 def _quote_plan_block_reason(binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> str | None:

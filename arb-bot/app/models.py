@@ -288,8 +288,12 @@ class OpenPair(BaseModel):
     mt4_entry_price: Decimal
     binance_order_id: str
     mt4_ticket: int | None = None
+    mt4_tickets: list[int] = Field(default_factory=list)
     opened_ms: int = Field(default_factory=utc_now_ms)
     realized_pnl: Decimal = Decimal("0")
+    base_edge: Decimal | None = None
+    last_add_edge: Decimal | None = None
+    add_count: int = 0
 
 
 class PositionMetrics(BaseModel):
@@ -338,6 +342,8 @@ class RuntimeConfig(BaseModel):
     max_hedge_delay_ms: int
     max_unhedged_loss_usd_per_oz: Decimal
     daily_loss_limit_usdt: Decimal
+    add_edge_growth_pct: Decimal
+    max_add_count: int
     target_oz: Decimal
     mt4_lot_size_oz: Decimal
     mt4_slippage_points: int
@@ -361,6 +367,8 @@ class RuntimeConfigUpdate(BaseModel):
     max_hedge_delay_ms: int | None = None
     max_unhedged_loss_usd_per_oz: Decimal | None = None
     daily_loss_limit_usdt: Decimal | None = None
+    add_edge_growth_pct: Decimal | None = None
+    max_add_count: int | None = None
     target_oz: Decimal | None = None
     mt4_lot_size_oz: Decimal | None = None
     mt4_slippage_points: int | None = None
@@ -375,6 +383,7 @@ class RuntimeConfigUpdate(BaseModel):
         "min_locked_edge",
         "max_unhedged_loss_usd_per_oz",
         "daily_loss_limit_usdt",
+        "add_edge_growth_pct",
         "target_oz",
         "mt4_lot_size_oz",
         "binance_entry_offset_usd",
@@ -413,6 +422,13 @@ class RuntimeConfigUpdate(BaseModel):
     def valid_leverage(cls, value: int | None) -> int | None:
         if value is not None and (value < 1 or value > 125):
             raise ValueError("杠杆必须在 1 到 125 之间")
+        return value
+
+    @field_validator("max_add_count")
+    @classmethod
+    def valid_max_add_count(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            raise ValueError("不能小于 0")
         return value
 
 

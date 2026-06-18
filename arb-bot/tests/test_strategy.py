@@ -434,6 +434,163 @@ async def test_exit_order_cancels_when_spread_widens_before_fill(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_add_position_keeps_existing_direction_when_edge_grows(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        PositionTrackingPaperClient,
+        settings_kwargs={"ADD_EDGE_GROWTH_PCT": Decimal("1"), "MAX_ADD_COUNT": 2},
+    )
+    await open_live_pair(engine, client, mt4, ticket=111111)
+    assert engine.open_pair is not None
+    assert engine.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG
+
+    client.set_quote(Decimal("2002"), Decimal("2003"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("2000"),
+            positions=[
+                Mt4Position(
+                    ticket=111111,
+                    symbol="XAUUSD",
+                    side=Side.BUY,
+                    lots=Decimal("0.01"),
+                    open_price=Decimal("2000"),
+                )
+            ],
+            account_margin=Decimal("4.34"),
+        )
+    )
+
+    await engine.step()
+
+    add_order = engine.active_order
+    assert add_order is not None
+    assert add_order.side == Side.SELL
+    assert engine.adding_to_pair is True
+    assert engine.state == StrategyState.QUOTING_BINANCE_ENTRY
+
+    await client.simulate_fill(add_order.order_id, Decimal("1"), add_order.price)
+    await engine.step()
+    add_command = mt4.next_command()
+    assert add_command["action"] == "BUY"
+
+    mt4.submit_report(
+        Mt4Report(
+            command_id=add_command["command_id"],
+            status="ok",
+            action="BUY",
+            ticket=222222,
+            fill_price=Decimal("2000"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await engine.step()
+
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.open_pair is not None
+    assert engine.open_pair.quantity_oz == Decimal("2")
+    assert engine.open_pair.add_count == 1
+    assert engine.open_pair.mt4_tickets == [111111, 222222]
+
+
+@pytest.mark.asyncio
+async def test_exit_after_add_closes_all_mt4_tickets(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        PositionTrackingPaperClient,
+        settings_kwargs={"ADD_EDGE_GROWTH_PCT": Decimal("1"), "MAX_ADD_COUNT": 2},
+    )
+    await open_live_pair(engine, client, mt4, ticket=111111)
+    client.set_quote(Decimal("2002"), Decimal("2003"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("2000"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+            account_margin=Decimal("4.34"),
+        )
+    )
+    await engine.step()
+    add_order = engine.active_order
+    assert add_order is not None
+    await client.simulate_fill(add_order.order_id, Decimal("1"), add_order.price)
+    await engine.step()
+    add_command = mt4.next_command()
+    mt4.submit_report(
+        Mt4Report(
+            command_id=add_command["command_id"],
+            status="ok",
+            action="BUY",
+            ticket=222222,
+            fill_price=Decimal("2000"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await engine.step()
+
+    client.set_quote(Decimal("2000.0"), Decimal("2000.1"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("2000.0"),
+            ask=Decimal("2000.1"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+                Mt4Position(ticket=222222, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+            account_margin=Decimal("8.68"),
+        )
+    )
+    await engine.step()
+    exit_order = engine.active_order
+    assert exit_order is not None
+    assert exit_order.reduce_only is True
+    assert exit_order.orig_qty == Decimal("2")
+    await client.simulate_fill(exit_order.order_id, Decimal("2"), exit_order.price)
+    await engine.step()
+
+    close_one = mt4.next_command()
+    close_two = mt4.next_command()
+    assert close_one["action"] == "CLOSE"
+    assert close_two["action"] == "CLOSE"
+    assert {close_one["ticket"], close_two["ticket"]} == {111111, 222222}
+    assert Decimal(str(close_one["lots"])) == Decimal("0.01")
+    assert Decimal(str(close_two["lots"])) == Decimal("0.01")
+
+    mt4.submit_report(
+        Mt4Report(
+            command_id=close_one["command_id"],
+            status="ok",
+            action="CLOSE",
+            ticket=close_one["ticket"],
+            fill_price=Decimal("2000"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await engine.step()
+    assert engine.state == StrategyState.CLOSING_MT4
+
+    mt4.submit_report(
+        Mt4Report(
+            command_id=close_two["command_id"],
+            status="ok",
+            action="CLOSE",
+            ticket=close_two["ticket"],
+            fill_price=Decimal("2000"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await engine.step()
+    assert engine.state == StrategyState.IDLE
+    assert engine.open_pair is None
+
+
+@pytest.mark.asyncio
 async def test_dry_run_does_not_send_real_mt4_order(tmp_path):
     cfg = settings(tmp_path, PAPER_MODE=True, LIVE_TRADING=False)
     client = PaperBinanceClient(cfg)
@@ -482,6 +639,38 @@ class NotVisibleOncePaperClient(PaperBinanceClient):
             self.missing_once = False
             raise BinanceError('{"code":-2013,"msg":"Order does not exist."}')
         return await super().get_order(order_id)
+
+
+class PositionTrackingPaperClient(PaperBinanceClient):
+    async def position_quantity(self) -> Decimal:
+        qty = Decimal("0")
+        for order in self._orders.values():
+            if order.status not in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}:
+                continue
+            signed = order.executed_qty if order.side == Side.BUY else -order.executed_qty
+            qty += signed
+        return qty
+
+
+async def open_live_pair(engine, client, mt4, ticket: int = 123456):
+    await engine.step()
+    entry_order = engine.active_order
+    assert entry_order is not None
+    await client.simulate_fill(entry_order.order_id, Decimal("1"), Decimal("2002"))
+    await engine.step()
+    entry_command = mt4.next_command()
+    mt4.submit_report(
+        Mt4Report(
+            command_id=entry_command["command_id"],
+            status="ok",
+            action="BUY",
+            ticket=ticket,
+            fill_price=Decimal("2000"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await engine.step()
+    assert engine.state == StrategyState.PAIR_OPEN
 
 
 async def make_engine(tmp_path, client_cls=PaperBinanceClient, settings_kwargs=None):

@@ -558,6 +558,10 @@
                 <span id="pairQty">-</span>
               </div>
               <div class="compact-row">
+                <strong>补仓</strong>
+                <span id="pairAddLine">-</span>
+              </div>
+              <div class="compact-row">
                 <strong>开仓价</strong>
                 <span id="pairEntryLine">-</span>
               </div>
@@ -711,6 +715,14 @@
                   <td><div class="input-row"><input id="cfgRequoteCooldownMs" inputmode="numeric" /><small>毫秒</small></div></td>
                 </tr>
                 <tr>
+                  <th>补仓触发增长</th>
+                  <td><div class="input-row"><input id="cfgAddEdgeGrowthPct" inputmode="decimal" /><small>%</small></div></td>
+                </tr>
+                <tr>
+                  <th>最大补仓次数</th>
+                  <td><div class="input-row"><input id="cfgMaxAddCount" inputmode="numeric" /><small>次</small></div></td>
+                </tr>
+                <tr>
                   <th>平仓收敛价差</th>
                   <td><div class="input-row"><input id="cfgCloseMaxSpread" inputmode="decimal" /><small>美元</small></div></td>
                 </tr>
@@ -779,6 +791,8 @@
         ["cfgCancelMinEdge", "cancel_min_edge", "number"],
         ["cfgMinOrderLiveMs", "min_order_live_ms", "number"],
         ["cfgRequoteCooldownMs", "requote_cooldown_ms", "number"],
+        ["cfgAddEdgeGrowthPct", "add_edge_growth_pct", "number"],
+        ["cfgMaxAddCount", "max_add_count", "number"],
         ["cfgCloseMaxSpread", "close_max_spread", "number"],
         ["cfgMinLockedEdge", "min_locked_edge", "number"],
         ["cfgMt4LotSize", "mt4_lot_size_oz", "number"],
@@ -960,6 +974,7 @@
         const metrics = data.position_metrics || {};
         $("pairDirection").textContent = pair ? translateDirection(pair.direction) : "-";
         $("pairQty").textContent = pair ? `${fmt(pair.quantity_oz)} XAU` : "-";
+        $("pairAddLine").textContent = pair ? renderPairAddLine(pair, data.config, b, m) : "-";
         $("pairEntryLine").textContent = pair ? `币安 ${fmt(pair.binance_entry_price)} / MT4 ${fmt(pair.mt4_entry_price)}` : "-";
         $("binanceFundingLine").textContent = renderFunding(metrics, pair);
         $("mt4SwapLine").textContent = renderMt4Swap(metrics, pair);
@@ -1037,6 +1052,26 @@
         if (!Number.isFinite(qty)) return `${qtyValue} XAU`;
         if (Math.abs(qty) < 0.0000001) return "无持仓";
         return `${qty > 0 ? "多仓" : "空仓"} ${fmt(Math.abs(qty))} XAU`;
+      }
+
+      function renderPairAddLine(pair, config, binanceQuote, mt4Quote) {
+        if (!pair || !config) return "-";
+        const count = Number(pair.add_count || 0);
+        const maxCount = Number(config.max_add_count || 0);
+        if (maxCount <= 0) return "补仓已关闭";
+        const rawBase = pair.last_add_edge ?? pair.base_edge;
+        if (rawBase === null || rawBase === undefined || rawBase === "") return `已补 ${count}/${maxCount} 次，等待补仓基准`;
+        const baseEdge = Number(rawBase);
+        if (!Number.isFinite(baseEdge)) return `已补 ${count}/${maxCount} 次，等待补仓基准`;
+        const trigger = baseEdge * (1 + Number(config.add_edge_growth_pct || 0) / 100);
+        let current = null;
+        if (binanceQuote && mt4Quote) {
+          current = pair.direction === "BINANCE_SHORT_MT4_LONG"
+            ? Number(binanceQuote.ask) - Number(mt4Quote.ask)
+            : Number(mt4Quote.bid) - Number(binanceQuote.bid);
+        }
+        const currentText = Number.isFinite(current) ? `，当前同向价差 ${fmt(current)}` : "";
+        return `已补 ${count}/${maxCount} 次，下次触发 ${fmt(trigger)} 美元${currentText}`;
       }
 
       function renderMt4Positions(positions) {

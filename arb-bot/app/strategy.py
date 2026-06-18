@@ -75,6 +75,50 @@ def build_entry_plan(
     return None
 
 
+def build_directional_entry_plan(
+    settings: Settings,
+    filters: ExchangeFilters,
+    binance: MarketQuote,
+    mt4: MarketQuote,
+    direction: PairDirection,
+    min_edge: Decimal,
+) -> EntryPlan | None:
+    qty = max(round_down(settings.target_oz, filters.qty_step), filters.min_qty)
+    if direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+        edge = binance.ask - mt4.ask
+        if edge < min_edge:
+            return None
+        price = round_up(
+            max(binance.ask + settings.binance_entry_offset_usd, mt4.ask + min_edge),
+            filters.tick_size,
+        )
+        return EntryPlan(
+            direction=direction,
+            binance_side=Side.SELL,
+            limit_price=price,
+            quantity_oz=qty,
+            edge=edge,
+            mt4_hedge_side=Side.BUY,
+            mt4_price_limit=price - settings.min_locked_edge,
+        )
+    edge = mt4.bid - binance.bid
+    if edge < min_edge:
+        return None
+    price = round_down(
+        min(binance.bid - settings.binance_entry_offset_usd, mt4.bid - min_edge),
+        filters.tick_size,
+    )
+    return EntryPlan(
+        direction=direction,
+        binance_side=Side.BUY,
+        limit_price=price,
+        quantity_oz=qty,
+        edge=edge,
+        mt4_hedge_side=Side.SELL,
+        mt4_price_limit=price + settings.min_locked_edge,
+    )
+
+
 def _binance_order_missing(exc: BinanceError) -> bool:
     text = str(exc)
     return "-2013" in text or "-2011" in text or "Order does not exist" in text or "Unknown order" in text
@@ -105,6 +149,9 @@ class StrategyEngine:
         self.pending_hedge_qty = Decimal("0")
         self.hedged_qty = Decimal("0")
         self.open_pair: OpenPair | None = None
+        self.adding_to_pair = False
+        self.pending_close_tickets: set[int] = set()
+        self.pending_close_commands: dict[str, int] = {}
         self.last_error: str | None = None
 
     async def step(self) -> None:
@@ -130,6 +177,8 @@ class StrategyEngine:
         elif self.state == StrategyState.PAIR_OPEN:
             if not self._quotes_fresh(binance_quote, mt4_quote):
                 self.state = StrategyState.PAUSED
+                return
+            if await self._maybe_add_position(binance_quote, mt4_quote):
                 return
             await self._maybe_exit(binance_quote, mt4_quote)
         elif self.state == StrategyState.QUOTING_BINANCE_EXIT:
@@ -240,6 +289,12 @@ class StrategyEngine:
         mt4_quote = self.mt4.latest_quote()
         if not binance_quote or not mt4_quote:
             return False
+        if self.adding_to_pair and self.open_pair:
+            base_edge = self.open_pair.last_add_edge or self.open_pair.base_edge
+            if base_edge is None:
+                return False
+            min_edge = base_edge * (Decimal("1") + self.settings.add_edge_growth_pct / Decimal("100"))
+            return self._current_edge(self.active_plan.direction, binance_quote, mt4_quote) >= min_edge
         if self.active_plan.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             return binance_quote.ask - mt4_quote.ask >= self.settings.cancel_min_edge
         return mt4_quote.bid - binance_quote.bid >= self.settings.cancel_min_edge
@@ -345,7 +400,7 @@ class StrategyEngine:
         await self._emergency_close(reason)
         return True
 
-    async def _live_entry_guard_ok(self) -> bool:
+    async def _live_entry_guard_ok(self, allow_existing_position: bool = False) -> bool:
         if self.settings.is_dry_run:
             return True
         try:
@@ -359,7 +414,7 @@ class StrategyEngine:
         mt4_positions = self.mt4.positions()
         mt4_account = self.mt4.account_snapshot()
         mt4_used_margin = mt4_account.used_margin if mt4_account else None
-        if mt4_positions or (mt4_used_margin is not None and mt4_used_margin != 0):
+        if not allow_existing_position and (mt4_positions or (mt4_used_margin is not None and mt4_used_margin != 0)):
             self.state = StrategyState.PAUSED
             self.last_error = "开仓前发现 MT4 已有持仓或保证金占用，已暂停自动开仓，请先人工确认"
             self.storage.record_event(
@@ -378,14 +433,27 @@ class StrategyEngine:
                 },
             )
             return False
+        if allow_existing_position and not self._mt4_positions_match_open_pair(mt4_positions):
+            self.state = StrategyState.PAUSED
+            self.last_error = "补仓前发现 MT4 持仓方向和当前组合不一致，已暂停"
+            self.storage.record_event(
+                "add_guard_blocked_mt4_mismatch",
+                {
+                    "positions": [
+                        {"ticket": position.ticket, "side": position.side.value, "lots": str(position.lots)}
+                        for position in mt4_positions
+                    ],
+                },
+            )
+            return False
         arb_orders = [
             order
             for order in open_orders
             if order.client_order_id.startswith("arb_") and not order.reduce_only
         ]
-        if position_qty != 0 or arb_orders:
+        if arb_orders:
             self.state = StrategyState.PAUSED
-            self.last_error = "开仓前发现币安已有黄金持仓或遗留程序挂单，已暂停自动开仓"
+            self.last_error = "开仓前发现币安遗留程序挂单，已暂停自动开仓"
             self.storage.record_event(
                 "live_entry_guard_blocked",
                 {
@@ -402,7 +470,30 @@ class StrategyEngine:
                 },
             )
             return False
+        if position_qty != 0 and not allow_existing_position:
+            self.state = StrategyState.PAUSED
+            self.last_error = "开仓前发现币安已有黄金持仓，已暂停自动开仓"
+            self.storage.record_event("live_entry_guard_blocked_position", {"position_qty": str(position_qty)})
+            return False
+        if allow_existing_position and not self._binance_position_matches_open_pair(position_qty):
+            self.state = StrategyState.PAUSED
+            self.last_error = "补仓前发现币安持仓方向和当前组合不一致，已暂停"
+            self.storage.record_event("add_guard_blocked_binance_mismatch", {"position_qty": str(position_qty)})
+            return False
         return True
+
+    def _mt4_positions_match_open_pair(self, positions) -> bool:
+        if not self.open_pair:
+            return False
+        expected = Side.BUY if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.SELL
+        return bool(positions) and all(position.symbol == self.settings.mt4_symbol and position.side == expected for position in positions)
+
+    def _binance_position_matches_open_pair(self, position_qty: Decimal) -> bool:
+        if not self.open_pair or position_qty == 0:
+            return False
+        if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            return position_qty < 0
+        return position_qty > 0
 
     async def _queue_mt4_hedge(self, qty: Decimal, fill_price: Decimal) -> None:
         if not self.active_plan or qty <= 0:
@@ -441,6 +532,23 @@ class StrategyEngine:
                     self.last_error = "MT4 回报晚于当前策略状态，可能存在 MT4 单腿持仓，请人工确认"
                 continue
             if report.status != "ok" or report.fill_price is None:
+                if self.state == StrategyState.CLOSING_MT4:
+                    ticket = report.ticket or self.pending_close_commands.get(report.command_id)
+                    if ticket is not None:
+                        self.pending_close_tickets.discard(ticket)
+                    self.pending_close_commands.pop(report.command_id, None)
+                    self.state = StrategyState.PAUSED
+                    self.last_error = f"MT4 平仓失败，币安侧可能已平，需人工确认 MT4 剩余持仓：{report.message or report.error_code or '未知错误'}"
+                    self.storage.record_event(
+                        "mt4_close_failed",
+                        {
+                            "command_id": report.command_id,
+                            "ticket": ticket,
+                            "message": report.message,
+                            "error_code": report.error_code,
+                        },
+                    )
+                    continue
                 await self._emergency_close(report.message or "MT4 command failed")
                 continue
             qty = report.lots * self.settings.mt4_lot_size_oz
@@ -452,25 +560,116 @@ class StrategyEngine:
                 if self.active_order and self.hedged_qty >= self.active_order.executed_qty:
                     self._mark_pair_open(report.fill_price, report.ticket)
             elif self.state == StrategyState.CLOSING_MT4 and self.open_pair:
-                self.storage.record_pnl(self.open_pair.pair_id, self.open_pair.realized_pnl)
-                self._reset_all()
+                ticket = report.ticket or self.pending_close_commands.get(report.command_id)
+                self.pending_close_commands.pop(report.command_id, None)
+                if ticket is None:
+                    self.state = StrategyState.PAUSED
+                    self.last_error = "MT4 平仓回报缺少单号，不能确认全部平仓，已暂停"
+                    self.storage.record_event("mt4_close_ticket_unknown", report.model_dump(mode="json"))
+                    continue
+                self.pending_close_tickets.discard(ticket)
+                if not self.pending_close_tickets:
+                    self.storage.record_pnl(self.open_pair.pair_id, self.open_pair.realized_pnl)
+                    self._reset_all()
 
     def _mark_pair_open(self, mt4_fill_price: Decimal, ticket: int | None) -> None:
         if not self.active_plan or not self.active_order:
             return
-        self.open_pair = OpenPair(
-            direction=self.active_plan.direction,
-            quantity_oz=self.hedged_qty,
-            binance_entry_price=self.active_order.avg_price,
-            mt4_entry_price=mt4_fill_price,
-            binance_order_id=self.active_order.order_id,
-            mt4_ticket=ticket,
-        )
+        active_qty = self.hedged_qty
+        if self.adding_to_pair and self.open_pair:
+            old_qty = self.open_pair.quantity_oz
+            new_qty = old_qty + active_qty
+            tickets = list(self.open_pair.mt4_tickets or ([] if self.open_pair.mt4_ticket is None else [self.open_pair.mt4_ticket]))
+            if ticket is not None:
+                tickets.append(ticket)
+            self.open_pair = self.open_pair.model_copy(
+                update={
+                    "quantity_oz": new_qty,
+                    "binance_entry_price": ((self.open_pair.binance_entry_price * old_qty) + (self.active_order.avg_price * active_qty)) / new_qty,
+                    "mt4_entry_price": ((self.open_pair.mt4_entry_price * old_qty) + (mt4_fill_price * active_qty)) / new_qty,
+                    "binance_order_id": self.active_order.order_id,
+                    "mt4_ticket": tickets[0] if tickets else None,
+                    "mt4_tickets": tickets,
+                    "add_count": self.open_pair.add_count + 1,
+                    "last_add_edge": self.active_plan.edge,
+                }
+            )
+        else:
+            tickets = [] if ticket is None else [ticket]
+            self.open_pair = OpenPair(
+                direction=self.active_plan.direction,
+                quantity_oz=active_qty,
+                binance_entry_price=self.active_order.avg_price,
+                mt4_entry_price=mt4_fill_price,
+                binance_order_id=self.active_order.order_id,
+                mt4_ticket=ticket,
+                mt4_tickets=tickets,
+                base_edge=self.active_plan.edge,
+                last_add_edge=self.active_plan.edge,
+            )
         self.active_plan = None
         self.active_order = None
+        self.adding_to_pair = False
+        self.hedged_qty = Decimal("0")
         self.pending_hedge_qty = Decimal("0")
         self.hedge_started_ms = 0
         self.state = StrategyState.PAIR_OPEN
+
+    async def _maybe_add_position(self, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> bool:
+        if not self.open_pair or not binance_quote or not mt4_quote:
+            return False
+        if self.settings.max_add_count <= 0 or self.open_pair.add_count >= self.settings.max_add_count:
+            return False
+        base_edge = self.open_pair.last_add_edge or self.open_pair.base_edge
+        if base_edge is None:
+            return False
+        trigger_edge = base_edge * (Decimal("1") + self.settings.add_edge_growth_pct / Decimal("100"))
+        plan = build_directional_entry_plan(
+            self.settings,
+            self.binance.filters,
+            binance_quote,
+            mt4_quote,
+            self.open_pair.direction,
+            trigger_edge,
+        )
+        if not plan:
+            return False
+        if not await self._live_entry_guard_ok(allow_existing_position=True):
+            return True
+        order = await self.binance.place_post_only_order(
+            OrderRequest(
+                symbol=self.settings.binance_symbol,
+                side=plan.binance_side,
+                quantity=plan.quantity_oz,
+                price=plan.limit_price,
+                post_only=True,
+            )
+        )
+        self.storage.record_event(
+            "add_order",
+            {
+                **order.model_dump(mode="json"),
+                "trigger_edge": str(trigger_edge),
+                "current_edge": str(plan.edge),
+                "add_count": self.open_pair.add_count + 1,
+            },
+        )
+        if order.status == OrderStatus.REJECTED:
+            self.last_entry_cancel_ms = utc_now_ms()
+            return True
+        self.active_plan = plan
+        self.active_order = order
+        self.order_created_ms = utc_now_ms()
+        self.hedged_qty = Decimal("0")
+        self.pending_hedge_qty = Decimal("0")
+        self.adding_to_pair = True
+        self.state = StrategyState.QUOTING_BINANCE_ENTRY
+        return True
+
+    def _current_edge(self, direction: PairDirection, binance_quote: MarketQuote, mt4_quote: MarketQuote) -> Decimal:
+        if direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            return binance_quote.ask - mt4_quote.ask
+        return mt4_quote.bid - binance_quote.bid
 
     async def _maybe_exit(self, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> None:
         if not self.open_pair or not binance_quote or not mt4_quote:
@@ -525,8 +724,8 @@ class StrategyEngine:
             self.storage.record_pnl(self.open_pair.pair_id, self.open_pair.realized_pnl)
             self._reset_all()
             return
-        lots = self.open_pair.quantity_oz / self.settings.mt4_lot_size_oz
-        if self.open_pair.mt4_ticket is None:
+        tickets = list(self.open_pair.mt4_tickets or ([] if self.open_pair.mt4_ticket is None else [self.open_pair.mt4_ticket]))
+        if not tickets:
             self.state = StrategyState.PAUSED
             self.last_error = "MT4 持仓单号缺失，不能自动平仓，已暂停"
             self.storage.record_event(
@@ -534,8 +733,32 @@ class StrategyEngine:
                 {"pair_id": self.open_pair.pair_id, "quantity_oz": str(self.open_pair.quantity_oz)},
             )
             return
-        self.mt4.queue_close(self.open_pair.mt4_ticket, lots, "exit hedge")
+        lots_by_ticket = self._mt4_close_lots_by_ticket(tickets)
+        self.pending_close_tickets = set(tickets)
+        self.pending_close_commands = {}
+        for ticket in tickets:
+            command = self.mt4.queue_close(ticket, lots_by_ticket[ticket], "exit hedge")
+            self.pending_close_commands[command.command_id] = ticket
+        self.storage.record_event(
+            "mt4_close_queued",
+            {
+                "pair_id": self.open_pair.pair_id,
+                "tickets": tickets,
+                "lots_by_ticket": {str(ticket): str(lots) for ticket, lots in lots_by_ticket.items()},
+            },
+        )
         self.state = StrategyState.CLOSING_MT4
+
+    def _mt4_close_lots_by_ticket(self, tickets: list[int]) -> dict[int, Decimal]:
+        positions_by_ticket = {
+            position.ticket: position.lots
+            for position in self.mt4.positions()
+            if position.ticket in tickets and position.symbol == self.settings.mt4_symbol
+        }
+        if len(positions_by_ticket) == len(tickets):
+            return positions_by_ticket
+        fallback_lots = (self.open_pair.quantity_oz / self.settings.mt4_lot_size_oz / Decimal(len(tickets))) if self.open_pair else Decimal("0")
+        return {ticket: positions_by_ticket.get(ticket, fallback_lots) for ticket in tickets}
 
     def _exit_spread_still_valid(self) -> bool:
         binance_quote = self.binance.latest_quote()
@@ -569,6 +792,7 @@ class StrategyEngine:
         )
         self.active_plan = None
         self.active_order = None
+        self.adding_to_pair = False
         self.pending_hedge_qty = Decimal("0")
         self.hedge_started_ms = 0
         self.state = StrategyState.PAUSED
@@ -583,20 +807,25 @@ class StrategyEngine:
         return True
 
     def _clear_entry(self) -> None:
+        return_to_pair = self.adding_to_pair and self.open_pair is not None
         self.last_entry_cancel_ms = utc_now_ms()
         self._clear_entry_candidate()
         self.active_plan = None
         self.active_order = None
+        self.adding_to_pair = False
         self.hedged_qty = Decimal("0")
         self.pending_hedge_qty = Decimal("0")
         self.hedge_started_ms = 0
-        self.state = StrategyState.IDLE
+        self.state = StrategyState.PAIR_OPEN if return_to_pair else StrategyState.IDLE
 
     def _reset_all(self) -> None:
         self._clear_entry_candidate()
         self.active_plan = None
         self.active_order = None
         self.open_pair = None
+        self.adding_to_pair = False
+        self.pending_close_tickets = set()
+        self.pending_close_commands = {}
         self.hedged_qty = Decimal("0")
         self.pending_hedge_qty = Decimal("0")
         self.hedge_started_ms = 0
