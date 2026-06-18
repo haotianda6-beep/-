@@ -17,7 +17,9 @@ from app.models import (
     EngineStatus,
     ExecutionPlanStatus,
     MarketQuote,
+    Mt4ClosedOrder,
     Mt4HistoryPayload,
+    Mt4OrderHistoryPayload,
     Mt4Report,
     Mt4Tick,
     OrderRequest,
@@ -29,6 +31,9 @@ from app.models import (
     Side,
     SpreadAnalysis,
     StrategyState,
+    TradeHistoryItem,
+    TradeHistoryResponse,
+    utc_now_ms,
 )
 from app.mt4_bridge import Mt4Bridge
 from app.risk import RiskManager
@@ -291,6 +296,16 @@ async def mt4_history(payload: Mt4HistoryPayload, x_mt4_token: str | None = Head
     return {"status": "ok", "saved": saved}
 
 
+@app.post("/mt4/order-history")
+async def mt4_order_history(payload: Mt4OrderHistoryPayload, x_mt4_token: str | None = Header(default=None)) -> dict:
+    if not mt4_bridge.token_ok(x_mt4_token or payload.token):
+        raise HTTPException(status_code=403, detail="invalid MT4 token")
+    if payload.symbol != settings.mt4_symbol:
+        raise HTTPException(status_code=400, detail="MT4 品种不匹配")
+    saved = storage.upsert_mt4_closed_orders(payload.orders)
+    return {"status": "ok", "saved": saved}
+
+
 @app.get("/mt4/command")
 async def mt4_command(token: str | None = Query(default=None), x_mt4_token: str | None = Header(default=None)) -> dict:
     if not mt4_bridge.token_ok(x_mt4_token or token):
@@ -367,6 +382,99 @@ async def spread_analysis(
     threshold: Decimal = Query(default=Decimal("0.50"), gt=0),
 ) -> SpreadAnalysis:
     return await build_spread_analysis(settings, storage, days, interval, threshold)
+
+
+@app.get("/history/trades", response_model=TradeHistoryResponse)
+async def trade_history(days: int = Query(default=7, ge=1, le=30)) -> TradeHistoryResponse:
+    end_ms = utc_now_ms()
+    start_ms = end_ms - days * 86_400_000
+    mt4_orders = storage.get_mt4_closed_orders(settings.mt4_symbol, start_ms, end_ms, limit=100)
+    try:
+        binance_trades = await binance_client.user_trades(start_ms, end_ms, limit=1000)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Binance trade history unavailable: %s", str(exc)[:160])
+        binance_trades = []
+    return TradeHistoryResponse(
+        source="币安真实成交 + MT4 EA 上传的账户历史",
+        items=_build_trade_history(mt4_orders, binance_trades),
+    )
+
+
+def _build_trade_history(mt4_orders: list[Mt4ClosedOrder], binance_trades: list[dict]) -> list[TradeHistoryItem]:
+    items: list[TradeHistoryItem] = []
+    for mt4_order in mt4_orders:
+        quantity_oz = mt4_order.lots * settings.mt4_lot_size_oz
+        entry_side = Side.SELL if mt4_order.side == Side.BUY else Side.BUY
+        exit_side = Side.BUY if entry_side == Side.SELL else Side.SELL
+        entry_trade = _match_binance_trade(binance_trades, entry_side, quantity_oz, mt4_order.open_time_ms)
+        exit_trade = _match_binance_trade(binance_trades, exit_side, quantity_oz, mt4_order.close_time_ms)
+        binance_realized = _decimal_field(exit_trade, "realizedPnl") if exit_trade else None
+        entry_commission = (_decimal_field(entry_trade, "commission") if entry_trade else None) or Decimal("0")
+        exit_commission = (_decimal_field(exit_trade, "commission") if exit_trade else None) or Decimal("0")
+        binance_commission = entry_commission + exit_commission
+        mt4_total = mt4_order.profit + mt4_order.swap + mt4_order.commission
+        net = None
+        if binance_realized is not None:
+            net = binance_realized - binance_commission + mt4_total
+        status = "完整真实数据" if entry_trade and exit_trade else "缺少币安成交匹配"
+        items.append(
+            TradeHistoryItem(
+                open_time_ms=mt4_order.open_time_ms,
+                close_time_ms=mt4_order.close_time_ms,
+                quantity_oz=quantity_oz,
+                binance_entry_order_id=str(entry_trade.get("orderId")) if entry_trade else None,
+                binance_entry_side=entry_side if entry_trade else None,
+                binance_entry_price=_decimal_field(entry_trade, "price") if entry_trade else None,
+                binance_exit_order_id=str(exit_trade.get("orderId")) if exit_trade else None,
+                binance_exit_side=exit_side if exit_trade else None,
+                binance_exit_price=_decimal_field(exit_trade, "price") if exit_trade else None,
+                binance_realized_pnl=binance_realized,
+                binance_commission=binance_commission if entry_trade or exit_trade else None,
+                mt4_ticket=mt4_order.ticket,
+                mt4_side=mt4_order.side,
+                mt4_lots=mt4_order.lots,
+                mt4_open_price=mt4_order.open_price,
+                mt4_close_price=mt4_order.close_price,
+                mt4_profit=mt4_order.profit,
+                mt4_swap=mt4_order.swap,
+                mt4_commission=mt4_order.commission,
+                net_pnl=net,
+                status=status,
+            )
+        )
+    return items
+
+
+def _match_binance_trade(trades: list[dict], side: Side, quantity: Decimal, target_time_ms: int) -> dict | None:
+    candidates = []
+    for trade in trades:
+        if str(trade.get("side")) != side.value:
+            continue
+        qty = _decimal_field(trade, "qty")
+        if qty is None or abs(qty - quantity) > Decimal("0.000001"):
+            continue
+        trade_time = _int_field(trade, "time")
+        if trade_time is None:
+            continue
+        distance = abs(trade_time - target_time_ms)
+        if distance <= 600_000:
+            candidates.append((distance, trade))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
+
+
+def _decimal_field(data: dict | None, key: str) -> Decimal | None:
+    if not data or data.get(key) is None:
+        return None
+    return Decimal(str(data[key]))
+
+
+def _int_field(data: dict | None, key: str) -> int | None:
+    if not data or data.get(key) is None:
+        return None
+    return int(data[key])
 
 
 def _assert_live_preflight() -> None:

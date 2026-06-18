@@ -328,6 +328,10 @@
         gap: 12px;
       }
 
+      .table-scroll {
+        overflow-x: auto;
+      }
+
       .mt {
         margin-top: 12px;
       }
@@ -599,6 +603,35 @@
             </div>
             <div class="actions">
               <button class="secondary" id="historyBtn">分析过去7天</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>做单历史</h2>
+            <div class="small" id="tradeHistoryStatus">等待 MT4 上传账户历史</div>
+            <div class="table-scroll mt">
+              <table>
+                <thead>
+                  <tr>
+                    <th>开仓时间</th>
+                    <th>平仓时间</th>
+                    <th>数量</th>
+                    <th>币安开/平</th>
+                    <th>币安盈亏</th>
+                    <th>MT4单号</th>
+                    <th>MT4开/平</th>
+                    <th>MT4盈亏</th>
+                    <th>实际净利</th>
+                    <th>状态</th>
+                  </tr>
+                </thead>
+                <tbody id="tradeHistoryBody">
+                  <tr><td colspan="10">等待数据</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="actions">
+              <button class="secondary" id="tradeHistoryBtn">刷新做单历史</button>
             </div>
           </div>
 
@@ -1118,6 +1151,49 @@
         $("historyClosest").textContent = closest.length ? closest.join("；") : "-";
       }
 
+      async function loadTradeHistory() {
+        $("tradeHistoryBtn").disabled = true;
+        $("tradeHistoryStatus").textContent = "正在读取真实做单历史...";
+        try {
+          const data = await api("history/trades?days=7");
+          renderTradeHistory(data);
+          appendLog("做单历史已刷新");
+        } catch (error) {
+          $("tradeHistoryStatus").textContent = `读取失败：${translateError(error.message)}`;
+          appendLog(`做单历史读取失败：${translateError(error.message)}`);
+        } finally {
+          $("tradeHistoryBtn").disabled = false;
+        }
+      }
+
+      function renderTradeHistory(data) {
+        const rows = data.items || [];
+        $("tradeHistoryStatus").textContent = rows.length ? `${data.source}，共 ${rows.length} 组` : "暂无 MT4 账户历史；请使用新版 EA 后等待上传";
+        if (!rows.length) {
+          $("tradeHistoryBody").innerHTML = `<tr><td colspan="10">暂无真实做单历史</td></tr>`;
+          return;
+        }
+        $("tradeHistoryBody").innerHTML = rows.map((item) => `
+          <tr>
+            <td>${timeText(item.open_time_ms)}</td>
+            <td>${timeText(item.close_time_ms)}</td>
+            <td>${fmt(item.quantity_oz)} XAU</td>
+            <td>${tradeSideText(item.binance_entry_side)} ${fmt(item.binance_entry_price)} / ${tradeSideText(item.binance_exit_side)} ${fmt(item.binance_exit_price)}</td>
+            <td>${signedMoney(item.binance_realized_pnl)}，费 ${signedMoney(-Number(item.binance_commission || 0))}</td>
+            <td>${item.mt4_ticket || "-"}</td>
+            <td>${tradeSideText(item.mt4_side)} ${fmt(item.mt4_open_price)} / 平 ${fmt(item.mt4_close_price)}</td>
+            <td>${signedUsd(item.mt4_profit)}，隔夜 ${signedUsd(item.mt4_swap)}，佣金 ${signedUsd(item.mt4_commission)}</td>
+            <td>${signedUsd(item.net_pnl)}</td>
+            <td>${item.status || "-"}</td>
+          </tr>
+        `).join("");
+      }
+
+      function tradeSideText(value) {
+        if (!value) return "-";
+        return translateAction(value);
+      }
+
       function resetConfigForm() {
         configDirty = false;
         if (lastConfig) fillConfigInputs(lastConfig);
@@ -1240,6 +1316,7 @@
       $("saveConfigBtn").addEventListener("click", () => saveConfig().catch((error) => appendLog(translateError(error.message))));
       $("resetConfigBtn").addEventListener("click", resetConfigForm);
       $("historyBtn").addEventListener("click", () => loadHistoryAnalysis());
+      $("tradeHistoryBtn").addEventListener("click", () => loadTradeHistory());
       for (const [id] of configFields) {
         const el = $(id);
         if (el) {
@@ -1248,6 +1325,7 @@
         }
       }
       loadStatus();
+      loadTradeHistory();
       setInterval(loadStatus, 1000);
     </script>
   </body>

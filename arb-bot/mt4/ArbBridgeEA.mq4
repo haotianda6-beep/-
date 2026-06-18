@@ -11,9 +11,13 @@ input bool UploadHistoryOnStart = true;
 input int HistoryDays = 7;
 input int HistoryTimeframeMinutes = 1;
 input int HistoryChunkBars = 300;
+input bool UploadOrderHistory = true;
+input int OrderHistoryLookbackDays = 14;
+input int OrderHistoryPushMs = 5000;
 
 datetime lastTickSent = 0;
 uint lastQuotePushTick = 0;
+uint lastOrderHistoryPushTick = 0;
 bool historyStarted = false;
 bool historyDone = false;
 int historyNextShift = 0;
@@ -23,6 +27,7 @@ string historyInterval = "1m";
 void PostTick();
 void PrepareHistoryUpload();
 bool UploadHistoryChunk();
+bool UploadClosedOrderHistory();
 void ExecuteMarket(string commandId, string symbol, int type, double lots, int slippage, double maxPrice, double minPrice);
 void ExecuteClose(string commandId, int ticket, double lots, int slippage);
 void PostReport(string commandId, string status, string action, int ticket, double fillPrice, double lots, int errorCode, string message);
@@ -70,6 +75,12 @@ void OnTimer()
    {
       if (!historyStarted) PrepareHistoryUpload();
       UploadHistoryChunk();
+   }
+
+   if (UploadOrderHistory && OrderHistoryPushMs > 0 && (lastOrderHistoryPushTick == 0 || nowTick - lastOrderHistoryPushTick >= (uint)OrderHistoryPushMs))
+   {
+      UploadClosedOrderHistory();
+      lastOrderHistoryPushTick = nowTick;
    }
 
    string body = HttpGet("/mt4/command");
@@ -197,6 +208,56 @@ bool UploadHistoryChunk()
       historyDone = true;
       Print("History upload completed symbol=", TradeSymbol, " interval=", historyInterval);
    }
+   return true;
+}
+
+bool UploadClosedOrderHistory()
+{
+   int total = OrdersHistoryTotal();
+   if (total <= 0) return false;
+
+   datetime minCloseTime = TimeCurrent() - MathMax(OrderHistoryLookbackDays, 1) * 86400;
+   int digits = (int)MarketInfo(TradeSymbol, MODE_DIGITS);
+   int serverOffsetSec = (int)MathRound((TimeCurrent() - TimeGMT()) / 60.0) * 60;
+   string orders = "[";
+   int sent = 0;
+
+   for (int i = total - 1; i >= 0; i--)
+   {
+      if (!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY)) continue;
+      if (OrderSymbol() != TradeSymbol || OrderMagicNumber() != MagicNumber) continue;
+      if (OrderType() != OP_BUY && OrderType() != OP_SELL) continue;
+      if (OrderCloseTime() < minCloseTime) continue;
+      if (sent > 0) orders += ",";
+      string side = OrderType() == OP_BUY ? "BUY" : "SELL";
+      long openMs = (long)(OrderOpenTime() - serverOffsetSec) * 1000;
+      long closeMs = (long)(OrderCloseTime() - serverOffsetSec) * 1000;
+      orders += "{";
+      orders += "\"ticket\":" + IntegerToString(OrderTicket()) + ",";
+      orders += "\"symbol\":\"" + JsonEscape(OrderSymbol()) + "\",";
+      orders += "\"side\":\"" + side + "\",";
+      orders += "\"lots\":" + DoubleToString(OrderLots(), 2) + ",";
+      orders += "\"open_time_ms\":" + IntegerToString(openMs) + ",";
+      orders += "\"close_time_ms\":" + IntegerToString(closeMs) + ",";
+      orders += "\"open_price\":" + DoubleToString(OrderOpenPrice(), digits) + ",";
+      orders += "\"close_price\":" + DoubleToString(OrderClosePrice(), digits) + ",";
+      orders += "\"profit\":" + DoubleToString(OrderProfit(), 2) + ",";
+      orders += "\"swap\":" + DoubleToString(OrderSwap(), 2) + ",";
+      orders += "\"commission\":" + DoubleToString(OrderCommission(), 2) + ",";
+      orders += "\"magic_number\":" + IntegerToString(OrderMagicNumber()) + ",";
+      orders += "\"comment\":\"" + JsonEscape(OrderComment()) + "\"";
+      orders += "}";
+      sent++;
+   }
+
+   orders += "]";
+   if (sent <= 0) return false;
+
+   string json = "{";
+   json += "\"symbol\":\"" + JsonEscape(TradeSymbol) + "\",";
+   json += "\"orders\":" + orders;
+   json += "}";
+   HttpPost("/mt4/order-history", json);
    return true;
 }
 

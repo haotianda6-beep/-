@@ -63,6 +63,9 @@ class BinanceBaseClient:
     async def account_snapshot(self) -> AccountSnapshot | None:
         raise NotImplementedError
 
+    async def user_trades(self, start_ms: int, end_ms: int, limit: int = 1000) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
 
 class PaperBinanceClient(BinanceBaseClient):
     def __init__(self, settings: Settings) -> None:
@@ -190,6 +193,9 @@ class PaperBinanceClient(BinanceBaseClient):
         except Exception as exc:  # noqa: BLE001
             logger.warning("Binance paper account snapshot unavailable: %s", str(exc)[:160])
         return self._account
+
+    async def user_trades(self, start_ms: int, end_ms: int, limit: int = 1000) -> list[dict[str, Any]]:
+        return []
 
     async def simulate_fill(self, order_id: str, quantity: Decimal, price: Decimal | None = None) -> OrderUpdate:
         order = self._orders[order_id]
@@ -374,6 +380,19 @@ class BinanceFuturesClient(BinanceBaseClient):
         except Exception as exc:  # noqa: BLE001
             logger.warning("Binance account snapshot unavailable: %s", str(exc)[:160])
         return self._account
+
+    async def user_trades(self, start_ms: int, end_ms: int, limit: int = 1000) -> list[dict[str, Any]]:
+        raw = await self._signed(
+            "GET",
+            "/fapi/v1/userTrades",
+            {
+                "symbol": self.settings.binance_symbol,
+                "startTime": int(start_ms),
+                "endTime": int(end_ms),
+                "limit": min(max(int(limit), 1), 1000),
+            },
+        )
+        return list(raw)
 
     async def _load_exchange_info(self) -> None:
         data = await self._public("GET", "/fapi/v1/exchangeInfo")

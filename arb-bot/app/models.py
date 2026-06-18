@@ -201,6 +201,28 @@ class Mt4HistoryPayload(BaseModel):
     bars: list[HistoryBar] = Field(default_factory=list)
 
 
+class Mt4ClosedOrder(BaseModel):
+    ticket: int
+    symbol: str
+    side: Side
+    lots: Decimal
+    open_time_ms: int
+    close_time_ms: int
+    open_price: Decimal
+    close_price: Decimal
+    profit: Decimal = Decimal("0")
+    swap: Decimal = Decimal("0")
+    commission: Decimal = Decimal("0")
+    magic_number: int | None = None
+    comment: str | None = None
+
+
+class Mt4OrderHistoryPayload(BaseModel):
+    token: str | None = None
+    symbol: str
+    orders: list[Mt4ClosedOrder] = Field(default_factory=list)
+
+
 class SpreadAnalysisPoint(BaseModel):
     timestamp_ms: int
     mt4_close: Decimal
@@ -226,6 +248,36 @@ class SpreadAnalysis(BaseModel):
     latest_time_ms: int | None = None
     closest_points: list[SpreadAnalysisPoint] = Field(default_factory=list)
     latest_points: list[SpreadAnalysisPoint] = Field(default_factory=list)
+
+
+class TradeHistoryItem(BaseModel):
+    open_time_ms: int | None = None
+    close_time_ms: int | None = None
+    quantity_oz: Decimal | None = None
+    binance_entry_order_id: str | None = None
+    binance_entry_side: Side | None = None
+    binance_entry_price: Decimal | None = None
+    binance_exit_order_id: str | None = None
+    binance_exit_side: Side | None = None
+    binance_exit_price: Decimal | None = None
+    binance_realized_pnl: Decimal | None = None
+    binance_commission: Decimal | None = None
+    mt4_ticket: int | None = None
+    mt4_side: Side | None = None
+    mt4_lots: Decimal | None = None
+    mt4_open_price: Decimal | None = None
+    mt4_close_price: Decimal | None = None
+    mt4_profit: Decimal | None = None
+    mt4_swap: Decimal | None = None
+    mt4_commission: Decimal | None = None
+    net_pnl: Decimal | None = None
+    status: str
+
+
+class TradeHistoryResponse(BaseModel):
+    generated_ms: int = Field(default_factory=utc_now_ms)
+    source: str
+    items: list[TradeHistoryItem] = Field(default_factory=list)
 
 
 class OpenPair(BaseModel):

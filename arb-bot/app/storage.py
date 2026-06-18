@@ -8,7 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from app.models import HistoryBar
+from app.models import HistoryBar, Mt4ClosedOrder
 
 
 class Storage:
@@ -61,6 +61,32 @@ class Storage:
                 """
                 CREATE INDEX IF NOT EXISTS idx_market_bars_lookup
                 ON market_bars (source, symbol, interval, open_time_ms)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mt4_closed_orders (
+                    ticket INTEGER PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    lots TEXT NOT NULL,
+                    open_time_ms INTEGER NOT NULL,
+                    close_time_ms INTEGER NOT NULL,
+                    open_price TEXT NOT NULL,
+                    close_price TEXT NOT NULL,
+                    profit TEXT NOT NULL,
+                    swap TEXT NOT NULL,
+                    commission TEXT NOT NULL,
+                    magic_number INTEGER,
+                    comment TEXT,
+                    received_ts TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_mt4_closed_orders_lookup
+                ON mt4_closed_orders (symbol, close_time_ms)
                 """
             )
 
@@ -150,6 +176,89 @@ class Storage:
                 low=Decimal(row[3]),
                 close=Decimal(row[4]),
                 volume=Decimal(row[5]) if row[5] is not None else None,
+            )
+            for row in rows
+        ]
+
+    def upsert_mt4_closed_orders(self, orders: list[Mt4ClosedOrder]) -> int:
+        if not orders:
+            return 0
+        now = datetime.now(timezone.utc).isoformat()
+        rows = [
+            (
+                order.ticket,
+                order.symbol,
+                order.side.value,
+                str(order.lots),
+                int(order.open_time_ms),
+                int(order.close_time_ms),
+                str(order.open_price),
+                str(order.close_price),
+                str(order.profit),
+                str(order.swap),
+                str(order.commission),
+                order.magic_number,
+                order.comment,
+                now,
+            )
+            for order in orders
+        ]
+        with self._lock, self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO mt4_closed_orders (
+                    ticket, symbol, side, lots, open_time_ms, close_time_ms, open_price, close_price,
+                    profit, swap, commission, magic_number, comment, received_ts
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(ticket)
+                DO UPDATE SET
+                    symbol=excluded.symbol,
+                    side=excluded.side,
+                    lots=excluded.lots,
+                    open_time_ms=excluded.open_time_ms,
+                    close_time_ms=excluded.close_time_ms,
+                    open_price=excluded.open_price,
+                    close_price=excluded.close_price,
+                    profit=excluded.profit,
+                    swap=excluded.swap,
+                    commission=excluded.commission,
+                    magic_number=excluded.magic_number,
+                    comment=excluded.comment,
+                    received_ts=excluded.received_ts
+                """,
+                rows,
+            )
+        return len(rows)
+
+    def get_mt4_closed_orders(self, symbol: str, start_ms: int, end_ms: int, limit: int = 100) -> list[Mt4ClosedOrder]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT ticket, symbol, side, lots, open_time_ms, close_time_ms, open_price, close_price,
+                       profit, swap, commission, magic_number, comment
+                FROM mt4_closed_orders
+                WHERE symbol = ? AND close_time_ms >= ? AND close_time_ms <= ?
+                ORDER BY close_time_ms DESC
+                LIMIT ?
+                """,
+                (symbol, start_ms, end_ms, limit),
+            ).fetchall()
+        return [
+            Mt4ClosedOrder(
+                ticket=int(row[0]),
+                symbol=row[1],
+                side=row[2],
+                lots=Decimal(row[3]),
+                open_time_ms=int(row[4]),
+                close_time_ms=int(row[5]),
+                open_price=Decimal(row[6]),
+                close_price=Decimal(row[7]),
+                profit=Decimal(row[8]),
+                swap=Decimal(row[9]),
+                commission=Decimal(row[10]),
+                magic_number=int(row[11]) if row[11] is not None else None,
+                comment=row[12],
             )
             for row in rows
         ]
