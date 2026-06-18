@@ -635,6 +635,7 @@ def _runtime_config() -> RuntimeConfig:
         daily_loss_limit_usdt=settings.daily_loss_limit_usdt,
         add_edge_growth_pct=settings.add_edge_growth_pct,
         max_add_count=settings.max_add_count,
+        negative_swap_close_before_minutes=settings.negative_swap_close_before_minutes,
         target_oz=settings.target_oz,
         mt4_lot_size_oz=settings.mt4_lot_size_oz,
         mt4_slippage_points=settings.mt4_slippage_points,
@@ -758,8 +759,13 @@ def _execution_plan() -> ExecutionPlanStatus:
     plan = strategy.active_plan
     if order:
         follow_side = plan.mt4_hedge_side if plan else None
+        if order.reduce_only:
+            summary = f"币安当前平仓挂单：{_side_text(order.side)} {order.orig_qty} XAU，价格 {order.price}，状态 {_order_status_text(order.status.value)}；币安全部成交后 MT4 逐张市价平仓。"
+            follow_side = Side.SELL if strategy.open_pair and strategy.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.BUY
+        else:
+            summary = f"币安当前挂单：{_side_text(order.side)} {order.orig_qty} XAU，价格 {order.price}，状态 {_order_status_text(order.status.value)}；成交后 MT4 立即市价对冲，不检查价差保护价。"
         return ExecutionPlanStatus(
-            summary=f"币安当前挂单：{_side_text(order.side)} {order.orig_qty} XAU，价格 {order.price}，状态 {_order_status_text(order.status.value)}；成交后 MT4 立即市价对冲，不检查价差保护价。",
+            summary=summary,
             active_binance_order=True,
             binance_order_status=order.status,
             binance_order_side=order.side,
@@ -778,14 +784,34 @@ def _execution_plan() -> ExecutionPlanStatus:
     if strategy.state.value == "PAUSED":
         if pair and binance_quote and mt4_quote:
             add_summary = _pair_add_summary(pair, binance_quote, mt4_quote)
+            swap_summary = _negative_swap_close_summary(pair)
             return ExecutionPlanStatus(
-                summary=f"系统已暂停，不会自动补仓或平仓；当前仍有组合持仓。{add_summary}",
+                summary=f"系统已暂停，不会自动补仓或平仓；当前仍有组合持仓。{swap_summary or add_summary}",
                 max_follow_seconds=max_follow_seconds,
             )
         return ExecutionPlanStatus(summary="系统已暂停，不会自动新挂单；恢复后才会继续按价差条件执行。", max_follow_seconds=max_follow_seconds)
     if pair and binance_quote and mt4_quote:
         if quote_block_reason:
             return ExecutionPlanStatus(summary=f"当前有组合持仓，但{quote_block_reason}，暂不挂平仓单。", max_follow_seconds=max_follow_seconds)
+        swap_summary = _negative_swap_close_summary(pair)
+        if swap_summary and swap_summary.startswith("隔夜费亏损风控已触发") and pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            return ExecutionPlanStatus(
+                summary=f"{swap_summary} 币安将挂 买入 限价 {round_down(binance_quote.bid, binance_client.filters.tick_size)}，全部成交后 MT4 逐张平仓。",
+                binance_order_side=Side.BUY,
+                binance_order_price=round_down(binance_quote.bid, binance_client.filters.tick_size),
+                binance_order_qty=pair.quantity_oz,
+                mt4_follow_side=Side.SELL,
+                max_follow_seconds=max_follow_seconds,
+            )
+        if swap_summary and swap_summary.startswith("隔夜费亏损风控已触发") and pair.direction == PairDirection.BINANCE_LONG_MT4_SHORT:
+            return ExecutionPlanStatus(
+                summary=f"{swap_summary} 币安将挂 卖出 限价 {round_up(binance_quote.ask, binance_client.filters.tick_size)}，全部成交后 MT4 逐张平仓。",
+                binance_order_side=Side.SELL,
+                binance_order_price=round_up(binance_quote.ask, binance_client.filters.tick_size),
+                binance_order_qty=pair.quantity_oz,
+                mt4_follow_side=Side.BUY,
+                max_follow_seconds=max_follow_seconds,
+            )
         add_summary = _pair_add_summary(pair, binance_quote, mt4_quote)
         add_plan = _pair_add_plan(pair, binance_quote, mt4_quote)
         if add_plan:
@@ -861,6 +887,46 @@ def _pair_add_summary(pair, binance_quote: MarketQuote, mt4_quote: MarketQuote) 
     trigger_edge = base_edge * (Decimal("1") + settings.add_edge_growth_pct / Decimal("100"))
     current_edge = binance_quote.ask - mt4_quote.ask if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else mt4_quote.bid - binance_quote.bid
     return f"补仓观察：已补 {pair.add_count}/{settings.max_add_count} 次，上次价差 {base_edge:.4f}，下次触发 {trigger_edge:.4f}，当前同向价差 {current_edge:.4f}。"
+
+
+def _negative_swap_close_summary(pair) -> str | None:
+    if settings.negative_swap_close_before_minutes <= 0:
+        return None
+    swap_info = mt4_bridge.latest_swap_info()
+    next_rollover = swap_info.next_rollover_time_ms
+    if next_rollover is None:
+        return None
+    estimate = _estimate_mt4_swap(pair, pair.quantity_oz, swap_info)
+    if estimate is None or estimate >= 0:
+        return None
+    projected_net = _convergence_net_after_next_mt4_swap(pair, estimate)
+    ms_left = next_rollover - utc_now_ms()
+    lead_ms = settings.negative_swap_close_before_minutes * 60 * 1000
+    if ms_left < 0 or ms_left > lead_ms:
+        minutes_left = max(0, ms_left // 60000)
+        net_text = f"，扣后回归净利预估 {projected_net}" if projected_net is not None else ""
+        return f"MT4 下次隔夜费预估亏损 {estimate}{net_text}，距离结算约 {minutes_left} 分钟；低于 {settings.negative_swap_close_before_minutes} 分钟且回归净利不够才会提前平仓。"
+    if projected_net is not None and projected_net > 0:
+        return f"MT4 下次隔夜费预估亏损 {estimate}，但扣后回归净利预估 {projected_net}，仍有利润，不提前平仓。"
+    minutes_left = max(0, ms_left // 60000)
+    net_text = f"，扣后回归净利预估 {projected_net}" if projected_net is not None else ""
+    return f"隔夜费亏损风控已触发：MT4 下次隔夜费预估 {estimate}{net_text}，距离结算约 {minutes_left} 分钟，提前平仓。"
+
+
+def _convergence_net_after_next_mt4_swap(pair, next_swap: Decimal) -> Decimal | None:
+    qty = pair.quantity_oz
+    if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+        opening_edge = pair.binance_entry_price - pair.mt4_entry_price
+    else:
+        opening_edge = pair.mt4_entry_price - pair.binance_entry_price
+    net = (opening_edge - settings.close_max_spread) * qty
+    fee_rate = binance_client.maker_fee_rate or settings.binance_maker_fee_rate
+    if fee_rate is not None:
+        net -= pair.binance_entry_price * qty * abs(fee_rate) * Decimal("2")
+    accrued_swap = _mt4_accrued_swap(pair)
+    if accrued_swap is not None:
+        net += accrued_swap
+    return net + next_swap
 
 
 def _quote_plan_block_reason(binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> str | None:

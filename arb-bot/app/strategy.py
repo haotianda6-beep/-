@@ -152,6 +152,7 @@ class StrategyEngine:
         self.adding_to_pair = False
         self.pending_close_tickets: set[int] = set()
         self.pending_close_commands: dict[str, int] = {}
+        self.exit_force_reason: str | None = None
         self.last_error: str | None = None
 
     async def step(self) -> None:
@@ -177,6 +178,10 @@ class StrategyEngine:
         elif self.state == StrategyState.PAIR_OPEN:
             if not self._quotes_fresh(binance_quote, mt4_quote):
                 self.state = StrategyState.PAUSED
+                return
+            force_exit_reason = self._negative_swap_exit_reason()
+            if force_exit_reason:
+                await self._maybe_exit(binance_quote, mt4_quote, force=True, reason=force_exit_reason)
                 return
             if await self._maybe_add_position(binance_quote, mt4_quote):
                 return
@@ -671,10 +676,16 @@ class StrategyEngine:
             return binance_quote.ask - mt4_quote.ask
         return mt4_quote.bid - binance_quote.bid
 
-    async def _maybe_exit(self, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> None:
+    async def _maybe_exit(
+        self,
+        binance_quote: MarketQuote | None,
+        mt4_quote: MarketQuote | None,
+        force: bool = False,
+        reason: str | None = None,
+    ) -> None:
         if not self.open_pair or not binance_quote or not mt4_quote:
             return
-        if abs(binance_quote.mid - mt4_quote.mid) > self.settings.close_max_spread:
+        if not force and abs(binance_quote.mid - mt4_quote.mid) > self.settings.close_max_spread:
             return
         if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             side = Side.BUY
@@ -698,6 +709,16 @@ class StrategyEngine:
         if order.status != OrderStatus.REJECTED:
             self.active_order = order
             self.order_created_ms = utc_now_ms()
+            self.exit_force_reason = reason if force else None
+            if force:
+                self.storage.record_event(
+                    "forced_exit_order",
+                    {
+                        **order.model_dump(mode="json"),
+                        "reason": reason,
+                        "mt4_swap_estimate": str(self._mt4_swap_estimate()) if self._mt4_swap_estimate() is not None else None,
+                    },
+                )
             self.state = StrategyState.QUOTING_BINANCE_EXIT
 
     async def _check_exit_order(self) -> None:
@@ -706,11 +727,13 @@ class StrategyEngine:
             return
         if utc_now_ms() - self.order_created_ms > self.settings.max_order_age_ms:
             await self.binance.cancel_order(self.active_order.order_id)
+            self.active_order = None
+            self.exit_force_reason = None
             self.state = StrategyState.PAIR_OPEN
             return
         order = await self.binance.get_order(self.active_order.order_id)
         if not order or order.status != OrderStatus.FILLED:
-            if order and order.status == OrderStatus.NEW and not self._exit_spread_still_valid():
+            if order and order.status == OrderStatus.NEW and not self.exit_force_reason and not self._exit_spread_still_valid():
                 await self.binance.cancel_order(order.order_id)
                 self.active_order = None
                 self.state = StrategyState.PAIR_OPEN
@@ -748,6 +771,86 @@ class StrategyEngine:
             },
         )
         self.state = StrategyState.CLOSING_MT4
+
+    def _negative_swap_exit_reason(self) -> str | None:
+        if not self.open_pair or self.settings.negative_swap_close_before_minutes <= 0:
+            return None
+        swap_info = self.mt4.latest_swap_info()
+        next_rollover = swap_info.next_rollover_time_ms
+        if next_rollover is None:
+            return None
+        ms_left = next_rollover - utc_now_ms()
+        lead_ms = self.settings.negative_swap_close_before_minutes * 60 * 1000
+        if ms_left < 0 or ms_left > lead_ms:
+            return None
+        estimate = self._mt4_swap_estimate()
+        if estimate is None or estimate >= 0:
+            return None
+        projected_net = self._convergence_net_after_next_mt4_swap(estimate)
+        if projected_net is not None and projected_net > 0:
+            self.storage.record_event(
+                "negative_swap_hold_allowed",
+                {
+                    "mt4_swap_estimate": str(estimate),
+                    "projected_convergence_net": str(projected_net),
+                    "next_rollover_time_ms": next_rollover,
+                },
+            )
+            return None
+        minutes_left = max(0, ms_left // 60000)
+        net_text = f"，扣后回归净利预估 {projected_net}" if projected_net is not None else ""
+        return f"MT4 隔夜费预估为亏损 {estimate}{net_text}，距离结算约 {minutes_left} 分钟，提前平仓"
+
+    def _mt4_swap_estimate(self) -> Decimal | None:
+        if not self.open_pair:
+            return None
+        swap_info = self.mt4.latest_swap_info()
+        raw = (
+            swap_info.swap_long_per_lot
+            if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG
+            else swap_info.swap_short_per_lot
+        )
+        if raw is None:
+            return None
+        lots = self.open_pair.quantity_oz / self.settings.mt4_lot_size_oz
+        if swap_info.swap_type == 0:
+            if not swap_info.tick_value or not swap_info.tick_size or not swap_info.point:
+                return raw * lots
+            return raw * (swap_info.point / swap_info.tick_size) * swap_info.tick_value * lots
+        return raw * lots
+
+    def _convergence_net_after_next_mt4_swap(self, next_swap: Decimal) -> Decimal | None:
+        if not self.open_pair:
+            return None
+        qty = self.open_pair.quantity_oz
+        if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            opening_edge = self.open_pair.binance_entry_price - self.open_pair.mt4_entry_price
+        else:
+            opening_edge = self.open_pair.mt4_entry_price - self.open_pair.binance_entry_price
+        gross = (opening_edge - self.settings.close_max_spread) * qty
+        fee_rate = self.binance.maker_fee_rate or self.settings.binance_maker_fee_rate
+        if fee_rate is not None:
+            gross -= self.open_pair.binance_entry_price * qty * abs(fee_rate) * Decimal("2")
+        accrued_swap = self._mt4_accrued_swap()
+        if accrued_swap is not None:
+            gross += accrued_swap
+        return gross + next_swap
+
+    def _mt4_accrued_swap(self) -> Decimal | None:
+        if not self.open_pair:
+            return None
+        positions = self.mt4.positions()
+        if not positions:
+            return None
+        tickets = set(self.open_pair.mt4_tickets or ([] if self.open_pair.mt4_ticket is None else [self.open_pair.mt4_ticket]))
+        if tickets:
+            matched = [position for position in positions if position.ticket in tickets]
+        else:
+            expected_side = Side.BUY if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.SELL
+            matched = [position for position in positions if position.symbol == self.settings.mt4_symbol and position.side == expected_side]
+        if not matched:
+            return None
+        return sum((position.swap for position in matched), Decimal("0"))
 
     def _mt4_close_lots_by_ticket(self, tickets: list[int]) -> dict[int, Decimal]:
         positions_by_ticket = {
@@ -793,6 +896,7 @@ class StrategyEngine:
         self.active_plan = None
         self.active_order = None
         self.adding_to_pair = False
+        self.exit_force_reason = None
         self.pending_hedge_qty = Decimal("0")
         self.hedge_started_ms = 0
         self.state = StrategyState.PAUSED
@@ -813,6 +917,7 @@ class StrategyEngine:
         self.active_plan = None
         self.active_order = None
         self.adding_to_pair = False
+        self.exit_force_reason = None
         self.hedged_qty = Decimal("0")
         self.pending_hedge_qty = Decimal("0")
         self.hedge_started_ms = 0
@@ -824,6 +929,7 @@ class StrategyEngine:
         self.active_order = None
         self.open_pair = None
         self.adding_to_pair = False
+        self.exit_force_reason = None
         self.pending_close_tickets = set()
         self.pending_close_commands = {}
         self.hedged_qty = Decimal("0")

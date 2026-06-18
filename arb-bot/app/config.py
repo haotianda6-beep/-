@@ -29,6 +29,7 @@ CONFIG_FIELD_TO_ENV = {
     "daily_loss_limit_usdt": "DAILY_LOSS_LIMIT_USDT",
     "add_edge_growth_pct": "ADD_EDGE_GROWTH_PCT",
     "max_add_count": "MAX_ADD_COUNT",
+    "negative_swap_close_before_minutes": "NEGATIVE_SWAP_CLOSE_BEFORE_MINUTES",
     "target_oz": "TARGET_OZ",
     "mt4_lot_size_oz": "MT4_LOT_SIZE_OZ",
     "mt4_slippage_points": "MT4_SLIPPAGE_POINTS",
@@ -82,6 +83,7 @@ class Settings(BaseSettings):
     daily_loss_limit_usdt: Decimal = Field(default=Decimal("50"), alias="DAILY_LOSS_LIMIT_USDT")
     add_edge_growth_pct: Decimal = Field(default=Decimal("1"), alias="ADD_EDGE_GROWTH_PCT")
     max_add_count: int = Field(default=3, alias="MAX_ADD_COUNT")
+    negative_swap_close_before_minutes: int = Field(default=30, alias="NEGATIVE_SWAP_CLOSE_BEFORE_MINUTES")
     target_oz: Decimal = Field(default=Decimal("1"), alias="TARGET_OZ")
     mt4_lot_size_oz: Decimal = Field(default=Decimal("100"), alias="MT4_LOT_SIZE_OZ")
     mt4_slippage_points: int = Field(default=30, alias="MT4_SLIPPAGE_POINTS")
@@ -126,6 +128,7 @@ class Settings(BaseSettings):
         "max_hedge_delay_ms",
         "loop_interval_ms",
         "paper_fill_delay_ms",
+        "negative_swap_close_before_minutes",
     )
     @classmethod
     def non_negative_or_positive_timing(cls, value: int) -> int:

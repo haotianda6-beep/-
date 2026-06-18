@@ -434,6 +434,100 @@ async def test_exit_order_cancels_when_spread_widens_before_fill(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_negative_mt4_swap_forces_exit_before_rollover(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        PositionTrackingPaperClient,
+        settings_kwargs={"NEGATIVE_SWAP_CLOSE_BEFORE_MINUTES": 30},
+    )
+    await open_live_pair(engine, client, mt4, ticket=111111)
+    client.set_quote(Decimal("2002"), Decimal("2003"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("2000"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+            swap_long_per_lot=Decimal("-100"),
+            swap_short_per_lot=Decimal("20"),
+            swap_type=1,
+            next_rollover_time_ms=utc_now_ms() + 20 * 60 * 1000,
+        )
+    )
+
+    await engine.step()
+
+    assert engine.state == StrategyState.QUOTING_BINANCE_EXIT
+    assert engine.active_order is not None
+    assert engine.active_order.reduce_only is True
+    assert engine.active_order.side == Side.BUY
+    assert engine.exit_force_reason is not None
+    assert "隔夜费" in engine.exit_force_reason
+
+
+@pytest.mark.asyncio
+async def test_negative_mt4_swap_waits_until_close_window(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        PositionTrackingPaperClient,
+        settings_kwargs={"NEGATIVE_SWAP_CLOSE_BEFORE_MINUTES": 30, "MAX_ADD_COUNT": 0},
+    )
+    await open_live_pair(engine, client, mt4, ticket=111111)
+    client.set_quote(Decimal("2002"), Decimal("2003"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("2000"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+            swap_long_per_lot=Decimal("-100"),
+            swap_short_per_lot=Decimal("20"),
+            swap_type=1,
+            next_rollover_time_ms=utc_now_ms() + 40 * 60 * 1000,
+        )
+    )
+
+    await engine.step()
+
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.active_order is None
+
+
+@pytest.mark.asyncio
+async def test_negative_mt4_swap_does_not_exit_when_convergence_still_profitable(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        PositionTrackingPaperClient,
+        settings_kwargs={"NEGATIVE_SWAP_CLOSE_BEFORE_MINUTES": 30, "MAX_ADD_COUNT": 0},
+    )
+    await open_live_pair(engine, client, mt4, ticket=111111)
+    client.set_quote(Decimal("2002"), Decimal("2003"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("2000"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+            swap_long_per_lot=Decimal("-10"),
+            swap_short_per_lot=Decimal("20"),
+            swap_type=1,
+            next_rollover_time_ms=utc_now_ms() + 20 * 60 * 1000,
+        )
+    )
+
+    await engine.step()
+
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.active_order is None
+
+
+@pytest.mark.asyncio
 async def test_add_position_keeps_existing_direction_when_edge_grows(tmp_path):
     engine, client, mt4 = await make_engine(
         tmp_path,

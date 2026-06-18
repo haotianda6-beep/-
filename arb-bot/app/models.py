@@ -344,6 +344,7 @@ class RuntimeConfig(BaseModel):
     daily_loss_limit_usdt: Decimal
     add_edge_growth_pct: Decimal
     max_add_count: int
+    negative_swap_close_before_minutes: int
     target_oz: Decimal
     mt4_lot_size_oz: Decimal
     mt4_slippage_points: int
@@ -369,6 +370,7 @@ class RuntimeConfigUpdate(BaseModel):
     daily_loss_limit_usdt: Decimal | None = None
     add_edge_growth_pct: Decimal | None = None
     max_add_count: int | None = None
+    negative_swap_close_before_minutes: int | None = None
     target_oz: Decimal | None = None
     mt4_lot_size_oz: Decimal | None = None
     mt4_slippage_points: int | None = None
@@ -403,6 +405,7 @@ class RuntimeConfigUpdate(BaseModel):
         "requote_cooldown_ms",
         "loop_interval_ms",
         "paper_fill_delay_ms",
+        "negative_swap_close_before_minutes",
     )
     @classmethod
     def positive_int(cls, value: int | None) -> int | None:
