@@ -511,6 +511,14 @@ class StrategyEngine:
             return
         order = await self.binance.get_order(self.active_order.order_id)
         if not order or order.status != OrderStatus.FILLED:
+            if order and order.status == OrderStatus.NEW and not self._exit_spread_still_valid():
+                await self.binance.cancel_order(order.order_id)
+                self.active_order = None
+                self.state = StrategyState.PAIR_OPEN
+                self.storage.record_event(
+                    "exit_order_canceled_spread_widened",
+                    {"order_id": order.order_id, "reason": "平仓挂单等待期间价差走扩"},
+                )
             return
         self.active_order = order
         if self.settings.is_dry_run:
@@ -528,6 +536,13 @@ class StrategyEngine:
             return
         self.mt4.queue_close(self.open_pair.mt4_ticket, lots, "exit hedge")
         self.state = StrategyState.CLOSING_MT4
+
+    def _exit_spread_still_valid(self) -> bool:
+        binance_quote = self.binance.latest_quote()
+        mt4_quote = self.mt4.latest_quote()
+        if not binance_quote or not mt4_quote:
+            return False
+        return abs(binance_quote.mid - mt4_quote.mid) <= self.settings.close_max_spread
 
     async def _emergency_close(self, reason: str) -> None:
         self.last_error = reason
