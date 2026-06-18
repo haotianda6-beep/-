@@ -451,6 +451,10 @@
               <strong>浮动盈亏</strong>
               <span id="mt4Unrealized">-</span>
             </div>
+            <div class="compact-row">
+              <strong>实际持仓</strong>
+              <span class="wrap" id="mt4AccountPositionsLine">-</span>
+            </div>
           </div>
         </div>
       </section>
@@ -946,6 +950,7 @@
         $("mt4Available").textContent = mt4 ? accountMoney(mt4.available, mt4.currency) : "-";
         $("mt4Margin").textContent = mt4 ? accountMoney(mt4.used_margin, mt4.currency) : "-";
         $("mt4Unrealized").textContent = mt4 ? accountSigned(mt4.unrealized_pnl, mt4.currency) : "-";
+        $("mt4AccountPositionsLine").textContent = renderMt4Positions(data.mt4_positions || []);
       }
 
       function renderPositions(data) {

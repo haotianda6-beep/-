@@ -361,6 +361,42 @@ async def test_mt4_failure_triggers_emergency_close(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_exit_closes_mt4_ticket_instead_of_opening_reverse_order(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path)
+    await engine.step()
+    entry_order = engine.active_order
+    assert entry_order is not None
+    await client.simulate_fill(entry_order.order_id, Decimal("1"), Decimal("2002"))
+    await engine.step()
+    entry_command = mt4.next_command()
+    mt4.submit_report(
+        Mt4Report(
+            command_id=entry_command["command_id"],
+            status="ok",
+            action="BUY",
+            ticket=123456,
+            fill_price=Decimal("2000"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await engine.step()
+    assert engine.state == StrategyState.PAIR_OPEN
+
+    client.set_quote(Decimal("2000.0"), Decimal("2000.1"))
+    mt4.update_tick(Mt4Tick(symbol="XAUUSD", bid=Decimal("2000.0"), ask=Decimal("2000.1")))
+    await engine.step()
+    exit_order = engine.active_order
+    assert exit_order is not None
+    await client.simulate_fill(exit_order.order_id, Decimal("1"), Decimal("2000"))
+    await engine.step()
+
+    close_command = mt4.next_command()
+    assert close_command["action"] == "CLOSE"
+    assert close_command["ticket"] == 123456
+    assert Decimal(str(close_command["lots"])) == Decimal("0.01")
+
+
+@pytest.mark.asyncio
 async def test_dry_run_does_not_send_real_mt4_order(tmp_path):
     cfg = settings(tmp_path, PAPER_MODE=True, LIVE_TRADING=False)
     client = PaperBinanceClient(cfg)

@@ -517,9 +517,16 @@ class StrategyEngine:
             self.storage.record_pnl(self.open_pair.pair_id, self.open_pair.realized_pnl)
             self._reset_all()
             return
-        close_side = Side.SELL if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.BUY
         lots = self.open_pair.quantity_oz / self.settings.mt4_lot_size_oz
-        self.mt4.queue_market_order(close_side, lots, "exit hedge")
+        if self.open_pair.mt4_ticket is None:
+            self.state = StrategyState.PAUSED
+            self.last_error = "MT4 持仓单号缺失，不能自动平仓，已暂停"
+            self.storage.record_event(
+                "mt4_close_ticket_missing",
+                {"pair_id": self.open_pair.pair_id, "quantity_oz": str(self.open_pair.quantity_oz)},
+            )
+            return
+        self.mt4.queue_close(self.open_pair.mt4_ticket, lots, "exit hedge")
         self.state = StrategyState.CLOSING_MT4
 
     async def _emergency_close(self, reason: str) -> None:
