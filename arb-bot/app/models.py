@@ -67,6 +67,7 @@ class EntryPlan(BaseModel):
     limit_price: Decimal
     quantity_oz: Decimal
     edge: Decimal
+    edge_pct: Decimal | None = None
     mt4_hedge_side: Side
     mt4_price_limit: Decimal
 
@@ -293,6 +294,8 @@ class OpenPair(BaseModel):
     realized_pnl: Decimal = Decimal("0")
     base_edge: Decimal | None = None
     last_add_edge: Decimal | None = None
+    base_edge_pct: Decimal | None = None
+    last_add_edge_pct: Decimal | None = None
     add_count: int = 0
 
 

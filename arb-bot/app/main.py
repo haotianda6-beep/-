@@ -40,7 +40,15 @@ from app.models import (
 from app.mt4_bridge import Mt4Bridge
 from app.risk import RiskManager
 from app.storage import Storage
-from app.strategy import StrategyEngine, build_directional_entry_plan, build_entry_plan, round_down, round_up
+from app.strategy import (
+    StrategyEngine,
+    build_directional_entry_plan_by_pct,
+    build_entry_plan,
+    current_edge_percent,
+    edge_percent_for_direction,
+    round_down,
+    round_up,
+)
 
 
 setup_logging()
@@ -869,11 +877,11 @@ def _execution_plan() -> ExecutionPlanStatus:
 def _pair_add_plan(pair, binance_quote: MarketQuote, mt4_quote: MarketQuote):
     if settings.max_add_count <= 0 or pair.add_count >= settings.max_add_count:
         return None
-    base_edge = pair.last_add_edge or pair.base_edge
-    if base_edge is None:
+    base_edge_pct = _pair_last_add_edge_pct(pair)
+    if base_edge_pct is None:
         return None
-    trigger_edge = base_edge * (Decimal("1") + settings.add_edge_growth_pct / Decimal("100"))
-    return build_directional_entry_plan(settings, binance_client.filters, binance_quote, mt4_quote, pair.direction, trigger_edge)
+    trigger_edge_pct = base_edge_pct + settings.add_edge_growth_pct
+    return build_directional_entry_plan_by_pct(settings, binance_client.filters, binance_quote, mt4_quote, pair.direction, trigger_edge_pct)
 
 
 def _pair_add_summary(pair, binance_quote: MarketQuote, mt4_quote: MarketQuote) -> str:
@@ -881,12 +889,24 @@ def _pair_add_summary(pair, binance_quote: MarketQuote, mt4_quote: MarketQuote) 
         return "补仓已关闭。"
     if pair.add_count >= settings.max_add_count:
         return f"补仓次数 {pair.add_count}/{settings.max_add_count}，已达上限。"
-    base_edge = pair.last_add_edge or pair.base_edge
-    if base_edge is None:
+    base_edge_pct = _pair_last_add_edge_pct(pair)
+    if base_edge_pct is None:
         return "补仓基准价差缺失，暂不补仓。"
-    trigger_edge = base_edge * (Decimal("1") + settings.add_edge_growth_pct / Decimal("100"))
-    current_edge = binance_quote.ask - mt4_quote.ask if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else mt4_quote.bid - binance_quote.bid
-    return f"补仓观察：已补 {pair.add_count}/{settings.max_add_count} 次，上次价差 {base_edge:.4f}，下次触发 {trigger_edge:.4f}，当前同向价差 {current_edge:.4f}。"
+    trigger_edge_pct = base_edge_pct + settings.add_edge_growth_pct
+    current_pct = current_edge_percent(pair.direction, binance_quote, mt4_quote)
+    current_text = f"，当前同向价差 {current_pct:.4f}%" if current_pct is not None else ""
+    return f"补仓观察：已补 {pair.add_count}/{settings.max_add_count} 次，上次价差 {base_edge_pct:.4f}%，下次触发 {trigger_edge_pct:.4f}%{current_text}。"
+
+
+def _pair_last_add_edge_pct(pair) -> Decimal | None:
+    stored = pair.last_add_edge_pct or pair.base_edge_pct
+    if stored is not None:
+        return stored
+    edge = pair.last_add_edge or pair.base_edge
+    if edge is None:
+        return None
+    reference = pair.mt4_entry_price if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else pair.binance_entry_price
+    return edge_percent_for_direction(pair.direction, edge, reference)
 
 
 def _negative_swap_close_summary(pair) -> str | None:

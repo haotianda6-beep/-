@@ -538,7 +538,7 @@ async def test_add_position_keeps_existing_direction_when_edge_grows(tmp_path):
     assert engine.open_pair is not None
     assert engine.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG
 
-    client.set_quote(Decimal("2002"), Decimal("2003"))
+    client.set_quote(Decimal("2022"), Decimal("2023"))
     mt4.update_tick(
         Mt4Tick(
             symbol="XAUUSD",
@@ -597,7 +597,7 @@ async def test_exit_after_add_closes_all_mt4_tickets(tmp_path):
         settings_kwargs={"ADD_EDGE_GROWTH_PCT": Decimal("1"), "MAX_ADD_COUNT": 2},
     )
     await open_live_pair(engine, client, mt4, ticket=111111)
-    client.set_quote(Decimal("2002"), Decimal("2003"))
+    client.set_quote(Decimal("2022"), Decimal("2023"))
     mt4.update_tick(
         Mt4Tick(
             symbol="XAUUSD",
@@ -682,6 +682,33 @@ async def test_exit_after_add_closes_all_mt4_tickets(tmp_path):
     await engine.step()
     assert engine.state == StrategyState.IDLE
     assert engine.open_pair is None
+
+
+@pytest.mark.asyncio
+async def test_add_position_uses_percentage_points_not_relative_growth(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        PositionTrackingPaperClient,
+        settings_kwargs={"ADD_EDGE_GROWTH_PCT": Decimal("1"), "MAX_ADD_COUNT": 2},
+    )
+    await open_live_pair(engine, client, mt4, ticket=111111)
+
+    client.set_quote(Decimal("2001.01"), Decimal("2002.02"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("2000"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+            account_margin=Decimal("4.34"),
+        )
+    )
+    await engine.step()
+
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.active_order is None
 
 
 @pytest.mark.asyncio
