@@ -88,8 +88,24 @@
         gap: 12px;
       }
 
+      .layout.params-hidden {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
       .panel {
         padding: 14px;
+      }
+
+      .panel-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .panel-head h2 {
+        margin: 0;
       }
 
       .metric {
@@ -328,6 +344,10 @@
         gap: 12px;
       }
 
+      .hidden {
+        display: none !important;
+      }
+
       .table-scroll {
         overflow-x: auto;
       }
@@ -376,6 +396,7 @@
           <span class="status bad" id="backend">后端未连接</span>
           <span class="status bad" id="mt4">MT4 未连接</span>
           <button class="secondary" id="refreshBtn">刷新</button>
+          <button class="secondary" id="toggleParamsTopBtn">显示参数</button>
           <button class="safe" id="resumeBtn">恢复运行</button>
           <button class="secondary" id="clearPaperBtn">清理模拟</button>
           <button class="danger" id="startLiveBtn">启动实盘</button>
@@ -463,7 +484,7 @@
         </div>
       </section>
 
-      <section class="layout mt">
+      <section class="layout mt params-hidden" id="mainLayout">
         <div class="stack">
           <div class="panel">
             <h2>盘口</h2>
@@ -641,9 +662,12 @@
           </div>
         </div>
 
-        <aside class="stack">
+        <aside class="stack hidden" id="paramsAside">
           <div class="panel">
-            <h2>参数设置</h2>
+            <div class="panel-head">
+              <h2>参数设置</h2>
+              <button class="secondary" id="toggleParamsPanelBtn">隐藏</button>
+            </div>
             <table>
               <tbody>
                 <tr>
@@ -745,6 +769,7 @@
       let configDirty = false;
       let backendWasDown = false;
       let liveModeRestarting = false;
+      let paramsVisible = false;
       const configFields = [
         ["cfgBinanceLeverage", "binance_leverage", "number"],
         ["cfgTargetOz", "target_oz", "number"],
@@ -875,6 +900,17 @@
       function appendLog(message) {
         const line = `[${new Date().toLocaleTimeString("zh-CN")}] ${message}`;
         $("log").textContent = `${line}\n${$("log").textContent}`.slice(0, 4000);
+      }
+
+      function setParamsVisible(visible) {
+        paramsVisible = visible;
+        $("mainLayout").classList.toggle("params-hidden", !visible);
+        $("paramsAside").classList.toggle("hidden", !visible);
+        $("toggleParamsTopBtn").textContent = visible ? "隐藏参数" : "显示参数";
+      }
+
+      function toggleParams() {
+        setParamsVisible(!paramsVisible);
       }
 
       async function loadStatus() {
@@ -1309,6 +1345,8 @@
       }
 
       $("refreshBtn").addEventListener("click", loadStatus);
+      $("toggleParamsTopBtn").addEventListener("click", toggleParams);
+      $("toggleParamsPanelBtn").addEventListener("click", toggleParams);
       $("clearPaperBtn").addEventListener("click", () => clearPaperState().catch((error) => appendLog(translateError(error.message))));
       $("startLiveBtn").addEventListener("click", () => startLiveMode().catch((error) => appendLog(translateError(error.message))));
       $("stopLiveBtn").addEventListener("click", () => stopLiveMode().catch((error) => appendLog(translateError(error.message))));
@@ -1324,6 +1362,7 @@
           el.addEventListener("change", markConfigDirty);
         }
       }
+      setParamsVisible(false);
       loadStatus();
       loadTradeHistory();
       setInterval(loadStatus, 1000);
