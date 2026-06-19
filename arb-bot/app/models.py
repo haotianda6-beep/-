@@ -320,6 +320,8 @@ class PositionMetrics(BaseModel):
     actual_entry_spread: Decimal | None = None
     current_exit_spread: Decimal | None = None
     profitable_spread_threshold: Decimal | None = None
+    dynamic_close_spread: Decimal | None = None
+    close_profit_usd_per_oz: Decimal | None = None
     binance_accrued_funding: Decimal | None = None
     binance_funding_rate: Decimal | None = None
     binance_next_funding_time_ms: int | None = None
@@ -357,6 +359,7 @@ class RuntimeConfig(BaseModel):
     open_min_edge: Decimal
     cancel_min_edge: Decimal
     close_max_spread: Decimal
+    close_profit_usd_per_oz: Decimal
     min_locked_edge: Decimal
     entry_confirm_ms: int
     min_order_live_ms: int
@@ -383,6 +386,7 @@ class RuntimeConfigUpdate(BaseModel):
     open_min_edge: Decimal | None = None
     cancel_min_edge: Decimal | None = None
     close_max_spread: Decimal | None = None
+    close_profit_usd_per_oz: Decimal | None = None
     min_locked_edge: Decimal | None = None
     entry_confirm_ms: int | None = None
     min_order_live_ms: int | None = None
@@ -406,6 +410,7 @@ class RuntimeConfigUpdate(BaseModel):
         "open_min_edge",
         "cancel_min_edge",
         "close_max_spread",
+        "close_profit_usd_per_oz",
         "min_locked_edge",
         "max_unhedged_loss_usd_per_oz",
         "daily_loss_limit_usdt",

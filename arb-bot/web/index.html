@@ -735,6 +735,10 @@
                   <td><div class="input-row"><input id="cfgCloseMaxSpread" inputmode="decimal" /><small>美元</small></div></td>
                 </tr>
                 <tr>
+                  <th>平仓利润空间</th>
+                  <td><div class="input-row"><input id="cfgCloseProfitUsdPerOz" inputmode="decimal" /><small>美元/盎司</small></div></td>
+                </tr>
+                <tr>
                   <th>最小锁定价差</th>
                   <td><div class="input-row"><input id="cfgMinLockedEdge" inputmode="decimal" /><small>美元</small></div></td>
                 </tr>
@@ -803,6 +807,7 @@
         ["cfgMaxAddCount", "max_add_count", "number"],
         ["cfgNegativeSwapCloseBefore", "negative_swap_close_before_minutes", "number"],
         ["cfgCloseMaxSpread", "close_max_spread", "number"],
+        ["cfgCloseProfitUsdPerOz", "close_profit_usd_per_oz", "number"],
         ["cfgMinLockedEdge", "min_locked_edge", "number"],
         ["cfgMt4LotSize", "mt4_lot_size_oz", "number"],
         ["cfgMaxOrderAge", "max_order_age_ms", "number"],
@@ -1146,7 +1151,9 @@
           return "等待币安真实均价、MT4均价和手续费数据";
         }
         const current = metrics.current_exit_spread !== null && metrics.current_exit_spread !== undefined ? `当前平仓价差 ${fmt(metrics.current_exit_spread)} 美元，` : "";
-        return `${current}回归到小于等于 ${fmt(metrics.profitable_spread_threshold)} 美元，扣除已结算资金费、已产生隔夜费和预估手续费后预计不亏`;
+        const trigger = metrics.dynamic_close_spread !== null && metrics.dynamic_close_spread !== undefined ? `；自动平仓触发 ${fmt(metrics.dynamic_close_spread)} 美元以内` : "";
+        const profit = metrics.close_profit_usd_per_oz !== null && metrics.close_profit_usd_per_oz !== undefined ? `，额外利润空间 ${fmt(metrics.close_profit_usd_per_oz)} 美元/盎司` : "";
+        return `${current}保本价差 ${fmt(metrics.profitable_spread_threshold)} 美元${profit}${trigger}`;
       }
 
       function renderMt4Swap(metrics, pair) {

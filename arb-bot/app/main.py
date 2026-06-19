@@ -849,6 +849,7 @@ def _runtime_config() -> RuntimeConfig:
         open_min_edge=settings.open_min_edge,
         cancel_min_edge=settings.cancel_min_edge,
         close_max_spread=settings.close_max_spread,
+        close_profit_usd_per_oz=settings.close_profit_usd_per_oz,
         min_locked_edge=settings.min_locked_edge,
         entry_confirm_ms=settings.entry_confirm_ms,
         min_order_live_ms=settings.min_order_live_ms,
@@ -900,6 +901,7 @@ async def _position_metrics() -> PositionMetrics:
     actual_entry_spread = _actual_entry_spread(pair, binance_entry_price, mt4_entry_price)
     current_exit_spread = _current_exit_spread(pair, binance_quote, mt4_quote)
     profitable_spread_threshold = _profitable_spread_threshold(pair, actual_entry_spread, accrued_funding, accrued_swap, fees)
+    dynamic_close_spread = _dynamic_close_spread(profitable_spread_threshold)
     net = None
     if gross is not None and fees is not None:
         net = gross - fees
@@ -922,6 +924,8 @@ async def _position_metrics() -> PositionMetrics:
             "actual_entry_spread": actual_entry_spread,
             "current_exit_spread": current_exit_spread,
             "profitable_spread_threshold": profitable_spread_threshold,
+            "dynamic_close_spread": dynamic_close_spread,
+            "close_profit_usd_per_oz": settings.close_profit_usd_per_oz,
             "binance_accrued_funding": accrued_funding,
             "binance_funding_estimate": funding_estimate,
             "mt4_swap_estimate": mt4_swap_estimate,
@@ -1017,6 +1021,12 @@ def _profitable_spread_threshold(
         return None
     adjustment = (accrued_funding or Decimal("0")) + (accrued_swap or Decimal("0")) - fees
     return actual_entry_spread + (adjustment / pair.quantity_oz)
+
+
+def _dynamic_close_spread(profitable_spread_threshold: Decimal | None) -> Decimal | None:
+    if profitable_spread_threshold is None:
+        return None
+    return min(settings.close_max_spread, profitable_spread_threshold - settings.close_profit_usd_per_oz)
 
 
 def _estimate_binance_funding(pair, qty: Decimal, funding, quote: MarketQuote | None) -> Decimal | None:
@@ -1161,8 +1171,16 @@ def _execution_plan() -> ExecutionPlanStatus:
                 mt4_price_limit=None,
                 max_follow_seconds=max_follow_seconds,
             )
-        spread = abs(binance_quote.mid - mt4_quote.mid)
-        close_ready = spread <= settings.close_max_spread
+        spread = _current_exit_spread(pair, binance_quote, mt4_quote)
+        raw_break_even = _profitable_spread_threshold(
+            pair,
+            _actual_entry_spread(pair, pair.binance_entry_price, pair.mt4_entry_price),
+            Decimal("0"),
+            _mt4_accrued_swap(pair),
+            Decimal("0"),
+        )
+        trigger_spread = _dynamic_close_spread(raw_break_even) if raw_break_even is not None else settings.close_max_spread
+        close_ready = spread is not None and spread <= trigger_spread
         if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             side = Side.BUY
             price = round_down(binance_quote.bid, binance_client.filters.tick_size)
@@ -1170,7 +1188,7 @@ def _execution_plan() -> ExecutionPlanStatus:
             side = Side.SELL
             price = round_up(binance_quote.ask, binance_client.filters.tick_size)
         return ExecutionPlanStatus(
-            summary=f"平仓逻辑：两边中间价差小于等于 {settings.close_max_spread} 美元时，币安挂 {_side_text(side)} 限价 {price}；当前价差 {spread:.4f}，{'已满足' if close_ready else '未满足'}。{add_summary}",
+            summary=f"平仓逻辑：动态保本价差减 {settings.close_profit_usd_per_oz} 美元利润空间，当前触发价差 {trigger_spread:.4f} 美元；币安挂 {_side_text(side)} 限价 {price}；当前平仓价差 {spread if spread is not None else '-'}，{'已满足' if close_ready else '未满足'}。{add_summary}",
             binance_order_side=side,
             binance_order_price=price,
             binance_order_qty=pair.quantity_oz,

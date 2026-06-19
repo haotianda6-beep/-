@@ -154,6 +154,8 @@ class StrategyEngine:
         self.pending_close_commands: dict[str, int] = {}
         self.exit_force_reason: str | None = None
         self.last_error: str | None = None
+        self._close_trigger_cache_ms = 0
+        self._close_trigger_cache: Decimal | None = None
 
     async def step(self) -> None:
         await self._handle_mt4_reports()
@@ -633,6 +635,8 @@ class StrategyEngine:
         self.hedged_qty = Decimal("0")
         self.pending_hedge_qty = Decimal("0")
         self.hedge_started_ms = 0
+        self._close_trigger_cache = None
+        self._close_trigger_cache_ms = 0
         self.state = StrategyState.PAIR_OPEN
 
     async def _maybe_add_position(self, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> bool:
@@ -705,7 +709,7 @@ class StrategyEngine:
     ) -> None:
         if not self.open_pair or not binance_quote or not mt4_quote:
             return
-        if not force and abs(binance_quote.mid - mt4_quote.mid) > self.settings.close_max_spread:
+        if not force and not await self._close_spread_ready(binance_quote, mt4_quote):
             return
         if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             side = Side.BUY
@@ -755,7 +759,7 @@ class StrategyEngine:
         else:
             order = await self.binance.get_order(self.active_order.order_id)
         if not order or order.status != OrderStatus.FILLED:
-            if order and order.status == OrderStatus.NEW and not self.exit_force_reason and not self._exit_spread_still_valid():
+            if order and order.status == OrderStatus.NEW and not self.exit_force_reason and not await self._exit_spread_still_valid():
                 await self.binance.cancel_order(order.order_id)
                 self.active_order = None
                 self.state = StrategyState.PAIR_OPEN
@@ -906,12 +910,104 @@ class StrategyEngine:
         fallback_lots = (self.open_pair.quantity_oz / self.settings.mt4_lot_size_oz / Decimal(len(tickets))) if self.open_pair else Decimal("0")
         return {ticket: positions_by_ticket.get(ticket, fallback_lots) for ticket in tickets}
 
-    def _exit_spread_still_valid(self) -> bool:
+    async def _exit_spread_still_valid(self) -> bool:
         binance_quote = self.binance.latest_quote()
         mt4_quote = self.mt4.latest_quote()
         if not binance_quote or not mt4_quote:
             return False
-        return abs(binance_quote.mid - mt4_quote.mid) <= self.settings.close_max_spread
+        return await self._close_spread_ready(binance_quote, mt4_quote)
+
+    async def _close_spread_ready(self, binance_quote: MarketQuote, mt4_quote: MarketQuote) -> bool:
+        current = self._current_exit_spread(binance_quote, mt4_quote)
+        trigger = await self._close_trigger_spread()
+        if current is None or trigger is None:
+            return False
+        return current <= trigger
+
+    def _current_exit_spread(self, binance_quote: MarketQuote, mt4_quote: MarketQuote) -> Decimal | None:
+        if not self.open_pair:
+            return None
+        if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            return round_down(binance_quote.bid, self.binance.filters.tick_size) - mt4_quote.bid
+        return mt4_quote.ask - round_up(binance_quote.ask, self.binance.filters.tick_size)
+
+    async def _close_trigger_spread(self) -> Decimal | None:
+        if not self.open_pair:
+            return None
+        now = utc_now_ms()
+        if self._close_trigger_cache is not None and now - self._close_trigger_cache_ms <= 2000:
+            return self._close_trigger_cache
+        break_even = await self._break_even_spread()
+        if break_even is None:
+            trigger = self.settings.close_max_spread
+        else:
+            trigger = min(self.settings.close_max_spread, break_even - self.settings.close_profit_usd_per_oz)
+        self._close_trigger_cache = trigger
+        self._close_trigger_cache_ms = now
+        return trigger
+
+    async def _break_even_spread(self) -> Decimal | None:
+        if not self.open_pair or self.open_pair.quantity_oz <= 0:
+            return None
+        binance_entry = self.open_pair.binance_entry_price
+        try:
+            snapshot = await self.binance.position_snapshot()
+            if snapshot and snapshot.entry_price is not None and snapshot.position_amt != 0:
+                binance_entry = snapshot.entry_price
+        except Exception as exc:  # noqa: BLE001
+            self.storage.record_event("close_binance_entry_snapshot_failed", {"error": str(exc)[:160]})
+        mt4_entry = self._mt4_average_entry_price() or self.open_pair.mt4_entry_price
+        if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            entry_spread = binance_entry - mt4_entry
+        else:
+            entry_spread = mt4_entry - binance_entry
+        funding = await self._binance_funding_income_since_open()
+        accrued_swap = self._mt4_accrued_swap() or Decimal("0")
+        estimated_fees = self._estimated_round_trip_fees(binance_entry)
+        return entry_spread + ((funding + accrued_swap - estimated_fees) / self.open_pair.quantity_oz)
+
+    async def _binance_funding_income_since_open(self) -> Decimal:
+        if not self.open_pair or self.settings.is_dry_run:
+            return Decimal("0")
+        try:
+            rows = await self.binance.funding_income(self.open_pair.opened_ms - 60_000, utc_now_ms(), limit=1000)
+        except Exception as exc:  # noqa: BLE001
+            self.storage.record_event("close_funding_income_failed", {"error": str(exc)[:160]})
+            return Decimal("0")
+        total = Decimal("0")
+        for row in rows:
+            value = row.get("income")
+            if value is not None:
+                total += Decimal(str(value))
+        return total
+
+    def _estimated_round_trip_fees(self, binance_entry: Decimal) -> Decimal:
+        if not self.open_pair:
+            return Decimal("0")
+        fee_rate = self.binance.maker_fee_rate or self.settings.binance_maker_fee_rate or Decimal("0")
+        quote = self.binance.latest_quote()
+        if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG and quote:
+            exit_price = round_down(quote.bid, self.binance.filters.tick_size)
+        elif quote:
+            exit_price = round_up(quote.ask, self.binance.filters.tick_size)
+        else:
+            exit_price = binance_entry
+        return (binance_entry + exit_price) * self.open_pair.quantity_oz * abs(fee_rate)
+
+    def _mt4_average_entry_price(self) -> Decimal | None:
+        if not self.open_pair:
+            return None
+        positions = self.mt4.positions()
+        tickets = set(self.open_pair.mt4_tickets or ([] if self.open_pair.mt4_ticket is None else [self.open_pair.mt4_ticket]))
+        if tickets:
+            matched = [position for position in positions if position.ticket in tickets]
+        else:
+            expected_side = Side.BUY if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.SELL
+            matched = [position for position in positions if position.symbol == self.settings.mt4_symbol and position.side == expected_side]
+        total_lots = sum((position.lots for position in matched), Decimal("0"))
+        if total_lots <= 0:
+            return None
+        return sum((position.open_price * position.lots for position in matched), Decimal("0")) / total_lots
 
     async def _emergency_close(self, reason: str) -> None:
         self.last_error = reason
@@ -964,6 +1060,8 @@ class StrategyEngine:
         self.hedged_qty = Decimal("0")
         self.pending_hedge_qty = Decimal("0")
         self.hedge_started_ms = 0
+        self._close_trigger_cache = None
+        self._close_trigger_cache_ms = 0
         self.state = StrategyState.PAIR_OPEN if return_to_pair else StrategyState.IDLE
 
     def _reset_all(self) -> None:
@@ -978,4 +1076,6 @@ class StrategyEngine:
         self.hedged_qty = Decimal("0")
         self.pending_hedge_qty = Decimal("0")
         self.hedge_started_ms = 0
+        self._close_trigger_cache = None
+        self._close_trigger_cache_ms = 0
         self.state = StrategyState.IDLE
