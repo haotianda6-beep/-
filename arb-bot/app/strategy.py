@@ -157,10 +157,12 @@ class StrategyEngine:
 
     async def step(self) -> None:
         await self._handle_mt4_reports()
-        if self.state == StrategyState.PAUSED:
-            return
         binance_quote = self.binance.latest_quote()
         mt4_quote = self.mt4.latest_quote()
+        if self.state == StrategyState.PAUSED:
+            if not self._can_resume_pair_after_transient_quote_pause(binance_quote, mt4_quote):
+                return
+            self.state = StrategyState.PAIR_OPEN
         if self.state == StrategyState.IDLE:
             if binance_quote is None or mt4_quote is None:
                 self.last_error = None
@@ -177,7 +179,6 @@ class StrategyEngine:
             await self._check_hedge_timeout()
         elif self.state == StrategyState.PAIR_OPEN:
             if not self._quotes_fresh(binance_quote, mt4_quote):
-                self.state = StrategyState.PAUSED
                 return
             force_exit_reason = self._negative_swap_exit_reason()
             if force_exit_reason:
@@ -188,6 +189,20 @@ class StrategyEngine:
             await self._maybe_exit(binance_quote, mt4_quote)
         elif self.state == StrategyState.QUOTING_BINANCE_EXIT:
             await self._check_exit_order()
+
+    def _can_resume_pair_after_transient_quote_pause(
+        self,
+        binance_quote: MarketQuote | None,
+        mt4_quote: MarketQuote | None,
+    ) -> bool:
+        if not self.open_pair or not self._paused_for_quote_issue():
+            return False
+        return self._quotes_fresh(binance_quote, mt4_quote)
+
+    def _paused_for_quote_issue(self) -> bool:
+        if not self.last_error:
+            return False
+        return self.last_error == "quote missing" or self.last_error.startswith("quote stale ")
 
     def resume(self) -> None:
         if self.state != StrategyState.PAUSED:

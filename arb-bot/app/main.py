@@ -788,14 +788,20 @@ def _execution_plan() -> ExecutionPlanStatus:
     mt4_quote = mt4_bridge.latest_quote()
     quote_block_reason = _quote_plan_block_reason(binance_quote, mt4_quote)
     if strategy.state.value == "PAUSED":
+        if pair and _strategy_paused_for_quote_issue():
+            detail = f"（{_risk_reason_text(strategy.last_error or '')}）" if strategy.last_error else ""
+            return ExecutionPlanStatus(
+                summary=f"报价临时异常{detail}，暂时不挂单；报价恢复后会自动继续管理已有仓位的补仓和平仓，不会开独立新仓。",
+                max_follow_seconds=max_follow_seconds,
+            )
         if pair and binance_quote and mt4_quote:
             add_summary = _pair_add_summary(pair, binance_quote, mt4_quote)
             swap_summary = _negative_swap_close_summary(pair)
             return ExecutionPlanStatus(
-                summary=f"系统已暂停，不会自动补仓或平仓；当前仍有组合持仓。{swap_summary or add_summary}",
+                summary=f"系统因风控硬暂停，不会自动补仓或平仓；当前仍有组合持仓。{swap_summary or add_summary}",
                 max_follow_seconds=max_follow_seconds,
             )
-        return ExecutionPlanStatus(summary="系统已暂停，不会自动新挂单；恢复后才会继续按价差条件执行。", max_follow_seconds=max_follow_seconds)
+        return ExecutionPlanStatus(summary="系统因风控硬暂停，不会自动新挂单；恢复后才会继续按价差条件执行。", max_follow_seconds=max_follow_seconds)
     if pair and binance_quote and mt4_quote:
         if quote_block_reason:
             return ExecutionPlanStatus(summary=f"当前有组合持仓，但{quote_block_reason}，暂不挂平仓单。", max_follow_seconds=max_follow_seconds)
@@ -942,6 +948,11 @@ def _quote_plan_block_reason(binance_quote: MarketQuote | None, mt4_quote: Marke
         if not check.ok:
             return f"{label}报价未刷新（{_risk_reason_text(check.reason)}）"
     return None
+
+
+def _strategy_paused_for_quote_issue() -> bool:
+    reason = strategy.last_error or ""
+    return reason == "quote missing" or reason.startswith("quote stale ")
 
 
 def _risk_reason_text(reason: str) -> str:

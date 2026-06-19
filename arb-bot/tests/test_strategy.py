@@ -434,6 +434,63 @@ async def test_exit_order_cancels_when_spread_widens_before_fill(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_pair_open_stale_quote_waits_without_hard_pause(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path, PositionTrackingPaperClient)
+    await open_live_pair(engine, client, mt4, ticket=111111)
+    engine.settings.max_quote_age_ms = 100
+    client._quote = MarketQuote(
+        symbol="XAUUSDT",
+        bid=Decimal("2002"),
+        ask=Decimal("2003"),
+        timestamp_ms=utc_now_ms() - 1000,
+    )
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("2000"),
+            timestamp_ms=utc_now_ms() - 1000,
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+        )
+    )
+
+    await engine.step()
+
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.active_order is None
+    assert engine.last_error is not None
+    assert engine.last_error.startswith("quote stale ")
+
+
+@pytest.mark.asyncio
+async def test_quote_pause_with_open_pair_auto_resumes_position_management(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path, PositionTrackingPaperClient)
+    await open_live_pair(engine, client, mt4, ticket=111111)
+    engine.state = StrategyState.PAUSED
+    engine.last_error = "quote stale 3000ms"
+    client.set_quote(Decimal("2000.0"), Decimal("2000.1"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("2000.0"),
+            ask=Decimal("2000.1"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+        )
+    )
+
+    await engine.step()
+
+    assert engine.state == StrategyState.QUOTING_BINANCE_EXIT
+    assert engine.active_order is not None
+    assert engine.active_order.reduce_only is True
+    assert engine.last_error is None
+
+
+@pytest.mark.asyncio
 async def test_negative_mt4_swap_forces_exit_before_rollover(tmp_path):
     engine, client, mt4 = await make_engine(
         tmp_path,
