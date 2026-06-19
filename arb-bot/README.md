@@ -165,8 +165,8 @@ OPEN_MIN_EDGE=1.50
 BINANCE_ENTRY_OFFSET_USD=3
 CLOSE_MAX_SPREAD=0.30
 MIN_LOCKED_EDGE=0.80
-ADD_EDGE_GROWTH_PCT=1
-MAX_ADD_COUNT=3
+ADD_EDGE_GROWTH_USD=1
+MAX_ADD_COUNT=5
 NEGATIVE_SWAP_CLOSE_BEFORE_MINUTES=30
 MAX_ORDER_AGE_MS=300
 MAX_QUOTE_AGE_MS=500
@@ -177,7 +177,7 @@ MT4_LOT_SIZE_OZ=100
 MT4_SLIPPAGE_POINTS=30
 ```
 
-`ADD_EDGE_GROWTH_PCT=1` 表示补仓触发增加 1 个百分点：例如上次开仓/补仓价差是 1.8%，下一次触发价差是 2.8%。
+`ADD_EDGE_GROWTH_USD=1` 表示补仓触发增加 1 美元：例如上次开仓/补仓价差是 1.8 美元，下一次触发价差是 2.8 美元。
 
 Binance maker fee 启动时会优先调用 `/fapi/v1/commissionRate`。如果接口不可用，才使用 `.env` 的 `BINANCE_MAKER_FEE_RATE`。日志只会打印脱敏摘要，不会打印密钥或签名。
 

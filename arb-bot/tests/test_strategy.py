@@ -532,13 +532,13 @@ async def test_add_position_keeps_existing_direction_when_edge_grows(tmp_path):
     engine, client, mt4 = await make_engine(
         tmp_path,
         PositionTrackingPaperClient,
-        settings_kwargs={"ADD_EDGE_GROWTH_PCT": Decimal("1"), "MAX_ADD_COUNT": 2},
+        settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 2},
     )
     await open_live_pair(engine, client, mt4, ticket=111111)
     assert engine.open_pair is not None
     assert engine.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG
 
-    client.set_quote(Decimal("2022"), Decimal("2023"))
+    client.set_quote(Decimal("2002"), Decimal("2003"))
     mt4.update_tick(
         Mt4Tick(
             symbol="XAUUSD",
@@ -594,10 +594,10 @@ async def test_exit_after_add_closes_all_mt4_tickets(tmp_path):
     engine, client, mt4 = await make_engine(
         tmp_path,
         PositionTrackingPaperClient,
-        settings_kwargs={"ADD_EDGE_GROWTH_PCT": Decimal("1"), "MAX_ADD_COUNT": 2},
+        settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 2},
     )
     await open_live_pair(engine, client, mt4, ticket=111111)
-    client.set_quote(Decimal("2022"), Decimal("2023"))
+    client.set_quote(Decimal("2002"), Decimal("2003"))
     mt4.update_tick(
         Mt4Tick(
             symbol="XAUUSD",
@@ -685,11 +685,11 @@ async def test_exit_after_add_closes_all_mt4_tickets(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_add_position_uses_percentage_points_not_relative_growth(tmp_path):
+async def test_add_position_uses_dollar_growth_not_relative_growth(tmp_path):
     engine, client, mt4 = await make_engine(
         tmp_path,
         PositionTrackingPaperClient,
-        settings_kwargs={"ADD_EDGE_GROWTH_PCT": Decimal("1"), "MAX_ADD_COUNT": 2},
+        settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 2},
     )
     await open_live_pair(engine, client, mt4, ticket=111111)
 

@@ -715,8 +715,8 @@
                   <td><div class="input-row"><input id="cfgRequoteCooldownMs" inputmode="numeric" /><small>毫秒</small></div></td>
                 </tr>
                 <tr>
-                  <th>补仓增加百分点</th>
-                  <td><div class="input-row"><input id="cfgAddEdgeGrowthPct" inputmode="decimal" /><small>百分点</small></div></td>
+                  <th>补仓增加价差</th>
+                  <td><div class="input-row"><input id="cfgAddEdgeGrowthUsd" inputmode="decimal" /><small>美元</small></div></td>
                 </tr>
                 <tr>
                   <th>最大补仓次数</th>
@@ -795,7 +795,7 @@
         ["cfgCancelMinEdge", "cancel_min_edge", "number"],
         ["cfgMinOrderLiveMs", "min_order_live_ms", "number"],
         ["cfgRequoteCooldownMs", "requote_cooldown_ms", "number"],
-        ["cfgAddEdgeGrowthPct", "add_edge_growth_pct", "number"],
+        ["cfgAddEdgeGrowthUsd", "add_edge_growth_usd", "number"],
         ["cfgMaxAddCount", "max_add_count", "number"],
         ["cfgNegativeSwapCloseBefore", "negative_swap_close_before_minutes", "number"],
         ["cfgCloseMaxSpread", "close_max_spread", "number"],
@@ -1064,29 +1064,19 @@
         const count = Number(pair.add_count || 0);
         const maxCount = Number(config.max_add_count || 0);
         if (maxCount <= 0) return "补仓已关闭";
-        const rawBase = pair.last_add_edge_pct ?? pair.base_edge_pct ?? fallbackPairEdgePct(pair);
+        const rawBase = pair.last_add_edge ?? pair.base_edge;
         if (rawBase === null || rawBase === undefined || rawBase === "") return `已补 ${count}/${maxCount} 次，等待补仓基准`;
-        const basePct = Number(rawBase);
-        if (!Number.isFinite(basePct)) return `已补 ${count}/${maxCount} 次，等待补仓基准`;
-        const trigger = basePct + Number(config.add_edge_growth_pct || 0);
+        const baseEdge = Number(rawBase);
+        if (!Number.isFinite(baseEdge)) return `已补 ${count}/${maxCount} 次，等待补仓基准`;
+        const trigger = baseEdge + Number(config.add_edge_growth_usd || 0);
         let current = null;
         if (binanceQuote && mt4Quote) {
           current = pair.direction === "BINANCE_SHORT_MT4_LONG"
-            ? ((Number(binanceQuote.ask) - Number(mt4Quote.ask)) / Number(mt4Quote.ask)) * 100
-            : ((Number(mt4Quote.bid) - Number(binanceQuote.bid)) / Number(binanceQuote.bid)) * 100;
+            ? Number(binanceQuote.ask) - Number(mt4Quote.ask)
+            : Number(mt4Quote.bid) - Number(binanceQuote.bid);
         }
-        const currentText = Number.isFinite(current) ? `，当前同向价差 ${fmt(current)}%` : "";
-        return `已补 ${count}/${maxCount} 次，上次 ${fmt(basePct)}%，下次触发 ${fmt(trigger)}%${currentText}`;
-      }
-
-      function fallbackPairEdgePct(pair) {
-        const rawEdge = pair.last_add_edge ?? pair.base_edge;
-        if (rawEdge === null || rawEdge === undefined || rawEdge === "") return null;
-        const edge = Number(rawEdge);
-        if (!Number.isFinite(edge)) return null;
-        const reference = pair.direction === "BINANCE_SHORT_MT4_LONG" ? Number(pair.mt4_entry_price) : Number(pair.binance_entry_price);
-        if (!Number.isFinite(reference) || reference <= 0) return null;
-        return (edge / reference) * 100;
+        const currentText = Number.isFinite(current) ? `，当前同向价差 ${fmt(current)} 美元` : "";
+        return `已补 ${count}/${maxCount} 次，上次 ${fmt(baseEdge)} 美元，下次触发 ${fmt(trigger)} 美元${currentText}`;
       }
 
       function renderMt4Positions(positions) {

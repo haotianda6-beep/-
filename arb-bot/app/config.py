@@ -27,7 +27,7 @@ CONFIG_FIELD_TO_ENV = {
     "max_hedge_delay_ms": "MAX_HEDGE_DELAY_MS",
     "max_unhedged_loss_usd_per_oz": "MAX_UNHEDGED_LOSS_USD_PER_OZ",
     "daily_loss_limit_usdt": "DAILY_LOSS_LIMIT_USDT",
-    "add_edge_growth_pct": "ADD_EDGE_GROWTH_PCT",
+    "add_edge_growth_usd": "ADD_EDGE_GROWTH_USD",
     "max_add_count": "MAX_ADD_COUNT",
     "negative_swap_close_before_minutes": "NEGATIVE_SWAP_CLOSE_BEFORE_MINUTES",
     "target_oz": "TARGET_OZ",
@@ -81,8 +81,8 @@ class Settings(BaseSettings):
     max_hedge_delay_ms: int = Field(default=800, alias="MAX_HEDGE_DELAY_MS")
     max_unhedged_loss_usd_per_oz: Decimal = Field(default=Decimal("0.80"), alias="MAX_UNHEDGED_LOSS_USD_PER_OZ")
     daily_loss_limit_usdt: Decimal = Field(default=Decimal("50"), alias="DAILY_LOSS_LIMIT_USDT")
-    add_edge_growth_pct: Decimal = Field(default=Decimal("1"), alias="ADD_EDGE_GROWTH_PCT")
-    max_add_count: int = Field(default=3, alias="MAX_ADD_COUNT")
+    add_edge_growth_usd: Decimal = Field(default=Decimal("1"), alias="ADD_EDGE_GROWTH_USD")
+    max_add_count: int = Field(default=5, alias="MAX_ADD_COUNT")
     negative_swap_close_before_minutes: int = Field(default=30, alias="NEGATIVE_SWAP_CLOSE_BEFORE_MINUTES")
     target_oz: Decimal = Field(default=Decimal("1"), alias="TARGET_OZ")
     mt4_lot_size_oz: Decimal = Field(default=Decimal("100"), alias="MT4_LOT_SIZE_OZ")
@@ -99,7 +99,7 @@ class Settings(BaseSettings):
         "min_locked_edge",
         "max_unhedged_loss_usd_per_oz",
         "daily_loss_limit_usdt",
-        "add_edge_growth_pct",
+        "add_edge_growth_usd",
         "target_oz",
         "mt4_lot_size_oz",
         "binance_entry_offset_usd",

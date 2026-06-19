@@ -35,18 +35,6 @@ def round_up(value: Decimal, step: Decimal) -> Decimal:
     return (value / step).to_integral_value(rounding=ROUND_CEILING) * step
 
 
-def edge_percent_for_direction(direction: PairDirection, edge: Decimal, reference_price: Decimal) -> Decimal | None:
-    if reference_price <= 0:
-        return None
-    return edge / reference_price * Decimal("100")
-
-
-def current_edge_percent(direction: PairDirection, binance: MarketQuote, mt4: MarketQuote) -> Decimal | None:
-    if direction == PairDirection.BINANCE_SHORT_MT4_LONG:
-        return edge_percent_for_direction(direction, binance.ask - mt4.ask, mt4.ask)
-    return edge_percent_for_direction(direction, mt4.bid - binance.bid, binance.bid)
-
-
 def build_entry_plan(
     settings: Settings,
     filters: ExchangeFilters,
@@ -56,7 +44,6 @@ def build_entry_plan(
     qty = max(round_down(settings.target_oz, filters.qty_step), filters.min_qty)
     edge_high = binance.ask - mt4.ask
     if edge_high >= settings.open_min_edge:
-        edge_pct = edge_percent_for_direction(PairDirection.BINANCE_SHORT_MT4_LONG, edge_high, mt4.ask)
         price = round_up(
             max(binance.ask + settings.binance_entry_offset_usd, mt4.ask + settings.open_min_edge),
             filters.tick_size,
@@ -67,13 +54,11 @@ def build_entry_plan(
             limit_price=price,
             quantity_oz=qty,
             edge=edge_high,
-            edge_pct=edge_pct,
             mt4_hedge_side=Side.BUY,
             mt4_price_limit=price - settings.min_locked_edge,
         )
     edge_low = mt4.bid - binance.bid
     if edge_low >= settings.open_min_edge:
-        edge_pct = edge_percent_for_direction(PairDirection.BINANCE_LONG_MT4_SHORT, edge_low, binance.bid)
         price = round_down(
             min(binance.bid - settings.binance_entry_offset_usd, mt4.bid - settings.open_min_edge),
             filters.tick_size,
@@ -84,7 +69,6 @@ def build_entry_plan(
             limit_price=price,
             quantity_oz=qty,
             edge=edge_low,
-            edge_pct=edge_pct,
             mt4_hedge_side=Side.SELL,
             mt4_price_limit=price + settings.min_locked_edge,
         )
@@ -104,7 +88,6 @@ def build_directional_entry_plan(
         edge = binance.ask - mt4.ask
         if edge < min_edge:
             return None
-        edge_pct = edge_percent_for_direction(direction, edge, mt4.ask)
         price = round_up(
             max(binance.ask + settings.binance_entry_offset_usd, mt4.ask + min_edge),
             filters.tick_size,
@@ -115,14 +98,12 @@ def build_directional_entry_plan(
             limit_price=price,
             quantity_oz=qty,
             edge=edge,
-            edge_pct=edge_pct,
             mt4_hedge_side=Side.BUY,
             mt4_price_limit=price - settings.min_locked_edge,
         )
     edge = mt4.bid - binance.bid
     if edge < min_edge:
         return None
-    edge_pct = edge_percent_for_direction(direction, edge, binance.bid)
     price = round_down(
         min(binance.bid - settings.binance_entry_offset_usd, mt4.bid - min_edge),
         filters.tick_size,
@@ -133,57 +114,6 @@ def build_directional_entry_plan(
         limit_price=price,
         quantity_oz=qty,
         edge=edge,
-        edge_pct=edge_pct,
-        mt4_hedge_side=Side.SELL,
-        mt4_price_limit=price + settings.min_locked_edge,
-    )
-
-
-def build_directional_entry_plan_by_pct(
-    settings: Settings,
-    filters: ExchangeFilters,
-    binance: MarketQuote,
-    mt4: MarketQuote,
-    direction: PairDirection,
-    min_edge_pct: Decimal,
-) -> EntryPlan | None:
-    qty = max(round_down(settings.target_oz, filters.qty_step), filters.min_qty)
-    if direction == PairDirection.BINANCE_SHORT_MT4_LONG:
-        edge = binance.ask - mt4.ask
-        edge_pct = edge_percent_for_direction(direction, edge, mt4.ask)
-        if edge_pct is None or edge_pct < min_edge_pct:
-            return None
-        min_edge = mt4.ask * min_edge_pct / Decimal("100")
-        price = round_up(
-            max(binance.ask + settings.binance_entry_offset_usd, mt4.ask + min_edge),
-            filters.tick_size,
-        )
-        return EntryPlan(
-            direction=direction,
-            binance_side=Side.SELL,
-            limit_price=price,
-            quantity_oz=qty,
-            edge=edge,
-            edge_pct=edge_pct,
-            mt4_hedge_side=Side.BUY,
-            mt4_price_limit=price - settings.min_locked_edge,
-        )
-    edge = mt4.bid - binance.bid
-    edge_pct = edge_percent_for_direction(direction, edge, binance.bid)
-    if edge_pct is None or edge_pct < min_edge_pct:
-        return None
-    min_edge = binance.bid * min_edge_pct / Decimal("100")
-    price = round_down(
-        min(binance.bid - settings.binance_entry_offset_usd, mt4.bid - min_edge),
-        filters.tick_size,
-    )
-    return EntryPlan(
-        direction=direction,
-        binance_side=Side.BUY,
-        limit_price=price,
-        quantity_oz=qty,
-        edge=edge,
-        edge_pct=edge_pct,
         mt4_hedge_side=Side.SELL,
         mt4_price_limit=price + settings.min_locked_edge,
     )
@@ -365,12 +295,11 @@ class StrategyEngine:
         if not binance_quote or not mt4_quote:
             return False
         if self.adding_to_pair and self.open_pair:
-            base_edge_pct = self._last_add_edge_pct()
-            if base_edge_pct is None:
+            base_edge = self._last_add_edge()
+            if base_edge is None:
                 return False
-            min_edge_pct = base_edge_pct + self.settings.add_edge_growth_pct
-            current_pct = current_edge_percent(self.active_plan.direction, binance_quote, mt4_quote)
-            return current_pct is not None and current_pct >= min_edge_pct
+            min_edge = base_edge + self.settings.add_edge_growth_usd
+            return self._current_edge(self.active_plan.direction, binance_quote, mt4_quote) >= min_edge
         if self.active_plan.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             return binance_quote.ask - mt4_quote.ask >= self.settings.cancel_min_edge
         return mt4_quote.bid - binance_quote.bid >= self.settings.cancel_min_edge
@@ -668,7 +597,6 @@ class StrategyEngine:
                     "mt4_tickets": tickets,
                     "add_count": self.open_pair.add_count + 1,
                     "last_add_edge": self.active_plan.edge,
-                    "last_add_edge_pct": self.active_plan.edge_pct,
                 }
             )
         else:
@@ -683,8 +611,6 @@ class StrategyEngine:
                 mt4_tickets=tickets,
                 base_edge=self.active_plan.edge,
                 last_add_edge=self.active_plan.edge,
-                base_edge_pct=self.active_plan.edge_pct,
-                last_add_edge_pct=self.active_plan.edge_pct,
             )
         self.active_plan = None
         self.active_order = None
@@ -699,17 +625,17 @@ class StrategyEngine:
             return False
         if self.settings.max_add_count <= 0 or self.open_pair.add_count >= self.settings.max_add_count:
             return False
-        base_edge_pct = self._last_add_edge_pct()
-        if base_edge_pct is None:
+        base_edge = self._last_add_edge()
+        if base_edge is None:
             return False
-        trigger_edge_pct = base_edge_pct + self.settings.add_edge_growth_pct
-        plan = build_directional_entry_plan_by_pct(
+        trigger_edge = base_edge + self.settings.add_edge_growth_usd
+        plan = build_directional_entry_plan(
             self.settings,
             self.binance.filters,
             binance_quote,
             mt4_quote,
             self.open_pair.direction,
-            trigger_edge_pct,
+            trigger_edge,
         )
         if not plan:
             return False
@@ -728,8 +654,7 @@ class StrategyEngine:
             "add_order",
             {
                 **order.model_dump(mode="json"),
-                "trigger_edge_pct": str(trigger_edge_pct),
-                "current_edge_pct": str(plan.edge_pct) if plan.edge_pct is not None else None,
+                "trigger_edge": str(trigger_edge),
                 "current_edge": str(plan.edge),
                 "add_count": self.open_pair.add_count + 1,
             },
@@ -746,21 +671,10 @@ class StrategyEngine:
         self.state = StrategyState.QUOTING_BINANCE_ENTRY
         return True
 
-    def _last_add_edge_pct(self) -> Decimal | None:
+    def _last_add_edge(self) -> Decimal | None:
         if not self.open_pair:
             return None
-        stored = self.open_pair.last_add_edge_pct or self.open_pair.base_edge_pct
-        if stored is not None:
-            return stored
-        edge = self.open_pair.last_add_edge or self.open_pair.base_edge
-        if edge is None:
-            return None
-        reference = (
-            self.open_pair.mt4_entry_price
-            if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG
-            else self.open_pair.binance_entry_price
-        )
-        return edge_percent_for_direction(self.open_pair.direction, edge, reference)
+        return self.open_pair.last_add_edge or self.open_pair.base_edge
 
     def _current_edge(self, direction: PairDirection, binance_quote: MarketQuote, mt4_quote: MarketQuote) -> Decimal:
         if direction == PairDirection.BINANCE_SHORT_MT4_LONG:

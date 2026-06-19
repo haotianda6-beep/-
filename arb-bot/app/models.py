@@ -67,7 +67,6 @@ class EntryPlan(BaseModel):
     limit_price: Decimal
     quantity_oz: Decimal
     edge: Decimal
-    edge_pct: Decimal | None = None
     mt4_hedge_side: Side
     mt4_price_limit: Decimal
 
@@ -294,8 +293,6 @@ class OpenPair(BaseModel):
     realized_pnl: Decimal = Decimal("0")
     base_edge: Decimal | None = None
     last_add_edge: Decimal | None = None
-    base_edge_pct: Decimal | None = None
-    last_add_edge_pct: Decimal | None = None
     add_count: int = 0
 
 
@@ -345,7 +342,7 @@ class RuntimeConfig(BaseModel):
     max_hedge_delay_ms: int
     max_unhedged_loss_usd_per_oz: Decimal
     daily_loss_limit_usdt: Decimal
-    add_edge_growth_pct: Decimal
+    add_edge_growth_usd: Decimal
     max_add_count: int
     negative_swap_close_before_minutes: int
     target_oz: Decimal
@@ -371,7 +368,7 @@ class RuntimeConfigUpdate(BaseModel):
     max_hedge_delay_ms: int | None = None
     max_unhedged_loss_usd_per_oz: Decimal | None = None
     daily_loss_limit_usdt: Decimal | None = None
-    add_edge_growth_pct: Decimal | None = None
+    add_edge_growth_usd: Decimal | None = None
     max_add_count: int | None = None
     negative_swap_close_before_minutes: int | None = None
     target_oz: Decimal | None = None
@@ -388,7 +385,7 @@ class RuntimeConfigUpdate(BaseModel):
         "min_locked_edge",
         "max_unhedged_loss_usd_per_oz",
         "daily_loss_limit_usdt",
-        "add_edge_growth_pct",
+        "add_edge_growth_usd",
         "target_oz",
         "mt4_lot_size_oz",
         "binance_entry_offset_usd",
