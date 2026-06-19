@@ -274,7 +274,9 @@ class TradeHistoryItem(BaseModel):
     binance_exit_price: Decimal | None = None
     binance_realized_pnl: Decimal | None = None
     binance_commission: Decimal | None = None
+    binance_funding_income: Decimal | None = None
     mt4_ticket: int | None = None
+    mt4_tickets: list[int] = Field(default_factory=list)
     mt4_side: Side | None = None
     mt4_lots: Decimal | None = None
     mt4_open_price: Decimal | None = None

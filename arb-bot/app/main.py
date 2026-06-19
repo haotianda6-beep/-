@@ -432,20 +432,26 @@ async def trade_history(days: int = Query(default=7, ge=1, le=30)) -> TradeHisto
     except Exception as exc:  # noqa: BLE001
         logger.warning("Binance trade history unavailable: %s", str(exc)[:160])
         binance_trades = []
+    try:
+        funding_rows = await binance_client.funding_income(start_ms, end_ms, limit=1000)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Binance funding history unavailable: %s", str(exc)[:160])
+        funding_rows = []
     return TradeHistoryResponse(
-        source="币安真实成交 + MT4 EA 上传的账户历史",
-        items=_build_trade_history(mt4_orders, binance_trades),
+        source="币安真实成交/资金费 + MT4 EA 上传的账户历史",
+        items=_build_trade_history(mt4_orders, binance_trades, funding_rows),
     )
 
 
-def _build_trade_history(mt4_orders: list[Mt4ClosedOrder], binance_trades: list[dict]) -> list[TradeHistoryItem]:
+def _build_trade_history(mt4_orders: list[Mt4ClosedOrder], binance_trades: list[dict], funding_rows: list[dict] | None = None) -> list[TradeHistoryItem]:
     items: list[TradeHistoryItem] = []
+    exit_allocations = _allocate_exit_trades(mt4_orders, binance_trades)
     for mt4_order in mt4_orders:
         quantity_oz = mt4_order.lots * settings.mt4_lot_size_oz
         entry_side = Side.SELL if mt4_order.side == Side.BUY else Side.BUY
         exit_side = Side.BUY if entry_side == Side.SELL else Side.SELL
         entry_trade = _match_binance_trade(binance_trades, entry_side, quantity_oz, mt4_order.open_time_ms)
-        exit_trade = _match_binance_trade(binance_trades, exit_side, quantity_oz, mt4_order.close_time_ms)
+        exit_trade = exit_allocations.get(mt4_order.ticket) or _match_binance_trade(binance_trades, exit_side, quantity_oz, mt4_order.close_time_ms)
         binance_realized = _decimal_field(exit_trade, "realizedPnl") if exit_trade else None
         entry_commission = (_decimal_field(entry_trade, "commission") if entry_trade else None) or Decimal("0")
         exit_commission = (_decimal_field(exit_trade, "commission") if exit_trade else None) or Decimal("0")
@@ -469,6 +475,7 @@ def _build_trade_history(mt4_orders: list[Mt4ClosedOrder], binance_trades: list[
                 binance_realized_pnl=binance_realized,
                 binance_commission=binance_commission if entry_trade or exit_trade else None,
                 mt4_ticket=mt4_order.ticket,
+                mt4_tickets=[mt4_order.ticket],
                 mt4_side=mt4_order.side,
                 mt4_lots=mt4_order.lots,
                 mt4_open_price=mt4_order.open_price,
@@ -480,27 +487,215 @@ def _build_trade_history(mt4_orders: list[Mt4ClosedOrder], binance_trades: list[
                 status=status,
             )
         )
-    return items
+    return _apply_funding_income(_group_trade_history_items(items), funding_rows or [])
+
+
+def _apply_funding_income(items: list[TradeHistoryItem], funding_rows: list[dict]) -> list[TradeHistoryItem]:
+    if not funding_rows:
+        return items
+    updates: dict[int, Decimal] = {}
+    for row in funding_rows:
+        income = _decimal_field(row, "income")
+        income_time = _int_field(row, "time")
+        if income is None or income_time is None:
+            continue
+        for index, item in enumerate(items):
+            if item.open_time_ms is None or item.close_time_ms is None:
+                continue
+            if item.open_time_ms - 60_000 <= income_time <= item.close_time_ms + 60_000:
+                updates[index] = updates.get(index, Decimal("0")) + income
+                break
+    if not updates:
+        return items
+    result = list(items)
+    for index, funding in updates.items():
+        item = result[index]
+        net = item.net_pnl + funding if item.net_pnl is not None else None
+        result[index] = item.model_copy(update={"binance_funding_income": funding, "net_pnl": net})
+    return result
+
+
+def _group_trade_history_items(items: list[TradeHistoryItem]) -> list[TradeHistoryItem]:
+    grouped: dict[tuple, list[TradeHistoryItem]] = {}
+    for item in items:
+        if item.binance_exit_order_id:
+            key = ("binance_exit", item.binance_exit_order_id)
+        else:
+            close_bucket = (item.close_time_ms or 0) // 120_000
+            key = ("mt4_batch", item.mt4_side.value if item.mt4_side else None, close_bucket)
+        grouped.setdefault(key, []).append(item)
+    rows = [_merge_trade_group(group) for group in grouped.values()]
+    rows.sort(key=lambda item: item.close_time_ms or 0, reverse=True)
+    return rows
+
+
+def _merge_trade_group(group: list[TradeHistoryItem]) -> TradeHistoryItem:
+    if len(group) == 1:
+        return group[0]
+    quantity = _sum_optional_decimal([item.quantity_oz for item in group]) or Decimal("0")
+    mt4_lots = _sum_optional_decimal([item.mt4_lots for item in group])
+    binance_commission = _sum_optional_decimal([item.binance_commission for item in group])
+    mt4_profit = _sum_optional_decimal([item.mt4_profit for item in group])
+    mt4_swap = _sum_optional_decimal([item.mt4_swap for item in group])
+    mt4_commission = _sum_optional_decimal([item.mt4_commission for item in group])
+    binance_realized = _sum_optional_decimal([item.binance_realized_pnl for item in group], require_all=True)
+    net_pnl = _sum_optional_decimal([item.net_pnl for item in group], require_all=True)
+    tickets = [ticket for item in group for ticket in (item.mt4_tickets or ([] if item.mt4_ticket is None else [item.mt4_ticket]))]
+    complete = all(item.status == "完整真实数据" for item in group)
+    return TradeHistoryItem(
+        open_time_ms=min((item.open_time_ms for item in group if item.open_time_ms is not None), default=None),
+        close_time_ms=max((item.close_time_ms for item in group if item.close_time_ms is not None), default=None),
+        quantity_oz=quantity,
+        binance_entry_order_id=_join_unique([item.binance_entry_order_id for item in group]),
+        binance_entry_side=_same_value([item.binance_entry_side for item in group]),
+        binance_entry_price=_weighted_price([(item.binance_entry_price, item.quantity_oz) for item in group]),
+        binance_exit_order_id=_join_unique([item.binance_exit_order_id for item in group]),
+        binance_exit_side=_same_value([item.binance_exit_side for item in group]),
+        binance_exit_price=_weighted_price([(item.binance_exit_price, item.quantity_oz) for item in group]),
+        binance_realized_pnl=binance_realized,
+        binance_commission=binance_commission,
+        mt4_ticket=None,
+        mt4_tickets=tickets,
+        mt4_side=_same_value([item.mt4_side for item in group]),
+        mt4_lots=mt4_lots,
+        mt4_open_price=_weighted_price([(item.mt4_open_price, item.mt4_lots) for item in group]),
+        mt4_close_price=_weighted_price([(item.mt4_close_price, item.mt4_lots) for item in group]),
+        mt4_profit=mt4_profit,
+        mt4_swap=mt4_swap,
+        mt4_commission=mt4_commission,
+        net_pnl=net_pnl,
+        status=f"{'完整真实数据' if complete else '部分缺少币安成交匹配'}（{len(group)}张合并）",
+    )
+
+
+def _sum_optional_decimal(values: list[Decimal | None], require_all: bool = False) -> Decimal | None:
+    if require_all and any(value is None for value in values):
+        return None
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    return sum(present, Decimal("0"))
+
+
+def _weighted_price(values: list[tuple[Decimal | None, Decimal | None]]) -> Decimal | None:
+    total_qty = sum((qty for price, qty in values if price is not None and qty is not None), Decimal("0"))
+    if total_qty <= 0:
+        return None
+    return sum(((price or Decimal("0")) * (qty or Decimal("0")) for price, qty in values if price is not None and qty is not None), Decimal("0")) / total_qty
+
+
+def _same_value(values: list):
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    first = present[0]
+    return first if all(value == first for value in present) else None
+
+
+def _join_unique(values: list[str | None]) -> str | None:
+    seen = []
+    for value in values:
+        if value and value not in seen:
+            seen.append(value)
+    return " / ".join(seen) if seen else None
+
+
+def _allocate_exit_trades(mt4_orders: list[Mt4ClosedOrder], trades: list[dict]) -> dict[int, dict]:
+    allocations: dict[int, dict] = {}
+    for trade in sorted(trades, key=lambda item: _int_field(item, "time") or 0):
+        side_value = str(trade.get("side") or "")
+        if side_value not in {Side.BUY.value, Side.SELL.value}:
+            continue
+        trade_qty = _decimal_field(trade, "qty")
+        trade_time = _int_field(trade, "time")
+        if trade_qty is None or trade_qty <= 0 or trade_time is None:
+            continue
+        candidates = []
+        for order in mt4_orders:
+            if order.ticket in allocations:
+                continue
+            quantity_oz = order.lots * settings.mt4_lot_size_oz
+            entry_side = Side.SELL if order.side == Side.BUY else Side.BUY
+            exit_side = Side.BUY if entry_side == Side.SELL else Side.SELL
+            if side_value != exit_side.value:
+                continue
+            distance = abs(trade_time - order.close_time_ms)
+            if distance <= 600_000:
+                candidates.append((distance, order, quantity_oz))
+        if not candidates:
+            continue
+        candidates.sort(key=lambda item: item[0])
+        used_qty = Decimal("0")
+        selected = []
+        for _, order, quantity_oz in candidates:
+            if used_qty + quantity_oz > trade_qty + Decimal("0.000001"):
+                continue
+            selected.append((order, quantity_oz))
+            used_qty += quantity_oz
+            if abs(used_qty - trade_qty) <= Decimal("0.000001"):
+                break
+        if not selected:
+            continue
+        realized = _decimal_field(trade, "realizedPnl") or Decimal("0")
+        commission = _decimal_field(trade, "commission") or Decimal("0")
+        for order, quantity_oz in selected:
+            ratio = quantity_oz / trade_qty
+            allocated = dict(trade)
+            allocated["qty"] = str(quantity_oz)
+            allocated["realizedPnl"] = str(realized * ratio)
+            allocated["commission"] = str(commission * ratio)
+            allocations[order.ticket] = allocated
+    return allocations
 
 
 def _match_binance_trade(trades: list[dict], side: Side, quantity: Decimal, target_time_ms: int) -> dict | None:
     candidates = []
+    grouped: dict[str, list[dict]] = {}
     for trade in trades:
         if str(trade.get("side")) != side.value:
             continue
         qty = _decimal_field(trade, "qty")
-        if qty is None or abs(qty - quantity) > Decimal("0.000001"):
+        if qty is None:
             continue
         trade_time = _int_field(trade, "time")
         if trade_time is None:
             continue
         distance = abs(trade_time - target_time_ms)
-        if distance <= 600_000:
+        if distance > 600_000:
+            continue
+        order_id = str(trade.get("orderId") or trade.get("order_id") or f"trade-{trade_time}")
+        grouped.setdefault(order_id, []).append(trade)
+        if abs(qty - quantity) <= Decimal("0.000001"):
             candidates.append((distance, trade))
     if not candidates:
-        return None
+        grouped_candidates = []
+        for parts in grouped.values():
+            total_qty = sum((_decimal_field(part, "qty") or Decimal("0") for part in parts), Decimal("0"))
+            if abs(total_qty - quantity) > Decimal("0.000001"):
+                continue
+            closest = min(abs((_int_field(part, "time") or target_time_ms) - target_time_ms) for part in parts)
+            grouped_candidates.append((closest, _combine_trade_parts(parts)))
+        if not grouped_candidates:
+            return None
+        grouped_candidates.sort(key=lambda item: item[0])
+        return grouped_candidates[0][1]
     candidates.sort(key=lambda item: item[0])
     return candidates[0][1]
+
+
+def _combine_trade_parts(parts: list[dict]) -> dict:
+    first = dict(parts[0])
+    total_qty = sum((_decimal_field(part, "qty") or Decimal("0") for part in parts), Decimal("0"))
+    if total_qty <= 0:
+        return first
+    notional = sum(((_decimal_field(part, "price") or Decimal("0")) * (_decimal_field(part, "qty") or Decimal("0")) for part in parts), Decimal("0"))
+    realized = sum((_decimal_field(part, "realizedPnl") or Decimal("0") for part in parts), Decimal("0"))
+    commission = sum((_decimal_field(part, "commission") or Decimal("0") for part in parts), Decimal("0"))
+    first["qty"] = str(total_qty)
+    first["price"] = str(notional / total_qty)
+    first["realizedPnl"] = str(realized)
+    first["commission"] = str(commission)
+    return first
 
 
 def _decimal_field(data: dict | None, key: str) -> Decimal | None:

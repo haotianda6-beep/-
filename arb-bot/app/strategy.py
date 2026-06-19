@@ -746,12 +746,14 @@ class StrategyEngine:
             self.state = StrategyState.PAIR_OPEN
             return
         if utc_now_ms() - self.order_created_ms > self.settings.max_order_age_ms:
-            await self.binance.cancel_order(self.active_order.order_id)
-            self.active_order = None
-            self.exit_force_reason = None
-            self.state = StrategyState.PAIR_OPEN
-            return
-        order = await self.binance.get_order(self.active_order.order_id)
+            order = await self._cancel_or_refresh_expired_exit_order(self.active_order)
+            if not order or order.status != OrderStatus.FILLED:
+                self.active_order = None
+                self.exit_force_reason = None
+                self.state = StrategyState.PAIR_OPEN
+                return
+        else:
+            order = await self.binance.get_order(self.active_order.order_id)
         if not order or order.status != OrderStatus.FILLED:
             if order and order.status == OrderStatus.NEW and not self.exit_force_reason and not self._exit_spread_still_valid():
                 await self.binance.cancel_order(order.order_id)
@@ -791,6 +793,27 @@ class StrategyEngine:
             },
         )
         self.state = StrategyState.CLOSING_MT4
+
+    async def _cancel_or_refresh_expired_exit_order(self, order: OrderUpdate) -> OrderUpdate | None:
+        if order.status in TERMINAL_ORDER_STATUSES:
+            return order
+        try:
+            canceled = await self.binance.cancel_order(order.order_id)
+            if canceled:
+                return canceled
+        except BinanceError as exc:
+            if not _binance_order_missing(exc):
+                raise
+            self.storage.record_event("exit_order_cancel_not_visible", {"order_id": order.order_id, "error": str(exc)[:160]})
+        try:
+            refreshed = await self.binance.get_order(order.order_id)
+            if refreshed:
+                return refreshed
+        except BinanceError as exc:
+            if not _binance_order_missing(exc):
+                raise
+            self.storage.record_event("exit_order_missing_after_cancel", {"order_id": order.order_id, "error": str(exc)[:160]})
+        return None
 
     def _negative_swap_exit_reason(self) -> str | None:
         if not self.open_pair or self.settings.negative_swap_close_before_minutes <= 0:

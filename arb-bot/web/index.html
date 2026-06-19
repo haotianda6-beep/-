@@ -1299,8 +1299,8 @@
             <td>${timeText(item.close_time_ms)}</td>
             <td>${fmt(item.quantity_oz)} XAU</td>
             <td>${tradeSideText(item.binance_entry_side)} ${fmt(item.binance_entry_price)} / ${tradeSideText(item.binance_exit_side)} ${fmt(item.binance_exit_price)}</td>
-            <td>${signedMoney(item.binance_realized_pnl)}，费 ${signedMoney(-Number(item.binance_commission || 0))}</td>
-            <td>${item.mt4_ticket || "-"}</td>
+            <td>${signedMoney(item.binance_realized_pnl)}，资金费 ${signedMoney(item.binance_funding_income)}，费 ${signedMoney(-Number(item.binance_commission || 0))}</td>
+            <td>${renderTradeTickets(item)}</td>
             <td>${tradeSideText(item.mt4_side)} ${fmt(item.mt4_open_price)} / 平 ${fmt(item.mt4_close_price)}</td>
             <td>${signedUsd(item.mt4_profit)}，隔夜 ${signedUsd(item.mt4_swap)}，佣金 ${signedUsd(item.mt4_commission)}</td>
             <td>${signedUsd(item.net_pnl)}</td>
@@ -1312,6 +1312,12 @@
       function tradeSideText(value) {
         if (!value) return "-";
         return translateAction(value);
+      }
+
+      function renderTradeTickets(item) {
+        const tickets = item.mt4_tickets || [];
+        if (tickets.length) return tickets.join(" / ");
+        return item.mt4_ticket || "-";
       }
 
       function resetConfigForm() {
