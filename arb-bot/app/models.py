@@ -106,6 +106,18 @@ class BinanceFundingInfo(BaseModel):
     timestamp_ms: int = Field(default_factory=utc_now_ms)
 
 
+class BinancePositionSnapshot(BaseModel):
+    symbol: str
+    position_amt: Decimal
+    entry_price: Decimal | None = None
+    break_even_price: Decimal | None = None
+    mark_price: Decimal | None = None
+    unrealized_pnl: Decimal | None = None
+    liquidation_price: Decimal | None = None
+    position_side: str | None = None
+    timestamp_ms: int = Field(default_factory=utc_now_ms)
+
+
 class Mt4Position(BaseModel):
     ticket: int
     symbol: str
@@ -297,6 +309,16 @@ class OpenPair(BaseModel):
 
 
 class PositionMetrics(BaseModel):
+    binance_position_entry_price: Decimal | None = None
+    binance_position_break_even_price: Decimal | None = None
+    binance_position_mark_price: Decimal | None = None
+    binance_unrealized_pnl: Decimal | None = None
+    mt4_position_entry_price: Decimal | None = None
+    mt4_position_lots: Decimal | None = None
+    actual_entry_spread: Decimal | None = None
+    current_exit_spread: Decimal | None = None
+    profitable_spread_threshold: Decimal | None = None
+    binance_accrued_funding: Decimal | None = None
     binance_funding_rate: Decimal | None = None
     binance_next_funding_time_ms: int | None = None
     binance_funding_estimate: Decimal | None = None

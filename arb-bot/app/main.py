@@ -15,6 +15,7 @@ from app.config import Settings, existing_env_paths, load_settings, update_local
 from app.logger import setup_logging
 from app.history import build_spread_analysis
 from app.models import (
+    BinancePositionSnapshot,
     EngineStatus,
     ExecutionPlanStatus,
     MarketQuote,
@@ -63,6 +64,11 @@ app = FastAPI(title="黄金价差执行器", version="0.1.0")
 _loop_task: asyncio.Task | None = None
 _binance_position_qty_cache: Decimal | None = None
 _binance_position_qty_cache_ms = 0
+_binance_position_snapshot_cache: BinancePositionSnapshot | None = None
+_binance_position_snapshot_cache_ms = 0
+_binance_accrued_funding_cache_pair_id: str | None = None
+_binance_accrued_funding_cache_value: Decimal | None = None
+_binance_accrued_funding_cache_ms = 0
 _runtime_state_cache: str | None = None
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 MT4_DIR = Path(__file__).resolve().parents[1] / "mt4"
@@ -256,7 +262,7 @@ async def status() -> EngineStatus:
         binance_quote=binance_client.latest_quote(),
         mt4_quote=mt4_bridge.latest_quote(),
         open_pair=strategy.open_pair,
-        position_metrics=_position_metrics(),
+        position_metrics=await _position_metrics(),
         execution_plan=_execution_plan(),
         last_error=strategy.last_error,
         config=_runtime_config(),
@@ -265,6 +271,9 @@ async def status() -> EngineStatus:
 
 async def _binance_position_quantity() -> Decimal | None:
     global _binance_position_qty_cache, _binance_position_qty_cache_ms
+    snapshot = await _binance_position_snapshot()
+    if snapshot is not None:
+        return snapshot.position_amt
     now = _now_ms()
     if _binance_position_qty_cache is not None and now - _binance_position_qty_cache_ms <= 1500:
         return _binance_position_qty_cache
@@ -274,6 +283,21 @@ async def _binance_position_quantity() -> Decimal | None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("Binance position quantity unavailable: %s", str(exc)[:160])
     return _binance_position_qty_cache
+
+
+async def _binance_position_snapshot() -> BinancePositionSnapshot | None:
+    global _binance_position_snapshot_cache, _binance_position_snapshot_cache_ms
+    now = _now_ms()
+    if _binance_position_snapshot_cache is not None and now - _binance_position_snapshot_cache_ms <= 1500:
+        return _binance_position_snapshot_cache
+    try:
+        snapshot = await binance_client.position_snapshot()
+        if snapshot is not None:
+            _binance_position_snapshot_cache = snapshot
+            _binance_position_snapshot_cache_ms = now
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Binance position snapshot unavailable: %s", str(exc)[:160])
+    return _binance_position_snapshot_cache
 
 
 def _now_ms() -> int:
@@ -651,7 +675,7 @@ def _runtime_config() -> RuntimeConfig:
     )
 
 
-def _position_metrics() -> PositionMetrics:
+async def _position_metrics() -> PositionMetrics:
     funding = binance_client.latest_funding()
     pair = strategy.open_pair
     binance_quote = binance_client.latest_quote()
@@ -669,14 +693,23 @@ def _position_metrics() -> PositionMetrics:
         return metrics
 
     qty = pair.quantity_oz
+    binance_snapshot = await _binance_position_snapshot()
+    binance_entry_price = _actual_binance_entry_price(pair, binance_snapshot)
+    mt4_entry_price, mt4_lots = _mt4_average_entry_price(pair)
     funding_estimate = _estimate_binance_funding(pair, qty, funding, binance_quote)
     mt4_swap_estimate = _estimate_mt4_swap(pair, qty, swap_info)
+    accrued_funding = await _binance_accrued_funding(pair)
     accrued_swap = _mt4_accrued_swap(pair)
-    gross = _estimate_close_gross(pair, binance_quote, mt4_quote)
-    fees = _estimate_binance_fees(pair, binance_quote)
+    gross = _estimate_close_gross(pair, binance_quote, mt4_quote, binance_entry_price, mt4_entry_price)
+    fees = _estimate_binance_fees(pair, binance_quote, binance_entry_price)
+    actual_entry_spread = _actual_entry_spread(pair, binance_entry_price, mt4_entry_price)
+    current_exit_spread = _current_exit_spread(pair, binance_quote, mt4_quote)
+    profitable_spread_threshold = _profitable_spread_threshold(pair, actual_entry_spread, accrued_funding, accrued_swap, fees)
     net = None
     if gross is not None and fees is not None:
         net = gross - fees
+        if accrued_funding is not None:
+            net += accrued_funding
         if funding_estimate is not None:
             net += funding_estimate
         if mt4_swap_estimate is not None:
@@ -685,6 +718,16 @@ def _position_metrics() -> PositionMetrics:
             net += accrued_swap
     return metrics.model_copy(
         update={
+            "binance_position_entry_price": binance_snapshot.entry_price if binance_snapshot else None,
+            "binance_position_break_even_price": binance_snapshot.break_even_price if binance_snapshot else None,
+            "binance_position_mark_price": binance_snapshot.mark_price if binance_snapshot else None,
+            "binance_unrealized_pnl": binance_snapshot.unrealized_pnl if binance_snapshot else None,
+            "mt4_position_entry_price": mt4_entry_price,
+            "mt4_position_lots": mt4_lots,
+            "actual_entry_spread": actual_entry_spread,
+            "current_exit_spread": current_exit_spread,
+            "profitable_spread_threshold": profitable_spread_threshold,
+            "binance_accrued_funding": accrued_funding,
             "binance_funding_estimate": funding_estimate,
             "mt4_swap_estimate": mt4_swap_estimate,
             "mt4_accrued_swap": accrued_swap,
@@ -693,6 +736,92 @@ def _position_metrics() -> PositionMetrics:
             "estimated_close_net": net,
         }
     )
+
+
+async def _binance_accrued_funding(pair) -> Decimal | None:
+    global _binance_accrued_funding_cache_pair_id
+    global _binance_accrued_funding_cache_value
+    global _binance_accrued_funding_cache_ms
+    if settings.is_dry_run:
+        return None
+    now = _now_ms()
+    if (
+        _binance_accrued_funding_cache_pair_id == pair.pair_id
+        and _binance_accrued_funding_cache_value is not None
+        and now - _binance_accrued_funding_cache_ms <= 10_000
+    ):
+        return _binance_accrued_funding_cache_value
+    try:
+        rows = await binance_client.funding_income(pair.opened_ms - 60_000, utc_now_ms(), limit=1000)
+        total = sum((_decimal_field(row, "income") or Decimal("0") for row in rows), Decimal("0"))
+        _binance_accrued_funding_cache_pair_id = pair.pair_id
+        _binance_accrued_funding_cache_value = total
+        _binance_accrued_funding_cache_ms = now
+        return total
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Binance funding income unavailable: %s", str(exc)[:160])
+        if _binance_accrued_funding_cache_pair_id == pair.pair_id:
+            return _binance_accrued_funding_cache_value
+        return None
+
+
+def _actual_binance_entry_price(pair, snapshot: BinancePositionSnapshot | None) -> Decimal:
+    if snapshot and snapshot.entry_price is not None and snapshot.position_amt != 0:
+        return snapshot.entry_price
+    return pair.binance_entry_price
+
+
+def _mt4_average_entry_price(pair) -> tuple[Decimal | None, Decimal | None]:
+    matched = _matched_mt4_positions(pair)
+    if not matched:
+        return None, None
+    total_lots = sum((position.lots for position in matched), Decimal("0"))
+    if total_lots <= 0:
+        return None, None
+    weighted = sum((position.open_price * position.lots for position in matched), Decimal("0"))
+    return weighted / total_lots, total_lots
+
+
+def _matched_mt4_positions(pair) -> list:
+    positions = mt4_bridge.positions()
+    if not positions:
+        return []
+    tickets = set(pair.mt4_tickets or ([] if pair.mt4_ticket is None else [pair.mt4_ticket]))
+    if tickets:
+        matched = [position for position in positions if position.ticket in tickets]
+        if matched:
+            return matched
+    expected_side = Side.BUY if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.SELL
+    return [position for position in positions if position.symbol == settings.mt4_symbol and position.side == expected_side]
+
+
+def _actual_entry_spread(pair, binance_entry_price: Decimal, mt4_entry_price: Decimal | None) -> Decimal | None:
+    if mt4_entry_price is None:
+        return None
+    if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+        return binance_entry_price - mt4_entry_price
+    return mt4_entry_price - binance_entry_price
+
+
+def _current_exit_spread(pair, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> Decimal | None:
+    if not binance_quote or not mt4_quote:
+        return None
+    if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+        return round_down(binance_quote.bid, binance_client.filters.tick_size) - mt4_quote.bid
+    return mt4_quote.ask - round_up(binance_quote.ask, binance_client.filters.tick_size)
+
+
+def _profitable_spread_threshold(
+    pair,
+    actual_entry_spread: Decimal | None,
+    accrued_funding: Decimal | None,
+    accrued_swap: Decimal | None,
+    fees: Decimal | None,
+) -> Decimal | None:
+    if actual_entry_spread is None or fees is None or pair.quantity_oz <= 0:
+        return None
+    adjustment = (accrued_funding or Decimal("0")) + (accrued_swap or Decimal("0")) - fees
+    return actual_entry_spread + (adjustment / pair.quantity_oz)
 
 
 def _estimate_binance_funding(pair, qty: Decimal, funding, quote: MarketQuote | None) -> Decimal | None:
@@ -720,43 +849,44 @@ def _estimate_mt4_swap(pair, qty: Decimal, swap_info) -> Decimal | None:
 
 
 def _mt4_accrued_swap(pair) -> Decimal | None:
-    positions = mt4_bridge.positions()
-    if not positions:
-        return None
-    tickets = set(pair.mt4_tickets or ([] if pair.mt4_ticket is None else [pair.mt4_ticket]))
-    if tickets:
-        matched = [position for position in positions if position.ticket in tickets]
-    else:
-        expected_side = Side.BUY if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.SELL
-        matched = [position for position in positions if position.symbol == settings.mt4_symbol and position.side == expected_side]
+    matched = _matched_mt4_positions(pair)
     if not matched:
         return None
     return sum((position.swap for position in matched), Decimal("0"))
 
 
-def _estimate_close_gross(pair, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> Decimal | None:
+def _estimate_close_gross(
+    pair,
+    binance_quote: MarketQuote | None,
+    mt4_quote: MarketQuote | None,
+    binance_entry_price: Decimal | None = None,
+    mt4_entry_price: Decimal | None = None,
+) -> Decimal | None:
     if not binance_quote or not mt4_quote:
         return None
     qty = pair.quantity_oz
+    binance_entry = binance_entry_price or pair.binance_entry_price
+    mt4_entry = mt4_entry_price or pair.mt4_entry_price
     if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
         binance_exit = round_down(binance_quote.bid, binance_client.filters.tick_size)
         mt4_exit = mt4_quote.bid
-        return (pair.binance_entry_price - binance_exit) * qty + (mt4_exit - pair.mt4_entry_price) * qty
+        return (binance_entry - binance_exit) * qty + (mt4_exit - mt4_entry) * qty
     binance_exit = round_up(binance_quote.ask, binance_client.filters.tick_size)
     mt4_exit = mt4_quote.ask
-    return (binance_exit - pair.binance_entry_price) * qty + (pair.mt4_entry_price - mt4_exit) * qty
+    return (binance_exit - binance_entry) * qty + (mt4_entry - mt4_exit) * qty
 
 
-def _estimate_binance_fees(pair, binance_quote: MarketQuote | None) -> Decimal | None:
+def _estimate_binance_fees(pair, binance_quote: MarketQuote | None, binance_entry_price: Decimal | None = None) -> Decimal | None:
     fee_rate = binance_client.maker_fee_rate
     if fee_rate is None or not binance_quote:
         return None
     qty = pair.quantity_oz
+    entry_price = binance_entry_price or pair.binance_entry_price
     if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
         exit_price = round_down(binance_quote.bid, binance_client.filters.tick_size)
     else:
         exit_price = round_up(binance_quote.ask, binance_client.filters.tick_size)
-    return (pair.binance_entry_price * qty + exit_price * qty) * abs(fee_rate)
+    return (entry_price * qty + exit_price * qty) * abs(fee_rate)
 
 
 def _execution_plan() -> ExecutionPlanStatus:

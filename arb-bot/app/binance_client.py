@@ -16,7 +16,18 @@ import websockets
 
 from app.config import Settings
 from app.logger import masked
-from app.models import AccountSnapshot, BinanceFundingInfo, ExchangeFilters, MarketQuote, OrderRequest, OrderStatus, OrderUpdate, Side, utc_now_ms
+from app.models import (
+    AccountSnapshot,
+    BinanceFundingInfo,
+    BinancePositionSnapshot,
+    ExchangeFilters,
+    MarketQuote,
+    OrderRequest,
+    OrderStatus,
+    OrderUpdate,
+    Side,
+    utc_now_ms,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -60,10 +71,16 @@ class BinanceBaseClient:
     async def position_quantity(self) -> Decimal:
         raise NotImplementedError
 
+    async def position_snapshot(self) -> BinancePositionSnapshot | None:
+        raise NotImplementedError
+
     async def account_snapshot(self) -> AccountSnapshot | None:
         raise NotImplementedError
 
     async def user_trades(self, start_ms: int, end_ms: int, limit: int = 1000) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    async def funding_income(self, start_ms: int, end_ms: int, limit: int = 1000) -> list[dict[str, Any]]:
         raise NotImplementedError
 
 
@@ -181,6 +198,9 @@ class PaperBinanceClient(BinanceBaseClient):
     async def position_quantity(self) -> Decimal:
         return Decimal("0")
 
+    async def position_snapshot(self) -> BinancePositionSnapshot | None:
+        return None
+
     async def account_snapshot(self) -> AccountSnapshot | None:
         if not self._use_live_market_data:
             return self._account
@@ -195,6 +215,9 @@ class PaperBinanceClient(BinanceBaseClient):
         return self._account
 
     async def user_trades(self, start_ms: int, end_ms: int, limit: int = 1000) -> list[dict[str, Any]]:
+        return []
+
+    async def funding_income(self, start_ms: int, end_ms: int, limit: int = 1000) -> list[dict[str, Any]]:
         return []
 
     async def simulate_fill(self, order_id: str, quantity: Decimal, price: Decimal | None = None) -> OrderUpdate:
@@ -367,8 +390,15 @@ class BinanceFuturesClient(BinanceBaseClient):
 
     async def position_quantity(self) -> Decimal:
         raw = await self._signed("GET", "/fapi/v2/positionRisk", {"symbol": self.settings.binance_symbol})
-        item = raw[0] if isinstance(raw, list) and raw else raw
+        item = _select_position_risk_item(raw, self.settings.binance_symbol)
         return Decimal(str(item.get("positionAmt") or "0"))
+
+    async def position_snapshot(self) -> BinancePositionSnapshot | None:
+        raw = await self._signed("GET", "/fapi/v2/positionRisk", {"symbol": self.settings.binance_symbol})
+        item = _select_position_risk_item(raw, self.settings.binance_symbol)
+        if not item:
+            return None
+        return _parse_position_snapshot(item, self.settings.binance_symbol)
 
     async def account_snapshot(self) -> AccountSnapshot | None:
         now = utc_now_ms()
@@ -387,6 +417,20 @@ class BinanceFuturesClient(BinanceBaseClient):
             "/fapi/v1/userTrades",
             {
                 "symbol": self.settings.binance_symbol,
+                "startTime": int(start_ms),
+                "endTime": int(end_ms),
+                "limit": min(max(int(limit), 1), 1000),
+            },
+        )
+        return list(raw)
+
+    async def funding_income(self, start_ms: int, end_ms: int, limit: int = 1000) -> list[dict[str, Any]]:
+        raw = await self._signed(
+            "GET",
+            "/fapi/v1/income",
+            {
+                "symbol": self.settings.binance_symbol,
+                "incomeType": "FUNDING_FEE",
                 "startTime": int(start_ms),
                 "endTime": int(end_ms),
                 "limit": min(max(int(limit), 1), 1000),
@@ -521,6 +565,29 @@ def _parse_funding_info(data: dict[str, Any], symbol: str) -> BinanceFundingInfo
         funding_rate=Decimal(str(data.get("lastFundingRate") or "0")),
         next_funding_time_ms=int(data.get("nextFundingTime") or 0),
         mark_price=Decimal(str(data["markPrice"])) if data.get("markPrice") is not None else None,
+    )
+
+
+def _select_position_risk_item(raw: Any, symbol: str) -> dict[str, Any]:
+    if isinstance(raw, list):
+        items = [item for item in raw if str(item.get("symbol") or symbol) == symbol]
+        if not items:
+            return {}
+        items.sort(key=lambda item: abs(_optional_decimal(item.get("positionAmt")) or Decimal("0")), reverse=True)
+        return items[0]
+    return raw if isinstance(raw, dict) else {}
+
+
+def _parse_position_snapshot(data: dict[str, Any], symbol: str) -> BinancePositionSnapshot:
+    return BinancePositionSnapshot(
+        symbol=str(data.get("symbol") or symbol),
+        position_amt=_optional_decimal(data.get("positionAmt")) or Decimal("0"),
+        entry_price=_optional_decimal(data.get("entryPrice")),
+        break_even_price=_optional_decimal(data.get("breakEvenPrice")),
+        mark_price=_optional_decimal(data.get("markPrice")),
+        unrealized_pnl=_optional_decimal(data.get("unRealizedProfit")),
+        liquidation_price=_optional_decimal(data.get("liquidationPrice")),
+        position_side=str(data.get("positionSide")) if data.get("positionSide") is not None else None,
     )
 
 

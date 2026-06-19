@@ -577,6 +577,10 @@
                 <strong>估算净利</strong>
                 <span id="netEstimateLine">-</span>
               </div>
+              <div class="compact-row">
+                <strong>盈利价差</strong>
+                <span class="wrap" id="profitSpreadLine">-</span>
+              </div>
             </div>
           </div>
 
@@ -980,10 +984,11 @@
         $("pairDirection").textContent = pair ? translateDirection(pair.direction) : "-";
         $("pairQty").textContent = pair ? `${fmt(pair.quantity_oz)} XAU` : "-";
         $("pairAddLine").textContent = pair ? renderPairAddLine(pair, data.config, b, m) : "-";
-        $("pairEntryLine").textContent = pair ? `币安 ${fmt(pair.binance_entry_price)} / MT4 ${fmt(pair.mt4_entry_price)}` : "-";
+        $("pairEntryLine").textContent = renderPairEntry(pair, metrics);
         $("binanceFundingLine").textContent = renderFunding(metrics, pair);
         $("mt4SwapLine").textContent = renderMt4Swap(metrics, pair);
-        $("netEstimateLine").textContent = metrics.estimated_close_net !== null && metrics.estimated_close_net !== undefined ? `${signedUsd(metrics.estimated_close_net)}，毛利 ${signedUsd(metrics.estimated_close_gross)}，预估手续费 ${signedUsd(-Number(metrics.estimated_fees || 0))}` : "-";
+        $("netEstimateLine").textContent = renderNetEstimate(metrics);
+        $("profitSpreadLine").textContent = renderProfitSpread(pair, metrics);
         $("executionPlan").textContent = data.execution_plan?.summary || "-";
         $("followLimit").textContent = data.execution_plan ? `币安成交后 MT4 需要在 ${fmt(data.execution_plan.max_follow_seconds)} 秒内回报；EA 当前建议轮询 0.05 秒。` : "-";
         renderConfig(data.config);
@@ -1045,18 +1050,41 @@
       function renderPositions(data) {
         const pair = data.open_pair;
         const binanceQty = data.binance_position_qty;
+        const metrics = data.position_metrics || {};
         const mt4Positions = data.mt4_positions || [];
-        $("binancePositionLine").textContent = renderBinancePosition(binanceQty);
+        $("binancePositionLine").textContent = renderBinancePosition(binanceQty, metrics);
         $("mt4PositionsLine").textContent = renderMt4Positions(mt4Positions);
         $("orphanPositionLine").textContent = renderOrphanPositionWarning(pair, binanceQty, mt4Positions);
       }
 
-      function renderBinancePosition(qtyValue) {
+      function renderBinancePosition(qtyValue, metrics = {}) {
         if (qtyValue === null || qtyValue === undefined) return "等待币安仓位数据";
         const qty = Number(qtyValue);
         if (!Number.isFinite(qty)) return `${qtyValue} XAU`;
         if (Math.abs(qty) < 0.0000001) return "无持仓";
-        return `${qty > 0 ? "多仓" : "空仓"} ${fmt(Math.abs(qty))} XAU`;
+        const parts = [`${qty > 0 ? "多仓" : "空仓"} ${fmt(Math.abs(qty))} XAU`];
+        if (metrics.binance_position_entry_price !== null && metrics.binance_position_entry_price !== undefined) {
+          parts.push(`真实均价 ${fmt(metrics.binance_position_entry_price)}`);
+        }
+        if (metrics.binance_position_break_even_price !== null && metrics.binance_position_break_even_price !== undefined && Number(metrics.binance_position_break_even_price) > 0) {
+          parts.push(`币安不亏价 ${fmt(metrics.binance_position_break_even_price)}`);
+        }
+        if (metrics.binance_position_mark_price !== null && metrics.binance_position_mark_price !== undefined) {
+          parts.push(`标记价 ${fmt(metrics.binance_position_mark_price)}`);
+        }
+        if (metrics.binance_unrealized_pnl !== null && metrics.binance_unrealized_pnl !== undefined) {
+          parts.push(`币安浮盈 ${signedMoney(metrics.binance_unrealized_pnl)}`);
+        }
+        return parts.join("，");
+      }
+
+      function renderPairEntry(pair, metrics) {
+        if (!pair) return "-";
+        const binanceEntry = metrics.binance_position_entry_price ?? pair.binance_entry_price;
+        const mt4Entry = metrics.mt4_position_entry_price ?? pair.mt4_entry_price;
+        const lots = metrics.mt4_position_lots !== null && metrics.mt4_position_lots !== undefined ? `，MT4合计 ${fmt(metrics.mt4_position_lots)} 手` : "";
+        const spread = metrics.actual_entry_spread !== null && metrics.actual_entry_spread !== undefined ? `，实际开仓价差 ${fmt(metrics.actual_entry_spread)} 美元` : "";
+        return `币安实仓 ${fmt(binanceEntry)} / MT4均价 ${fmt(mt4Entry)}${lots}${spread}`;
       }
 
       function renderPairAddLine(pair, config, binanceQuote, mt4Quote) {
@@ -1101,8 +1129,24 @@
 
       function renderFunding(metrics, pair) {
         if (!metrics || metrics.binance_funding_rate === null || metrics.binance_funding_rate === undefined) return "-";
+        const accrued = metrics.binance_accrued_funding !== null && metrics.binance_accrued_funding !== undefined ? `，已结算 ${signedMoney(metrics.binance_accrued_funding)}` : "，已结算等待币安返回";
         const amount = pair ? `，本仓下次预估 ${signedMoney(metrics.binance_funding_estimate)}` : "，当前无持仓不估算金额";
-        return `费率 ${pct(metrics.binance_funding_rate)}，倒计时 ${countdown(metrics.binance_next_funding_time_ms)}${amount}`;
+        return `费率 ${pct(metrics.binance_funding_rate)}，倒计时 ${countdown(metrics.binance_next_funding_time_ms)}${accrued}${amount}`;
+      }
+
+      function renderNetEstimate(metrics) {
+        if (!metrics || metrics.estimated_close_net === null || metrics.estimated_close_net === undefined) return "-";
+        const funding = metrics.binance_accrued_funding !== null && metrics.binance_accrued_funding !== undefined ? `，币安已结算资金费 ${signedMoney(metrics.binance_accrued_funding)}` : "";
+        return `${signedUsd(metrics.estimated_close_net)}，毛利 ${signedUsd(metrics.estimated_close_gross)}，预估手续费 ${signedUsd(-Number(metrics.estimated_fees || 0))}${funding}`;
+      }
+
+      function renderProfitSpread(pair, metrics) {
+        if (!pair) return "-";
+        if (!metrics || metrics.profitable_spread_threshold === null || metrics.profitable_spread_threshold === undefined) {
+          return "等待币安真实均价、MT4均价和手续费数据";
+        }
+        const current = metrics.current_exit_spread !== null && metrics.current_exit_spread !== undefined ? `当前平仓价差 ${fmt(metrics.current_exit_spread)} 美元，` : "";
+        return `${current}回归到小于等于 ${fmt(metrics.profitable_spread_threshold)} 美元，扣除已结算资金费、已产生隔夜费和预估手续费后预计不亏`;
       }
 
       function renderMt4Swap(metrics, pair) {
