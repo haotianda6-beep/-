@@ -270,6 +270,23 @@ def test_cash_carry_close_uses_live_matched_quantities_instead_of_stale_state(tm
     assert executor.swap.orders[0]["amount"] == 19800.0
 
 
+def test_cash_carry_fixed_take_profit_requires_depth_profit_above_target(tmp_path) -> None:
+    state = _state_with_position(tmp_path)
+    executor = _RecordingExecutor(state)
+    executor.spot.bids = [[101, 100]]
+    executor.swap.asks = [[100.5, 100000]]
+    settings = BotSettings(manual_confirm_required=False, cash_carry_auto_close_enabled=True, take_profit_usdt=Decimal("3"))
+
+    result = executor.evaluate_close([_opportunity(basis="0.9")], settings, [_position_row(net="3.2", basis="0.9")])
+
+    assert result is not None
+    assert result.status == "blocked_by_depth"
+    assert "盘口可成交净利" in result.reason
+    assert "低于平仓安全垫 3.0000 USDT" in result.reason
+    assert executor.spot.orders == []
+    assert executor.swap.orders == []
+
+
 def test_cash_carry_close_blocks_when_depth_guard_estimates_loss(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = _RecordingExecutor(state)

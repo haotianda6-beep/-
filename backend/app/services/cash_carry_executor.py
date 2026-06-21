@@ -184,6 +184,7 @@ class CashCarryExecutor:
         spot_qty = spot_quantity or record.quantity
         perp_qty = perp_quantity or record.quantity
         try:
+            guard_floor = self._close_profit_floor(settings, reason) if self._requires_profit_floor(reason) else Decimal("-999999999")
             guard = forward_close_depth_guard(
                 spot,
                 swap,
@@ -194,7 +195,7 @@ class CashCarryExecutor:
                 record.spot_entry_price,
                 record.perp_entry_price,
                 self._fee_rate(record.exchange),
-                self._close_profit_floor(settings) if self._requires_profit_floor(reason) else Decimal("-999999999"),
+                guard_floor,
             )
             if not guard.ok:
                 return self.state.remember(ExecutionResult(record.id, "blocked_by_depth", guard.reason, steps))
@@ -202,6 +203,7 @@ class CashCarryExecutor:
             perp_order = self._run(steps[0], lambda: swap.create_order(swap_symbol, "market", "buy", contract_qty, None, {"reduceOnly": True}), True)
             spot_order = self._run(steps[1], lambda: spot.create_order(spot_symbol, "market", "sell", float(spot_qty)), True)
             close_fields = self._close_fields(spot_order, perp_order)
+            close_fields["close_depth_guard"] = self._close_depth_guard_fields(guard, guard_floor)
             history = build_cash_carry_history(spot, swap, record, spot_symbol, swap_symbol, close_fields["close_spot_order_id"], close_fields["close_perp_order_id"])
             if history:
                 close_fields["history"] = history
@@ -517,13 +519,25 @@ class CashCarryExecutor:
     def _fee_rate(self, exchange: ExchangeName) -> Decimal:
         return FEE_RATES.get(ExchangeName(exchange), Decimal("0.0006"))
 
-    def _close_profit_floor(self, settings: BotSettings | None) -> Decimal:
+    def _close_profit_floor(self, settings: BotSettings | None, reason: str = "") -> Decimal:
         if not settings:
             return Decimal("0.05")
-        return max(Decimal("0.05"), settings.order_notional_usdt * settings.max_slippage_pct / Decimal("100"))
+        base_floor = max(Decimal("0.05"), settings.order_notional_usdt * settings.max_slippage_pct / Decimal("100"))
+        if "固定U止盈" in reason and settings.take_profit_usdt > 0:
+            return max(base_floor, settings.take_profit_usdt)
+        return base_floor
 
     def _requires_profit_floor(self, reason: str) -> bool:
         return "亏损" not in reason and "止损" not in reason
+
+    def _close_depth_guard_fields(self, guard, min_net_profit: Decimal) -> dict[str, str]:
+        return {
+            "spot_price": str(guard.spot_price),
+            "perp_price": str(guard.perp_price),
+            "basis_pct": str(guard.basis_pct),
+            "estimated_net_profit": str(guard.estimated_net_profit),
+            "min_net_profit": str(min_net_profit),
+        }
 
     def _close_fields(self, spot_order, perp_order) -> dict[str, Any]:
         return {
