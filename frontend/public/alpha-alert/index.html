@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex,nofollow,noarchive" />
+    <title>Alpha 正向套利提醒</title>
+    <style>
+      :root {
+        color: #172033;
+        background: #eef1f4;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-width: 320px;
+      }
+      main {
+        min-height: 100vh;
+        padding: 18px;
+      }
+      header,
+      section {
+        background: #ffffff;
+        border: 1px solid #d8dee7;
+        border-radius: 8px;
+      }
+      header {
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+        align-items: flex-end;
+        padding: 14px 16px;
+        margin-bottom: 16px;
+      }
+      h1,
+      h2 {
+        margin: 0;
+      }
+      h1 {
+        font-size: 22px;
+      }
+      h2 {
+        font-size: 16px;
+      }
+      p,
+      small {
+        color: #5d6878;
+      }
+      p {
+        margin: 7px 0 0;
+        font-size: 13px;
+      }
+      button {
+        min-height: 36px;
+        border: 1px solid #c6d0dc;
+        border-radius: 8px;
+        padding: 8px 12px;
+        color: #ffffff;
+        background: #185abc;
+        cursor: pointer;
+        font: inherit;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(140px, 1fr));
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+      .metric {
+        padding: 12px;
+        background: #ffffff;
+        border: 1px solid #d8dee7;
+        border-radius: 8px;
+      }
+      .metric span {
+        display: block;
+        color: #5d6878;
+        font-size: 12px;
+      }
+      .metric strong {
+        display: block;
+        margin-top: 6px;
+        font-size: 18px;
+      }
+      section {
+        margin-bottom: 16px;
+        padding: 14px;
+      }
+      .notice {
+        margin: 10px 0 12px;
+        padding: 9px 10px;
+        border: 1px solid #d9e3f2;
+        border-radius: 8px;
+        background: #f5f8fc;
+        color: #45566b;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+      .table-wrap {
+        overflow: auto;
+        border: 1px solid #e2e7ee;
+        border-radius: 8px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 1280px;
+        font-size: 13px;
+      }
+      th,
+      td {
+        padding: 9px 10px;
+        border-bottom: 1px solid #e7ebf0;
+        white-space: nowrap;
+        text-align: left;
+      }
+      th {
+        color: #526174;
+        background: #f4f6f9;
+        font-weight: 700;
+      }
+      tr:last-child td {
+        border-bottom: 0;
+      }
+      .positive {
+        color: #047044;
+        font-weight: 700;
+      }
+      .negative {
+        color: #bd2f1b;
+        font-weight: 700;
+      }
+      .strong {
+        font-weight: 800;
+      }
+      .empty {
+        padding: 18px;
+        color: #607083;
+        text-align: center;
+      }
+      .error {
+        color: #a3311f;
+      }
+      @media (max-width: 900px) {
+        main {
+          padding: 10px;
+        }
+        header {
+          display: grid;
+        }
+        .grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>Alpha 正向套利提醒</h1>
+          <p id="status">正在读取提醒数据...</p>
+        </div>
+        <button id="refresh" type="button">刷新</button>
+      </header>
+
+      <div class="grid">
+        <div class="metric"><span>满足条件</span><strong id="readyCount">-</strong></div>
+        <div class="metric"><span>候选数量</span><strong id="candidateCount">-</strong></div>
+        <div class="metric"><span>提醒本金</span><strong id="notional">-</strong></div>
+        <div class="metric"><span>最低溢价</span><strong id="minBasis">-</strong></div>
+      </div>
+
+      <section>
+        <h2>满足条件</h2>
+        <div class="notice">本页只做提醒，不会自动买入 Alpha，也不会自动开合约。请人工确认币种身份、盘口深度和实际可交易性。</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>排名</th>
+                <th>币种</th>
+                <th>Alpha 标识</th>
+                <th>链</th>
+                <th>Alpha 参考价</th>
+                <th>合约买一价</th>
+                <th>合约卖一价</th>
+                <th>合约溢价</th>
+                <th>资金费率</th>
+                <th>Alpha 24h 量</th>
+                <th>合约 24h 量</th>
+                <th>净利预估</th>
+                <th>状态</th>
+                <th>更新时间</th>
+              </tr>
+            </thead>
+            <tbody id="readyRows"></tbody>
+          </table>
+        </div>
+        <div id="readyEmpty" class="empty">暂无满足条件的提醒。</div>
+      </section>
+
+      <section>
+        <h2>候选与未满足原因</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>排名</th>
+                <th>币种</th>
+                <th>Alpha 标识</th>
+                <th>链</th>
+                <th>Alpha 参考价</th>
+                <th>合约买一价</th>
+                <th>合约溢价</th>
+                <th>资金费率</th>
+                <th>Alpha 24h 量</th>
+                <th>合约 24h 量</th>
+                <th>净利预估</th>
+                <th>未满足原因</th>
+                <th>更新时间</th>
+              </tr>
+            </thead>
+            <tbody id="candidateRows"></tbody>
+          </table>
+        </div>
+        <div id="candidateEmpty" class="empty">暂无候选。</div>
+      </section>
+    </main>
+
+    <script>
+      const readyRows = document.querySelector("#readyRows");
+      const candidateRows = document.querySelector("#candidateRows");
+      const readyEmpty = document.querySelector("#readyEmpty");
+      const candidateEmpty = document.querySelector("#candidateEmpty");
+      const statusText = document.querySelector("#status");
+
+      function money(value, digits = 2) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "-";
+        return number.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+      }
+
+      function pct(value, digits = 4) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "-";
+        return `${number.toFixed(digits)}%`;
+      }
+
+      function tone(value) {
+        const number = Number(value);
+        if (number > 0) return "positive";
+        if (number < 0) return "negative";
+        return "";
+      }
+
+      function timeText(value) {
+        if (!value) return "-";
+        return new Intl.DateTimeFormat("zh-CN", {
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }).format(new Date(value));
+      }
+
+      function textCell(row, text, className = "") {
+        const cell = document.createElement("td");
+        cell.textContent = text;
+        if (className) cell.className = className;
+        row.appendChild(cell);
+      }
+
+      function renderRows(target, rows, mode) {
+        target.replaceChildren();
+        rows.forEach((item, index) => {
+          const row = document.createElement("tr");
+          textCell(row, String(index + 1));
+          textCell(row, item.symbol || "-", "strong");
+          textCell(row, item.alpha_trade_symbol || "-");
+          textCell(row, item.chain_name || "-");
+          textCell(row, money(item.alpha_price, 8));
+          textCell(row, money(item.perp_bid_price, 8));
+          if (mode === "ready") textCell(row, money(item.perp_ask_price, 8));
+          textCell(row, pct(item.basis_pct), tone(item.basis_pct));
+          textCell(row, pct(item.funding_rate_pct), tone(item.funding_rate_pct));
+          textCell(row, money(item.alpha_volume_24h_usdt, 0));
+          textCell(row, money(item.perp_volume_24h_usdt, 0));
+          textCell(row, money(item.estimated_net_profit, 4), tone(item.estimated_net_profit));
+          textCell(row, item.blocked_reasons?.length ? item.blocked_reasons.join(" / ") : "满足提醒条件，只提示不下单");
+          textCell(row, timeText(item.updated_at));
+          target.appendChild(row);
+        });
+      }
+
+      async function load() {
+        try {
+          const response = await fetch("/api/alpha-alert/summary", { cache: "no-store" });
+          if (!response.ok) throw new Error(`状态码 ${response.status}`);
+          const body = await response.json();
+          const opportunities = body.opportunities || [];
+          const candidates = body.candidates || [];
+          document.querySelector("#readyCount").textContent = String(opportunities.length);
+          document.querySelector("#candidateCount").textContent = String(candidates.length);
+          document.querySelector("#notional").textContent = `${money(body.params?.notional_usdt, 2)} USDT`;
+          document.querySelector("#minBasis").textContent = pct(body.params?.min_basis_pct);
+          renderRows(readyRows, opportunities, "ready");
+          renderRows(candidateRows, candidates, "candidate");
+          readyEmpty.style.display = opportunities.length ? "none" : "block";
+          candidateEmpty.style.display = candidates.length ? "none" : "block";
+          const issueText = body.issues?.length ? `；提醒异常：${body.issues.join("；")}` : "";
+          statusText.textContent = `只读提醒 · 更新时间：${timeText(body.generated_at)}${issueText}`;
+          statusText.className = body.issues?.length ? "error" : "";
+        } catch (error) {
+          statusText.textContent = `读取失败：${String(error).slice(0, 120)}`;
+          statusText.className = "error";
+        }
+      }
+
+      document.querySelector("#refresh").addEventListener("click", load);
+      load();
+      setInterval(load, 5000);
+    </script>
+  </body>
+</html>

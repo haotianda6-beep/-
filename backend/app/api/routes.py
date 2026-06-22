@@ -45,6 +45,27 @@ async def get_alpha_alert_opportunities():
     return runtime.alpha_alert.opportunities if runtime else []
 
 
+@router.get("/alpha-alert/summary")
+async def get_alpha_alert_summary():
+    settings = engine.settings_store.load()
+    runtime = engine.live_runtime.get(settings)
+    scan = runtime.alpha_alert
+    return {
+        "enabled": settings.alpha_alert_enabled,
+        "opportunities": scan.opportunities,
+        "candidates": scan.candidates,
+        "issues": scan.issues,
+        "params": {
+            "notional_usdt": settings.alpha_alert_notional_usdt,
+            "min_basis_pct": settings.alpha_alert_min_basis_pct,
+            "min_funding_rate_pct": settings.alpha_alert_min_funding_rate_pct,
+            "min_volume_usdt": settings.alpha_alert_min_volume_usdt,
+            "fee_reserve_pct": settings.alpha_alert_fee_reserve_pct,
+        },
+        "generated_at": datetime.now(timezone.utc),
+    }
+
+
 @router.get("/mt4-spread/opportunities")
 async def get_mt4_spread_opportunities():
     if _lightweight_dashboard_enabled():
