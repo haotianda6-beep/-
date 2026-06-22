@@ -1021,7 +1021,7 @@ class StrategyEngine:
             return self.settings.close_profit_usd_per_oz
         age_ms = utc_now_ms() - self.open_pair.opened_ms
         if age_ms >= self.settings.max_pair_age_minutes * 60_000:
-            return min(self.settings.close_profit_usd_per_oz, self.settings.aged_close_profit_usd_per_oz)
+            return max(self.settings.close_profit_usd_per_oz, self.settings.aged_close_profit_usd_per_oz)
         return self.settings.close_profit_usd_per_oz
 
     async def _binance_funding_income_since_open(self) -> Decimal:

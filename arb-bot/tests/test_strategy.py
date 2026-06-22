@@ -994,7 +994,7 @@ async def test_close_trigger_reserves_mt4_follow_slippage_buffer(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_aged_pair_reduces_close_profit_target_but_keeps_follow_buffer(tmp_path):
+async def test_aged_pair_keeps_close_profit_floor_and_follow_buffer(tmp_path):
     engine, client, mt4 = await make_engine(
         tmp_path,
         settings_kwargs={
@@ -1035,7 +1035,7 @@ async def test_aged_pair_reduces_close_profit_target_but_keeps_follow_buffer(tmp
 
     trigger = await engine._close_trigger_spread()
 
-    assert trigger == Decimal("1.52")
+    assert trigger == Decimal("0.82")
 
 
 class FillOnCancelPaperClient(PaperBinanceClient):
