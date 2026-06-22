@@ -97,6 +97,32 @@ class CashCarryOpportunity(BaseSchema):
     updated_at: datetime
 
 
+class AlphaCarryOpportunity(BaseSchema):
+    symbol: str
+    alpha_symbol: str
+    alpha_trade_symbol: str
+    alpha_id: str
+    alpha_name: str
+    chain_name: str
+    contract_address: str
+    perp_symbol: str
+    alpha_price: Decimal
+    perp_bid_price: Decimal
+    perp_ask_price: Decimal
+    basis_pct: Decimal
+    funding_rate_pct: Decimal
+    alpha_volume_24h_usdt: Decimal
+    perp_volume_24h_usdt: Decimal
+    notional_usdt: Decimal
+    estimated_basis_profit: Decimal
+    estimated_funding_income: Decimal
+    estimated_fee_reserve: Decimal
+    estimated_net_profit: Decimal
+    blocked_reasons: list[str] = Field(default_factory=list)
+    data_source: DataSource = DataSource.LIVE
+    updated_at: datetime
+
+
 class Mt4SpreadOpportunity(BaseSchema):
     instrument: str
     instrument_type: Literal["stock", "commodity"]
@@ -167,6 +193,12 @@ class BotSettings(BaseSchema):
     mt4_notional_usdt: Decimal = Decimal("100")
     mt4_default_leverage: Decimal = Decimal("5")
     mt4_max_quote_age_seconds: Decimal = Decimal("10")
+    alpha_alert_enabled: bool = True
+    alpha_alert_notional_usdt: Decimal = Decimal("100")
+    alpha_alert_min_basis_pct: Decimal = Decimal("0.8")
+    alpha_alert_min_funding_rate_pct: Decimal = Decimal("0")
+    alpha_alert_min_volume_usdt: Decimal = Decimal("300000")
+    alpha_alert_fee_reserve_pct: Decimal = Decimal("0.2")
     take_profit_usdt: Decimal = Decimal("8")
     stop_loss_usdt: Decimal = Decimal("12")
     max_slippage_pct: Decimal = Decimal("0.2")
@@ -208,6 +240,11 @@ class BotSettings(BaseSchema):
         "mt4_notional_usdt",
         "mt4_default_leverage",
         "mt4_max_quote_age_seconds",
+        "alpha_alert_notional_usdt",
+        "alpha_alert_min_basis_pct",
+        "alpha_alert_min_funding_rate_pct",
+        "alpha_alert_min_volume_usdt",
+        "alpha_alert_fee_reserve_pct",
         "take_profit_usdt",
         "stop_loss_usdt",
         "max_slippage_pct",
@@ -289,6 +326,8 @@ class RealtimeSnapshot(BaseSchema):
     cash_carry_opportunities: list[CashCarryOpportunity]
     cash_carry_candidates: list[CashCarryOpportunity]
     cash_carry_positions: list[CashCarryPositionRow]
+    alpha_alert_opportunities: list[AlphaCarryOpportunity]
+    alpha_alert_candidates: list[AlphaCarryOpportunity]
     mt4_spread_opportunities: list[Mt4SpreadOpportunity]
     mt4_spread_candidates: list[Mt4SpreadOpportunity]
     trades: list[TradeHistory]

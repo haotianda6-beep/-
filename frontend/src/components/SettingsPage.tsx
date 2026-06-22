@@ -23,6 +23,11 @@ type DecimalKey =
   | "mt4_notional_usdt"
   | "mt4_default_leverage"
   | "mt4_max_quote_age_seconds"
+  | "alpha_alert_notional_usdt"
+  | "alpha_alert_min_basis_pct"
+  | "alpha_alert_min_funding_rate_pct"
+  | "alpha_alert_min_volume_usdt"
+  | "alpha_alert_fee_reserve_pct"
   | "take_profit_usdt"
   | "stop_loss_usdt"
   | "max_slippage_pct"
@@ -60,6 +65,14 @@ const mt4SpreadDecimalFields: Array<{ key: DecimalKey; label: string; suffix: st
   { key: "mt4_max_quote_age_seconds", label: "MT4报价过期", suffix: "秒" },
 ];
 
+const alphaAlertDecimalFields: Array<{ key: DecimalKey; label: string; suffix: string }> = [
+  { key: "alpha_alert_notional_usdt", label: "Alpha 提醒本金", suffix: "USDT" },
+  { key: "alpha_alert_min_basis_pct", label: "Alpha 最小合约溢价", suffix: "%" },
+  { key: "alpha_alert_min_funding_rate_pct", label: "Alpha 最低资金费率", suffix: "%" },
+  { key: "alpha_alert_min_volume_usdt", label: "Alpha 最低24h成交量", suffix: "USDT" },
+  { key: "alpha_alert_fee_reserve_pct", label: "Alpha 手续费预留", suffix: "%" },
+];
+
 type ToggleField = { key: keyof BotSettings; label: string };
 
 const toggleGroups: Array<{ title: string; toggles: ToggleField[] }> = [
@@ -77,6 +90,9 @@ const toggleGroups: Array<{ title: string; toggles: ToggleField[] }> = [
     ] },
   { title: "MT4 与五所价差套利开关", toggles: [
       { key: "mt4_spread_enabled", label: "启用 MT4 价差扫描" },
+    ] },
+  { title: "币安 Alpha 正向套利提醒开关", toggles: [
+      { key: "alpha_alert_enabled", label: "启用 Alpha 机会提醒" },
     ] },
 ];
 
@@ -145,6 +161,7 @@ export function SettingsPage({ settings, onSaved }: Props) {
 
       <SettingsGroup title="通用资金和风控参数" fields={sharedDecimalFields} draft={draft} onChange={updateDecimal} />
       <SettingsGroup title="GATE / BITGET 期现正向套利参数" fields={cashCarryDecimalFields} draft={draft} onChange={updateDecimal} />
+      <SettingsGroup title="币安 Alpha 正向套利提醒参数" fields={alphaAlertDecimalFields} draft={draft} onChange={updateDecimal} />
       <SettingsGroup title="MT4 与五所价差套利参数" fields={mt4SpreadDecimalFields} draft={draft} onChange={updateDecimal} />
 
       <div className="settings-grid">

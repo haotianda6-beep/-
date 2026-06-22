@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Activity, History, KeyRound, ListFilter, Settings } from "lucide-react";
 import { ApiCredentialsPage } from "./components/ApiCredentialsPage";
 import { AiPanel } from "./components/AiPanel";
+import { AlphaAlert, AlphaAlertDashboard } from "./components/AlphaAlert";
 import { CashCarry, CashCarryDashboard } from "./components/CashCarry";
 import { HomePage } from "./components/HomePage";
 import { Mt4Spread, Mt4SpreadDashboard } from "./components/Mt4Spread";
@@ -12,7 +13,7 @@ import { createRealtimeSocket, fetchSnapshot, fetchTrades } from "./lib/api";
 import type { AIInsight, RealtimeSnapshot, RiskEvent, TradeHistory } from "./types/api";
 
 type Tab = "dashboard" | "opportunities" | "trades";
-type Module = "home" | "cash-carry" | "mt4-spread" | "settings" | "api-credentials";
+type Module = "home" | "cash-carry" | "alpha-alert" | "mt4-spread" | "settings" | "api-credentials";
 
 const tabs: Array<{ id: Tab; label: string; icon: typeof Activity }> = [
   { id: "dashboard", label: "仪表盘", icon: Activity },
@@ -153,7 +154,9 @@ export function App() {
             <KeyRound size={17} />
             <span>API 管理</span>
           </button>
-          {(activeModule === "cash-carry" || activeModule === "mt4-spread") && tabs.map((tab) => {
+          {(activeModule === "cash-carry" || activeModule === "alpha-alert" || activeModule === "mt4-spread") && tabs
+            .filter((tab) => activeModule !== "alpha-alert" || tab.id !== "trades")
+            .map((tab) => {
             const Icon = tab.icon;
             return (
               <button key={tab.id} className={activeTab === tab.id ? "active" : ""} onClick={() => setActiveTab(tab.id)} title={tab.label}>
@@ -210,6 +213,13 @@ export function App() {
               }}
             />
           )}
+          {activeModule === "alpha-alert" && activeTab === "dashboard" && <AlphaAlertDashboard snapshot={snapshot} />}
+          {activeModule === "alpha-alert" && activeTab === "opportunities" && (
+            <AlphaAlert
+              opportunities={snapshot.alpha_alert_opportunities ?? []}
+              candidates={snapshot.alpha_alert_candidates ?? []}
+            />
+          )}
           {activeModule === "mt4-spread" && activeTab === "dashboard" && <Mt4SpreadDashboard snapshot={snapshot} />}
           {activeModule === "mt4-spread" && activeTab === "opportunities" && (
             <Mt4Spread
@@ -249,6 +259,7 @@ export function App() {
 
 function titleFor(module: Module): string {
   if (module === "cash-carry") return "GATE / BITGET 期现正向套利";
+  if (module === "alpha-alert") return "币安 Alpha 正向套利机会提醒";
   if (module === "mt4-spread") return "MT4 与五所合约价差套利";
   if (module === "settings") return "全局参数设置";
   if (module === "api-credentials") return "API 管理";

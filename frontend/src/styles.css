@@ -221,6 +221,17 @@ select {
   font-weight: 700;
 }
 
+.notice-line {
+  margin: 6px 0 12px;
+  padding: 9px 10px;
+  border: 1px solid #d9e3f2;
+  border-radius: 8px;
+  background: #f5f8fc;
+  color: #45566b;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(120px, 1fr));

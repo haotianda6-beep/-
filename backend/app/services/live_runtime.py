@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from app.core.credential_utils import env_bool
 from app.core.models import BotSettings, CashCarryOpportunity, ExchangeName
+from app.services.binance_alpha_scanner import AlphaAlertScan, BinanceAlphaScanner
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGE_SET
 from app.services.cash_carry_executor import CashCarryExecutor
 from app.services.cash_carry_fast_refresh import CashCarryFastRefresher
@@ -25,6 +26,7 @@ FULL_SCAN_INTERVAL_SECONDS = 300.0
 FULL_SCAN_TIMEOUT_SECONDS = 90.0
 ACCOUNT_REFRESH_SECONDS = 30.0
 MT4_SCAN_SECONDS = 2.0
+ALPHA_ALERT_SCAN_SECONDS = 30.0
 MEMORY_GUARD_SECONDS = 60.0
 MEMORY_CLEANUP_RSS_MB = 1100.0
 MEMORY_RESTART_RSS_MB = 1900.0
@@ -37,6 +39,7 @@ logger = logging.getLogger(__name__)
 class LiveRuntimeSnapshot:
     account: LiveAccountSnapshot
     cash_carry: CashCarryScan
+    alpha_alert: AlphaAlertScan
     mt4_spread_opportunities: list
     mt4_spread_candidates: list
     mt4_spread_issues: list[str]
@@ -72,8 +75,10 @@ class LiveRuntimeCache:
         self.ticker_cache = ticker_cache or WSTickerCache()
         self.cash_carry_refresher = CashCarryFastRefresher(self.ticker_cache)
         self.cash_position_builder = CashCarryPositionBuilder(self.ticker_cache)
+        self.alpha_scanner = BinanceAlphaScanner()
         self._account = LiveAccountSnapshot(issues=["账户数据后台加载中"])
         self._cash_carry = CashCarryScan(issues=["期现扫描后台加载中"])
+        self._alpha_alert = AlphaAlertScan(issues=["币安 Alpha 提醒后台加载中"])
         self._mt4_spread_opportunities = []
         self._mt4_spread_candidates = []
         self._mt4_spread_issues = ["MT4 价差扫描后台加载中"]
@@ -96,6 +101,7 @@ class LiveRuntimeCache:
             return LiveRuntimeSnapshot(
                 account=self._account,
                 cash_carry=self._cash_carry,
+                alpha_alert=self._alpha_alert,
                 mt4_spread_opportunities=self._mt4_spread_opportunities,
                 mt4_spread_candidates=self._mt4_spread_candidates,
                 mt4_spread_issues=self._mt4_spread_issues,
@@ -113,6 +119,7 @@ class LiveRuntimeCache:
                 threading.Thread(target=self._cash_carry_loop, args=(20.0,), daemon=True, name="cash-carry-loop").start()
             if _mt4_spread_runtime_enabled():
                 threading.Thread(target=self._mt4_spread_loop, args=(10.0,), daemon=True, name="mt4-spread-loop").start()
+            threading.Thread(target=self._alpha_alert_loop, args=(5.0,), daemon=True, name="alpha-alert-loop").start()
             threading.Thread(target=self._memory_guard_loop, daemon=True, name="runtime-memory-guard").start()
 
     def _account_loop(self) -> None:
@@ -169,6 +176,14 @@ class LiveRuntimeCache:
                 self._mt4_spread_candidates = candidates
                 self._mt4_spread_issues = issues
             time.sleep(MT4_SCAN_SECONDS)
+
+    def _alpha_alert_loop(self, initial_delay: float = 0.0) -> None:
+        time.sleep(initial_delay)
+        while True:
+            result = self.alpha_scanner.scan(self._settings)
+            with self._lock:
+                self._alpha_alert = result
+            time.sleep(ALPHA_ALERT_SCAN_SECONDS)
 
     def _memory_guard_loop(self) -> None:
         while True:

@@ -59,6 +59,8 @@ class ArbitrageEngine:
         cash_prices = (live_runtime.cash_carry.opportunities + live_runtime.cash_carry.candidates) if live_runtime else []
         cash_opps = live_runtime.cash_carry.opportunities if live_runtime else []
         cash_candidates = live_runtime.cash_carry.candidates if live_runtime else []
+        alpha_opps = live_runtime.alpha_alert.opportunities if live_runtime else []
+        alpha_candidates = live_runtime.alpha_alert.candidates if live_runtime else []
         mt4_opps = live_runtime.mt4_spread_opportunities if live_runtime else []
         mt4_candidates = live_runtime.mt4_spread_candidates if live_runtime else []
         cash_positions = self._cash_positions_snapshot(positions, cash_prices, settings) if live_enabled else []
@@ -66,6 +68,7 @@ class ArbitrageEngine:
             settings,
             live_runtime.account.issues if live_runtime else [],
             live_runtime.cash_carry.issues if live_runtime else [],
+            live_runtime.alpha_alert.issues if live_runtime else [],
             live_runtime.mt4_spread_issues if live_runtime else [],
             cash_positions,
         )
@@ -75,6 +78,8 @@ class ArbitrageEngine:
             cash_carry_opportunities=cash_opps,
             cash_carry_candidates=cash_candidates,
             cash_carry_positions=cash_positions,
+            alpha_alert_opportunities=alpha_opps,
+            alpha_alert_candidates=alpha_candidates,
             mt4_spread_opportunities=mt4_opps,
             mt4_spread_candidates=mt4_candidates,
             trades=self.get_trades(),
@@ -142,6 +147,7 @@ class ArbitrageEngine:
         settings: BotSettings,
         live_issues: list[str] | None = None,
         cash_carry_issues: list[str] | None = None,
+        alpha_alert_issues: list[str] | None = None,
         mt4_spread_issues: list[str] | None = None,
         cash_carry_positions: list[CashCarryPositionRow] | None = None,
     ) -> list[RiskEvent]:
@@ -159,6 +165,8 @@ class ArbitrageEngine:
             events.append(RiskEvent(id=f"live-issue-{index}", severity="warning", title="交易所只读接口异常", detail=issue, action="检查 API 权限、IP 白名单、账户类型和交易所服务状态。", created_at=now))
         for index, issue in enumerate(cash_carry_issues or []):
             events.append(RiskEvent(id=f"cash-carry-issue-{index}", severity="warning", title="期现扫描接口异常", detail=issue, action="检查同所现货、合约行情和资金费率接口。", created_at=now))
+        for index, issue in enumerate(alpha_alert_issues or []):
+            events.append(RiskEvent(id=f"alpha-alert-issue-{index}", severity="warning", title="币安 Alpha 提醒异常", detail=issue, action="检查币安 Alpha 公共行情接口和服务器网络。", created_at=now))
         for index, issue in enumerate(mt4_spread_issues or []):
             events.append(RiskEvent(id=f"mt4-spread-issue-{index}", severity="warning", title="MT4 价差扫描异常", detail=issue, action="检查 MT4 插件报价推送、品种映射和交易所合约行情接口。", created_at=now))
         events.extend(self._cash_carry_add_config_events(settings, now))
@@ -232,6 +240,7 @@ class ArbitrageEngine:
             "cash_carry_auto_open": settings.cash_carry_auto_open_enabled,
             "cash_carry_auto_trade": settings.cash_carry_auto_trade_enabled,
             "cash_carry_auto_close": settings.cash_carry_auto_close_enabled,
+            "alpha_alert_enabled": settings.alpha_alert_enabled,
             "mt4_spread_enabled": settings.mt4_spread_enabled,
             "manual_confirm_required": settings.manual_confirm_required,
         }
@@ -244,6 +253,7 @@ class ArbitrageEngine:
                 "take_profit_usdt": str(settings.take_profit_usdt),
                 "stop_loss_usdt": str(settings.stop_loss_usdt),
                 "add_notional_usdt": str(settings.add_notional_usdt),
+                "alpha_alert_min_basis_pct": str(settings.alpha_alert_min_basis_pct),
             },
         }
 

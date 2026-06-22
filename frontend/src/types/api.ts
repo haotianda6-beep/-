@@ -72,6 +72,32 @@ export type CashCarryOpportunity = {
   updated_at: string;
 };
 
+export type AlphaCarryOpportunity = {
+  symbol: string;
+  alpha_symbol: string;
+  alpha_trade_symbol: string;
+  alpha_id: string;
+  alpha_name: string;
+  chain_name: string;
+  contract_address: string;
+  perp_symbol: string;
+  alpha_price: string;
+  perp_bid_price: string;
+  perp_ask_price: string;
+  basis_pct: string;
+  funding_rate_pct: string;
+  alpha_volume_24h_usdt: string;
+  perp_volume_24h_usdt: string;
+  notional_usdt: string;
+  estimated_basis_profit: string;
+  estimated_funding_income: string;
+  estimated_fee_reserve: string;
+  estimated_net_profit: string;
+  blocked_reasons: string[];
+  data_source: "mock" | "live";
+  updated_at: string;
+};
+
 export type TradeHistory = {
   trade_pair_id: string;
   strategy_type: "cash_carry" | "mt4_spread";
@@ -114,6 +140,12 @@ export type BotSettings = {
   mt4_notional_usdt: string;
   mt4_default_leverage: string;
   mt4_max_quote_age_seconds: string;
+  alpha_alert_enabled: boolean;
+  alpha_alert_notional_usdt: string;
+  alpha_alert_min_basis_pct: string;
+  alpha_alert_min_funding_rate_pct: string;
+  alpha_alert_min_volume_usdt: string;
+  alpha_alert_fee_reserve_pct: string;
   take_profit_usdt: string;
   stop_loss_usdt: string;
   max_slippage_pct: string;
@@ -210,6 +242,8 @@ export type RealtimeSnapshot = {
   cash_carry_opportunities: CashCarryOpportunity[];
   cash_carry_candidates: CashCarryOpportunity[];
   cash_carry_positions: CashCarryPositionRow[];
+  alpha_alert_opportunities: AlphaCarryOpportunity[];
+  alpha_alert_candidates: AlphaCarryOpportunity[];
   mt4_spread_opportunities: Mt4SpreadOpportunity[];
   mt4_spread_candidates: Mt4SpreadOpportunity[];
   trades: TradeHistory[];
