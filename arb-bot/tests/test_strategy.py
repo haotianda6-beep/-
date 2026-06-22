@@ -21,7 +21,7 @@ from app.models import (
 from app.mt4_bridge import Mt4Bridge
 from app.risk import RiskManager
 from app.storage import Storage
-from app.strategy import StrategyEngine, build_entry_plan
+from app.strategy import MIN_ADD_AFTER_OPEN_MS, StrategyEngine, build_entry_plan
 
 
 def settings(tmp_path, **kwargs) -> Settings:
@@ -362,6 +362,56 @@ async def test_mt4_failure_triggers_emergency_close(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_late_mt4_fill_after_emergency_is_closed_as_orphan(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path, settings_kwargs={"MAX_HEDGE_DELAY_MS": 1})
+    await engine.step()
+    order = engine.active_order
+    assert order is not None
+    await client.simulate_fill(order.order_id, Decimal("1"), Decimal("2002"))
+    await engine.step()
+    command = mt4.next_command()
+    assert command["action"] == "BUY"
+
+    engine.hedge_started_ms = utc_now_ms() - 2
+    await engine.step()
+
+    assert engine.state == StrategyState.PAUSED
+    emergency = [item for item in client._orders.values() if item.is_maker is False and item.reduce_only]
+    assert emergency
+    mt4.submit_report(
+        Mt4Report(
+            command_id=command["command_id"],
+            status="ok",
+            action="BUY",
+            ticket=333333,
+            fill_price=Decimal("2000"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await engine.step()
+
+    close_command = mt4.next_command()
+    assert close_command["action"] == "CLOSE"
+    assert close_command["ticket"] == 333333
+    assert engine.state == StrategyState.PAUSED
+    assert engine.orphan_close_commands == {close_command["command_id"]: 333333}
+
+    mt4.submit_report(
+        Mt4Report(
+            command_id=close_command["command_id"],
+            status="ok",
+            action="CLOSE",
+            ticket=333333,
+            fill_price=Decimal("2000"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await engine.step()
+
+    assert engine.orphan_close_commands == {}
+
+
+@pytest.mark.asyncio
 async def test_exit_closes_mt4_ticket_instead_of_opening_reverse_order(tmp_path):
     engine, client, mt4 = await make_engine(tmp_path)
     await engine.step()
@@ -586,6 +636,39 @@ async def test_negative_mt4_swap_does_not_exit_when_convergence_still_profitable
 
 
 @pytest.mark.asyncio
+async def test_add_position_waits_after_initial_open(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        PositionTrackingPaperClient,
+        settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 2},
+    )
+    await open_live_pair(engine, client, mt4, ticket=111111)
+    client.set_quote(Decimal("2002"), Decimal("2003"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("2000"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+            account_margin=Decimal("4.34"),
+        )
+    )
+
+    await engine.step()
+
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.active_order is None
+
+    age_open_pair_for_add(engine)
+    await engine.step()
+
+    assert engine.active_order is not None
+    assert engine.adding_to_pair is True
+
+
+@pytest.mark.asyncio
 async def test_add_position_keeps_existing_direction_when_edge_grows(tmp_path):
     engine, client, mt4 = await make_engine(
         tmp_path,
@@ -593,6 +676,7 @@ async def test_add_position_keeps_existing_direction_when_edge_grows(tmp_path):
         settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 2},
     )
     await open_live_pair(engine, client, mt4, ticket=111111)
+    age_open_pair_for_add(engine)
     assert engine.open_pair is not None
     assert engine.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG
 
@@ -655,6 +739,7 @@ async def test_exit_after_add_closes_all_mt4_tickets(tmp_path):
         settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 2},
     )
     await open_live_pair(engine, client, mt4, ticket=111111)
+    age_open_pair_for_add(engine)
     client.set_quote(Decimal("2002"), Decimal("2003"))
     mt4.update_tick(
         Mt4Tick(
@@ -750,6 +835,7 @@ async def test_add_position_uses_dollar_growth_not_relative_growth(tmp_path):
         settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 2},
     )
     await open_live_pair(engine, client, mt4, ticket=111111)
+    age_open_pair_for_add(engine)
 
     client.set_quote(Decimal("2001.01"), Decimal("2002.02"))
     mt4.update_tick(
@@ -777,6 +863,7 @@ async def test_add_position_trigger_uses_actual_initial_entry_spread(tmp_path):
         settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 2},
     )
     await open_live_pair(engine, client, mt4, ticket=111111, mt4_fill_price=Decimal("2000.5"))
+    age_open_pair_for_add(engine)
     assert engine.open_pair is not None
     assert engine.open_pair.base_edge == Decimal("1.5")
 
@@ -813,6 +900,7 @@ async def test_add_position_trigger_recalculates_legacy_pair_actual_spread(tmp_p
         binance_order_id="legacy",
         mt4_ticket=111111,
         mt4_tickets=[111111],
+        opened_ms=utc_now_ms() - MIN_ADD_AFTER_OPEN_MS,
         base_edge=Decimal("2"),
         last_add_edge=Decimal("2"),
         add_count=0,
@@ -857,6 +945,7 @@ async def test_add_position_records_actual_add_fill_spread(tmp_path):
         settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 2},
     )
     await open_live_pair(engine, client, mt4, ticket=111111)
+    age_open_pair_for_add(engine)
     client.set_quote(Decimal("2002"), Decimal("2003"))
     mt4.update_tick(
         Mt4Tick(
@@ -1104,6 +1193,11 @@ async def open_live_pair(
     )
     await engine.step()
     assert engine.state == StrategyState.PAIR_OPEN
+
+
+def age_open_pair_for_add(engine) -> None:
+    assert engine.open_pair is not None
+    engine.open_pair = engine.open_pair.model_copy(update={"opened_ms": utc_now_ms() - MIN_ADD_AFTER_OPEN_MS})
 
 
 async def make_engine(tmp_path, client_cls=PaperBinanceClient, settings_kwargs=None):

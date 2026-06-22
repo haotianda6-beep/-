@@ -124,6 +124,9 @@ def _binance_order_missing(exc: BinanceError) -> bool:
     return "-2013" in text or "-2011" in text or "Order does not exist" in text or "Unknown order" in text
 
 
+MIN_ADD_AFTER_OPEN_MS = 30_000
+
+
 class StrategyEngine:
     def __init__(
         self,
@@ -152,6 +155,7 @@ class StrategyEngine:
         self.adding_to_pair = False
         self.pending_close_tickets: set[int] = set()
         self.pending_close_commands: dict[str, int] = {}
+        self.orphan_close_commands: dict[str, int] = {}
         self.exit_force_reason: str | None = None
         self.last_error: str | None = None
         self._close_trigger_cache_ms = 0
@@ -208,6 +212,9 @@ class StrategyEngine:
 
     def resume(self) -> None:
         if self.state != StrategyState.PAUSED:
+            return
+        if self.orphan_close_commands:
+            self.last_error = "多余 MT4 单平仓命令未确认，暂不能恢复自动挂单"
             return
         if self.open_pair:
             self.active_plan = None
@@ -549,8 +556,31 @@ class StrategyEngine:
     async def _handle_mt4_reports(self) -> None:
         for report in self.mt4.drain_reports():
             self.storage.record_event("mt4_report", report.model_dump(mode="json"))
+            if report.command_id in self.orphan_close_commands:
+                ticket = self.orphan_close_commands.pop(report.command_id)
+                if report.status != "ok":
+                    self.state = StrategyState.PAUSED
+                    self.last_error = f"多余 MT4 单 {ticket} 自动平仓失败，需人工确认：{report.message or report.error_code or '未知错误'}"
+                    self.storage.record_event(
+                        "orphan_mt4_close_failed",
+                        {
+                            "command_id": report.command_id,
+                            "ticket": ticket,
+                            "message": report.message,
+                            "error_code": report.error_code,
+                        },
+                    )
+                else:
+                    self.storage.record_event(
+                        "orphan_mt4_close_confirmed",
+                        {"command_id": report.command_id, "ticket": ticket, "fill_price": str(report.fill_price)},
+                    )
+                continue
             if self.state not in {StrategyState.HEDGING_MT4, StrategyState.CLOSING_MT4}:
                 if report.status == "ok" and report.ticket is not None:
+                    if report.action in {"BUY", "SELL"} and self._is_orphan_mt4_entry_report(report):
+                        self._queue_orphan_mt4_close(report)
+                        continue
                     self.last_error = "MT4 回报晚于当前策略状态，可能存在 MT4 单腿持仓，请人工确认"
                 continue
             if report.status != "ok" or report.fill_price is None:
@@ -593,6 +623,34 @@ class StrategyEngine:
                 if not self.pending_close_tickets:
                     self.storage.record_pnl(self.open_pair.pair_id, self.open_pair.realized_pnl)
                     self._reset_all()
+
+    def _is_orphan_mt4_entry_report(self, report) -> bool:
+        if report.ticket is None or report.lots <= 0:
+            return False
+        tickets: set[int] = set()
+        if self.open_pair:
+            tickets.update(self.open_pair.mt4_tickets or [])
+            if self.open_pair.mt4_ticket is not None:
+                tickets.add(self.open_pair.mt4_ticket)
+        return report.ticket not in tickets
+
+    def _queue_orphan_mt4_close(self, report) -> None:
+        if report.ticket is None or report.lots <= 0:
+            return
+        command = self.mt4.queue_close(report.ticket, report.lots, "orphan hedge cleanup")
+        self.orphan_close_commands[command.command_id] = report.ticket
+        self.state = StrategyState.PAUSED
+        self.last_error = f"检测到晚到的 MT4 成交 {report.ticket}，已自动发送平仓命令"
+        self.storage.record_event(
+            "orphan_mt4_close_queued",
+            {
+                "ticket": report.ticket,
+                "lots": str(report.lots),
+                "action": report.action,
+                "fill_price": str(report.fill_price) if report.fill_price is not None else None,
+                "close_command_id": command.command_id,
+            },
+        )
 
     def _mark_pair_open(self, mt4_fill_price: Decimal, ticket: int | None) -> None:
         if not self.active_plan or not self.active_order:
@@ -647,6 +705,8 @@ class StrategyEngine:
         if not self.open_pair or not binance_quote or not mt4_quote:
             return False
         if self.settings.max_add_count <= 0 or self.open_pair.add_count >= self.settings.max_add_count:
+            return False
+        if utc_now_ms() - self.open_pair.opened_ms < MIN_ADD_AFTER_OPEN_MS:
             return False
         base_edge = self._last_add_edge()
         if base_edge is None:
@@ -1131,6 +1191,7 @@ class StrategyEngine:
         self.exit_force_reason = None
         self.pending_close_tickets = set()
         self.pending_close_commands = {}
+        self.orphan_close_commands = {}
         self.hedged_qty = Decimal("0")
         self.pending_hedge_qty = Decimal("0")
         self.hedge_started_ms = 0
