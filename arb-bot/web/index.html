@@ -1153,7 +1153,8 @@
         const current = metrics.current_exit_spread !== null && metrics.current_exit_spread !== undefined ? `当前平仓价差 ${fmt(metrics.current_exit_spread)} 美元，` : "";
         const trigger = metrics.dynamic_close_spread !== null && metrics.dynamic_close_spread !== undefined ? `；自动平仓触发 ${fmt(metrics.dynamic_close_spread)} 美元以内` : "";
         const profit = metrics.close_profit_usd_per_oz !== null && metrics.close_profit_usd_per_oz !== undefined ? `，额外利润空间 ${fmt(metrics.close_profit_usd_per_oz)} 美元/盎司` : "";
-        return `${current}保本价差 ${fmt(metrics.profitable_spread_threshold)} 美元${profit}${trigger}`;
+        const follow = metrics.exit_follow_buffer_usd_per_oz !== null && metrics.exit_follow_buffer_usd_per_oz !== undefined && Number(metrics.exit_follow_buffer_usd_per_oz) > 0 ? `，MT4跟随保护 ${fmt(metrics.exit_follow_buffer_usd_per_oz)} 美元/盎司` : "";
+        return `${current}保本价差 ${fmt(metrics.profitable_spread_threshold)} 美元${profit}${follow}${trigger}`;
       }
 
       function renderMt4Swap(metrics, pair) {

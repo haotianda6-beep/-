@@ -322,6 +322,7 @@ class PositionMetrics(BaseModel):
     profitable_spread_threshold: Decimal | None = None
     dynamic_close_spread: Decimal | None = None
     close_profit_usd_per_oz: Decimal | None = None
+    exit_follow_buffer_usd_per_oz: Decimal | None = None
     binance_accrued_funding: Decimal | None = None
     binance_funding_rate: Decimal | None = None
     binance_next_funding_time_ms: int | None = None

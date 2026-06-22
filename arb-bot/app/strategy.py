@@ -711,6 +711,9 @@ class StrategyEngine:
             return
         if not force and not await self._close_spread_ready(binance_quote, mt4_quote):
             return
+        current_spread = self._current_exit_spread(binance_quote, mt4_quote)
+        break_even_spread = await self._break_even_spread()
+        trigger_spread = await self._close_trigger_spread()
         if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             side = Side.BUY
             price = round_down(binance_quote.bid, self.binance.filters.tick_size)
@@ -731,6 +734,19 @@ class StrategyEngine:
             )
         )
         if order.status != OrderStatus.REJECTED:
+            self.storage.record_event(
+                "exit_order",
+                {
+                    **order.model_dump(mode="json"),
+                    "force": force,
+                    "reason": reason,
+                    "current_spread": str(current_spread) if current_spread is not None else None,
+                    "break_even_spread": str(break_even_spread) if break_even_spread is not None else None,
+                    "trigger_spread": str(trigger_spread) if trigger_spread is not None else None,
+                    "exit_follow_buffer": str(self._exit_follow_buffer_usd_per_oz()),
+                    "close_profit_usd_per_oz": str(self.settings.close_profit_usd_per_oz),
+                },
+            )
             self.active_order = order
             self.order_created_ms = utc_now_ms()
             self.exit_force_reason = reason if force else None
@@ -769,6 +785,17 @@ class StrategyEngine:
                 )
             return
         self.active_order = order
+        binance_quote = self.binance.latest_quote()
+        mt4_quote = self.mt4.latest_quote()
+        self.storage.record_event(
+            "exit_order_filled",
+            {
+                **order.model_dump(mode="json"),
+                "current_spread": str(self._current_exit_spread(binance_quote, mt4_quote)) if binance_quote and mt4_quote else None,
+                "mt4_bid": str(mt4_quote.bid) if mt4_quote else None,
+                "mt4_ask": str(mt4_quote.ask) if mt4_quote else None,
+            },
+        )
         if self.settings.is_dry_run:
             self.storage.record_pnl(self.open_pair.pair_id, self.open_pair.realized_pnl)
             self._reset_all()
@@ -941,7 +968,7 @@ class StrategyEngine:
         if break_even is None:
             trigger = None
         else:
-            trigger = break_even - self.settings.close_profit_usd_per_oz
+            trigger = break_even - self.settings.close_profit_usd_per_oz - self._exit_follow_buffer_usd_per_oz()
         self._close_trigger_cache = trigger
         self._close_trigger_cache_ms = now
         return trigger
@@ -965,6 +992,10 @@ class StrategyEngine:
         accrued_swap = self._mt4_accrued_swap() or Decimal("0")
         estimated_fees = self._estimated_round_trip_fees(binance_entry)
         return entry_spread + ((funding + accrued_swap - estimated_fees) / self.open_pair.quantity_oz)
+
+    def _exit_follow_buffer_usd_per_oz(self) -> Decimal:
+        point = self.mt4.latest_swap_info().point or Decimal("0.01")
+        return Decimal(self.settings.mt4_slippage_points) * point
 
     async def _binance_funding_income_since_open(self) -> Decimal:
         if not self.open_pair or self.settings.is_dry_run:

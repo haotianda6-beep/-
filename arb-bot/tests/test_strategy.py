@@ -795,7 +795,7 @@ async def test_dry_run_does_not_send_real_mt4_order(tmp_path):
 async def test_close_trigger_uses_actual_entry_spread_without_close_max_cap(tmp_path):
     engine, client, mt4 = await make_engine(
         tmp_path,
-        settings_kwargs={"CLOSE_MAX_SPREAD": Decimal("1.0"), "CLOSE_PROFIT_USD_PER_OZ": Decimal("0.8")},
+        settings_kwargs={"CLOSE_MAX_SPREAD": Decimal("1.0"), "CLOSE_PROFIT_USD_PER_OZ": Decimal("0.8"), "MT4_SLIPPAGE_POINTS": 0},
     )
     client.maker_fee_rate = Decimal("0")
     engine.open_pair = OpenPair(
@@ -812,6 +812,45 @@ async def test_close_trigger_uses_actual_entry_spread_without_close_max_cap(tmp_
             symbol="XAUUSD",
             bid=Decimal("4175"),
             ask=Decimal("4175.3"),
+            positions=[
+                Mt4Position(
+                    ticket=76804334,
+                    symbol="XAUUSD",
+                    side=Side.BUY,
+                    lots=Decimal("0.01"),
+                    open_price=Decimal("4176.67"),
+                )
+            ],
+        )
+    )
+
+    trigger = await engine._close_trigger_spread()
+
+    assert trigger == Decimal("1.12")
+
+
+@pytest.mark.asyncio
+async def test_close_trigger_reserves_mt4_follow_slippage_buffer(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        settings_kwargs={"CLOSE_PROFIT_USD_PER_OZ": Decimal("0.3"), "MT4_SLIPPAGE_POINTS": 50},
+    )
+    client.maker_fee_rate = Decimal("0")
+    engine.open_pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("4178.59"),
+        mt4_entry_price=Decimal("4176.67"),
+        binance_order_id="entry-1",
+        mt4_ticket=76804334,
+        mt4_tickets=[76804334],
+    )
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("4175"),
+            ask=Decimal("4175.3"),
+            point=Decimal("0.01"),
             positions=[
                 Mt4Position(
                     ticket=76804334,
