@@ -939,9 +939,9 @@ class StrategyEngine:
             return self._close_trigger_cache
         break_even = await self._break_even_spread()
         if break_even is None:
-            trigger = self.settings.close_max_spread
+            trigger = None
         else:
-            trigger = min(self.settings.close_max_spread, break_even - self.settings.close_profit_usd_per_oz)
+            trigger = break_even - self.settings.close_profit_usd_per_oz
         self._close_trigger_cache = trigger
         self._close_trigger_cache_ms = now
         return trigger

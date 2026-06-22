@@ -247,6 +247,7 @@ async def download_ea() -> FileResponse:
 
 @app.get("/status", response_model=EngineStatus)
 async def status() -> EngineStatus:
+    metrics = await _position_metrics()
     return EngineStatus(
         state=strategy.state,
         live_trading=settings.live_trading,
@@ -264,8 +265,8 @@ async def status() -> EngineStatus:
         binance_quote=binance_client.latest_quote(),
         mt4_quote=mt4_bridge.latest_quote(),
         open_pair=strategy.open_pair,
-        position_metrics=await _position_metrics(),
-        execution_plan=_execution_plan(),
+        position_metrics=metrics,
+        execution_plan=_execution_plan(metrics),
         last_error=strategy.last_error,
         config=_runtime_config(),
     )
@@ -1084,7 +1085,7 @@ def _profitable_spread_threshold(
 def _dynamic_close_spread(profitable_spread_threshold: Decimal | None) -> Decimal | None:
     if profitable_spread_threshold is None:
         return None
-    return min(settings.close_max_spread, profitable_spread_threshold - settings.close_profit_usd_per_oz)
+    return profitable_spread_threshold - settings.close_profit_usd_per_oz
 
 
 def _estimate_binance_funding(pair, qty: Decimal, funding, quote: MarketQuote | None) -> Decimal | None:
@@ -1152,7 +1153,7 @@ def _estimate_binance_fees(pair, binance_quote: MarketQuote | None, binance_entr
     return (entry_price * qty + exit_price * qty) * abs(fee_rate)
 
 
-def _execution_plan() -> ExecutionPlanStatus:
+def _execution_plan(metrics: PositionMetrics | None = None) -> ExecutionPlanStatus:
     max_follow_seconds = Decimal(settings.max_hedge_delay_ms) / Decimal("1000")
     order = strategy.active_order
     plan = strategy.active_plan
@@ -1230,23 +1231,19 @@ def _execution_plan() -> ExecutionPlanStatus:
                 max_follow_seconds=max_follow_seconds,
             )
         spread = _current_exit_spread(pair, binance_quote, mt4_quote)
-        raw_break_even = _profitable_spread_threshold(
-            pair,
-            _actual_entry_spread(pair, pair.binance_entry_price, pair.mt4_entry_price),
-            Decimal("0"),
-            _mt4_accrued_swap(pair),
-            Decimal("0"),
-        )
-        trigger_spread = _dynamic_close_spread(raw_break_even) if raw_break_even is not None else settings.close_max_spread
-        close_ready = spread is not None and spread <= trigger_spread
+        trigger_spread = metrics.dynamic_close_spread if metrics else None
+        break_even = metrics.profitable_spread_threshold if metrics else None
+        close_ready = spread is not None and trigger_spread is not None and spread <= trigger_spread
         if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             side = Side.BUY
             price = round_down(binance_quote.bid, binance_client.filters.tick_size)
         else:
             side = Side.SELL
             price = round_up(binance_quote.ask, binance_client.filters.tick_size)
+        trigger_text = f"{trigger_spread:.4f} 美元" if trigger_spread is not None else "等待实盘入场价确认"
+        break_even_text = f"{break_even:.4f} 美元" if break_even is not None else "等待确认"
         return ExecutionPlanStatus(
-            summary=f"平仓逻辑：动态保本价差减 {settings.close_profit_usd_per_oz} 美元利润空间，当前触发价差 {trigger_spread:.4f} 美元；币安挂 {_side_text(side)} 限价 {price}；当前平仓价差 {spread if spread is not None else '-'}，{'已满足' if close_ready else '未满足'}。{add_summary}",
+            summary=f"平仓逻辑：按实盘进场价差计算，保本价差 {break_even_text}，再扣 {settings.close_profit_usd_per_oz} 美元/盎司利润空间，当前触发价差 {trigger_text}；币安挂 {_side_text(side)} 限价 {price}；当前平仓价差 {spread if spread is not None else '-'}，{'已满足' if close_ready else '未满足'}。{add_summary}",
             binance_order_side=side,
             binance_order_price=price,
             binance_order_qty=pair.quantity_oz,
