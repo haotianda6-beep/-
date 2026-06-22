@@ -601,23 +601,27 @@ class StrategyEngine:
         if self.adding_to_pair and self.open_pair:
             old_qty = self.open_pair.quantity_oz
             new_qty = old_qty + active_qty
+            binance_entry_price = ((self.open_pair.binance_entry_price * old_qty) + (self.active_order.avg_price * active_qty)) / new_qty
+            mt4_entry_price = ((self.open_pair.mt4_entry_price * old_qty) + (mt4_fill_price * active_qty)) / new_qty
+            add_edge = self._entry_spread(self.open_pair.direction, self.active_order.avg_price, mt4_fill_price)
             tickets = list(self.open_pair.mt4_tickets or ([] if self.open_pair.mt4_ticket is None else [self.open_pair.mt4_ticket]))
             if ticket is not None:
                 tickets.append(ticket)
             self.open_pair = self.open_pair.model_copy(
                 update={
                     "quantity_oz": new_qty,
-                    "binance_entry_price": ((self.open_pair.binance_entry_price * old_qty) + (self.active_order.avg_price * active_qty)) / new_qty,
-                    "mt4_entry_price": ((self.open_pair.mt4_entry_price * old_qty) + (mt4_fill_price * active_qty)) / new_qty,
+                    "binance_entry_price": binance_entry_price,
+                    "mt4_entry_price": mt4_entry_price,
                     "binance_order_id": self.active_order.order_id,
                     "mt4_ticket": tickets[0] if tickets else None,
                     "mt4_tickets": tickets,
                     "add_count": self.open_pair.add_count + 1,
-                    "last_add_edge": self.active_plan.edge,
+                    "last_add_edge": add_edge,
                 }
             )
         else:
             tickets = [] if ticket is None else [ticket]
+            entry_edge = self._entry_spread(self.active_plan.direction, self.active_order.avg_price, mt4_fill_price)
             self.open_pair = OpenPair(
                 direction=self.active_plan.direction,
                 quantity_oz=active_qty,
@@ -626,8 +630,8 @@ class StrategyEngine:
                 binance_order_id=self.active_order.order_id,
                 mt4_ticket=ticket,
                 mt4_tickets=tickets,
-                base_edge=self.active_plan.edge,
-                last_add_edge=self.active_plan.edge,
+                base_edge=entry_edge,
+                last_add_edge=entry_edge,
             )
         self.active_plan = None
         self.active_order = None
@@ -693,7 +697,22 @@ class StrategyEngine:
     def _last_add_edge(self) -> Decimal | None:
         if not self.open_pair:
             return None
+        if self.open_pair.add_count == 0:
+            actual = self._current_pair_entry_spread()
+            if actual is not None:
+                return actual
         return self.open_pair.last_add_edge or self.open_pair.base_edge
+
+    def _entry_spread(self, direction: PairDirection, binance_entry: Decimal, mt4_entry: Decimal) -> Decimal:
+        if direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            return binance_entry - mt4_entry
+        return mt4_entry - binance_entry
+
+    def _current_pair_entry_spread(self) -> Decimal | None:
+        if not self.open_pair:
+            return None
+        mt4_entry = self._mt4_average_entry_price() or self.open_pair.mt4_entry_price
+        return self._entry_spread(self.open_pair.direction, self.open_pair.binance_entry_price, mt4_entry)
 
     def _current_edge(self, direction: PairDirection, binance_quote: MarketQuote, mt4_quote: MarketQuote) -> Decimal:
         if direction == PairDirection.BINANCE_SHORT_MT4_LONG:

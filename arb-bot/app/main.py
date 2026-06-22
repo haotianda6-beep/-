@@ -1212,7 +1212,7 @@ def _execution_plan(metrics: PositionMetrics | None = None) -> ExecutionPlanStat
                 max_follow_seconds=max_follow_seconds,
             )
         if pair and binance_quote and mt4_quote:
-            add_summary = _pair_add_summary(pair, binance_quote, mt4_quote)
+            add_summary = _pair_add_summary(pair, binance_quote, mt4_quote, metrics)
             swap_summary = _negative_swap_close_summary(pair)
             return ExecutionPlanStatus(
                 summary=f"系统因风控硬暂停，不会自动补仓或平仓；当前仍有组合持仓。{swap_summary or add_summary}",
@@ -1241,8 +1241,8 @@ def _execution_plan(metrics: PositionMetrics | None = None) -> ExecutionPlanStat
                 mt4_follow_side=Side.BUY,
                 max_follow_seconds=max_follow_seconds,
             )
-        add_summary = _pair_add_summary(pair, binance_quote, mt4_quote)
-        add_plan = _pair_add_plan(pair, binance_quote, mt4_quote)
+        add_summary = _pair_add_summary(pair, binance_quote, mt4_quote, metrics)
+        add_plan = _pair_add_plan(pair, binance_quote, mt4_quote, metrics)
         if add_plan:
             return ExecutionPlanStatus(
                 summary=f"补仓条件已满足：{add_summary}；币安将同向挂 {_side_text(add_plan.binance_side)} 限价 {add_plan.limit_price}，数量 {add_plan.quantity_oz} XAU；成交后 MT4 同向 {_side_text(add_plan.mt4_hedge_side)} 市价跟随。",
@@ -1302,27 +1302,37 @@ def _execution_plan(metrics: PositionMetrics | None = None) -> ExecutionPlanStat
     return ExecutionPlanStatus(summary="等待 Binance 和 MT4 报价齐全。", max_follow_seconds=max_follow_seconds)
 
 
-def _pair_add_plan(pair, binance_quote: MarketQuote, mt4_quote: MarketQuote):
+def _pair_add_plan(pair, binance_quote: MarketQuote, mt4_quote: MarketQuote, metrics: PositionMetrics | None = None):
     if settings.max_add_count <= 0 or pair.add_count >= settings.max_add_count:
         return None
-    base_edge = pair.last_add_edge or pair.base_edge
+    base_edge = _pair_add_base_edge(pair, metrics)
     if base_edge is None:
         return None
     trigger_edge = base_edge + settings.add_edge_growth_usd
     return build_directional_entry_plan(settings, binance_client.filters, binance_quote, mt4_quote, pair.direction, trigger_edge)
 
 
-def _pair_add_summary(pair, binance_quote: MarketQuote, mt4_quote: MarketQuote) -> str:
+def _pair_add_summary(pair, binance_quote: MarketQuote, mt4_quote: MarketQuote, metrics: PositionMetrics | None = None) -> str:
     if settings.max_add_count <= 0:
         return "补仓已关闭。"
     if pair.add_count >= settings.max_add_count:
         return f"补仓次数 {pair.add_count}/{settings.max_add_count}，已达上限。"
-    base_edge = pair.last_add_edge or pair.base_edge
+    base_edge = _pair_add_base_edge(pair, metrics)
     if base_edge is None:
         return "补仓基准价差缺失，暂不补仓。"
     trigger_edge = base_edge + settings.add_edge_growth_usd
     current_edge = binance_quote.ask - mt4_quote.ask if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else mt4_quote.bid - binance_quote.bid
-    return f"补仓观察：已补 {pair.add_count}/{settings.max_add_count} 次，上次价差 {base_edge:.4f} 美元，下次触发 {trigger_edge:.4f} 美元，当前同向价差 {current_edge:.4f} 美元。"
+    label = "上次补仓实际价差" if pair.add_count > 0 else "首仓实际价差"
+    return f"补仓观察：已补 {pair.add_count}/{settings.max_add_count} 次，{label} {base_edge:.4f} 美元，下次触发 {trigger_edge:.4f} 美元，当前同向价差 {current_edge:.4f} 美元。"
+
+
+def _pair_add_base_edge(pair, metrics: PositionMetrics | None = None) -> Decimal | None:
+    if pair.add_count == 0:
+        if metrics and metrics.actual_entry_spread is not None:
+            return metrics.actual_entry_spread
+        mt4_entry, _lots = _mt4_average_entry_price(pair)
+        return _actual_entry_spread(pair, pair.binance_entry_price, mt4_entry or pair.mt4_entry_price)
+    return pair.last_add_edge or pair.base_edge
 
 
 def _negative_swap_close_summary(pair) -> str | None:

@@ -770,6 +770,131 @@ async def test_add_position_uses_dollar_growth_not_relative_growth(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_add_position_trigger_uses_actual_initial_entry_spread(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        PositionTrackingPaperClient,
+        settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 2},
+    )
+    await open_live_pair(engine, client, mt4, ticket=111111, mt4_fill_price=Decimal("2000.5"))
+    assert engine.open_pair is not None
+    assert engine.open_pair.base_edge == Decimal("1.5")
+
+    client.set_quote(Decimal("2001.6"), Decimal("2002.6"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("2000"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000.5")),
+            ],
+            account_margin=Decimal("4.34"),
+        )
+    )
+    await engine.step()
+
+    assert engine.active_order is not None
+    assert engine.adding_to_pair is True
+
+
+@pytest.mark.asyncio
+async def test_add_position_trigger_recalculates_legacy_pair_actual_spread(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        PositionTrackingPaperClient,
+        settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 2},
+    )
+    engine.open_pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("2002"),
+        mt4_entry_price=Decimal("2000"),
+        binance_order_id="legacy",
+        mt4_ticket=111111,
+        mt4_tickets=[111111],
+        base_edge=Decimal("2"),
+        last_add_edge=Decimal("2"),
+        add_count=0,
+    )
+    engine.state = StrategyState.PAIR_OPEN
+    client._orders.clear()
+    client._orders["legacy"] = OrderUpdate(
+        order_id="legacy",
+        client_order_id="legacy",
+        symbol="XAUUSDT",
+        side=Side.SELL,
+        status=OrderStatus.FILLED,
+        price=Decimal("2002"),
+        orig_qty=Decimal("1"),
+        executed_qty=Decimal("1"),
+        avg_price=Decimal("2002"),
+    )
+    client.set_quote(Decimal("2001.6"), Decimal("2002.6"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("2000"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000.5")),
+            ],
+            account_margin=Decimal("4.34"),
+        )
+    )
+
+    await engine.step()
+
+    assert engine.active_order is not None
+    assert engine.adding_to_pair is True
+
+
+@pytest.mark.asyncio
+async def test_add_position_records_actual_add_fill_spread(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        PositionTrackingPaperClient,
+        settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 2},
+    )
+    await open_live_pair(engine, client, mt4, ticket=111111)
+    client.set_quote(Decimal("2002"), Decimal("2003"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("2000"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+            account_margin=Decimal("4.34"),
+        )
+    )
+    await engine.step()
+
+    add_order = engine.active_order
+    assert add_order is not None
+    assert engine.active_plan is not None
+    assert engine.active_plan.edge == Decimal("3")
+    await client.simulate_fill(add_order.order_id, Decimal("1"), Decimal("2004.2"))
+    await engine.step()
+    add_command = mt4.next_command()
+    mt4.submit_report(
+        Mt4Report(
+            command_id=add_command["command_id"],
+            status="ok",
+            action="BUY",
+            ticket=222222,
+            fill_price=Decimal("2000.2"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await engine.step()
+
+    assert engine.open_pair is not None
+    assert engine.open_pair.last_add_edge == Decimal("4.0")
+
+
+@pytest.mark.asyncio
 async def test_dry_run_does_not_send_real_mt4_order(tmp_path):
     cfg = settings(tmp_path, PAPER_MODE=True, LIVE_TRADING=False)
     client = PaperBinanceClient(cfg)
@@ -953,11 +1078,18 @@ class PositionTrackingPaperClient(PaperBinanceClient):
         return qty
 
 
-async def open_live_pair(engine, client, mt4, ticket: int = 123456):
+async def open_live_pair(
+    engine,
+    client,
+    mt4,
+    ticket: int = 123456,
+    binance_fill_price: Decimal = Decimal("2002"),
+    mt4_fill_price: Decimal = Decimal("2000"),
+):
     await engine.step()
     entry_order = engine.active_order
     assert entry_order is not None
-    await client.simulate_fill(entry_order.order_id, Decimal("1"), Decimal("2002"))
+    await client.simulate_fill(entry_order.order_id, Decimal("1"), binance_fill_price)
     await engine.step()
     entry_command = mt4.next_command()
     mt4.submit_report(
@@ -966,7 +1098,7 @@ async def open_live_pair(engine, client, mt4, ticket: int = 123456):
             status="ok",
             action="BUY",
             ticket=ticket,
-            fill_price=Decimal("2000"),
+            fill_price=mt4_fill_price,
             lots=Decimal("0.01"),
         )
     )
