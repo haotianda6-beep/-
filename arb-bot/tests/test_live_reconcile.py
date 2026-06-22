@@ -1,0 +1,59 @@
+from decimal import Decimal
+
+from app.live_reconcile import open_pair_live_reconcile_action
+from app.models import Mt4Position, OpenPair, PairDirection, Side
+
+
+def test_open_pair_reconcile_clears_when_binance_and_mt4_are_flat() -> None:
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("2"),
+        binance_entry_price=Decimal("4152.68"),
+        mt4_entry_price=Decimal("4149.47"),
+        binance_order_id="7262226459",
+        mt4_tickets=[76804334, 76805260],
+    )
+
+    action = open_pair_live_reconcile_action(pair, Decimal("0"), [], "XAUUSD")
+
+    assert action == "clear"
+
+
+def test_open_pair_reconcile_pauses_when_only_binance_is_flat() -> None:
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("2"),
+        binance_entry_price=Decimal("4152.68"),
+        mt4_entry_price=Decimal("4149.47"),
+        binance_order_id="7262226459",
+        mt4_tickets=[76804334, 76805260],
+    )
+
+    action = open_pair_live_reconcile_action(
+        pair,
+        Decimal("0"),
+        [Mt4Position(ticket=76804334, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4149.47"))],
+        "XAUUSD",
+    )
+
+    assert action == "pause"
+
+
+def test_open_pair_reconcile_ignores_other_mt4_symbols_when_xau_is_flat() -> None:
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("2"),
+        binance_entry_price=Decimal("4152.68"),
+        mt4_entry_price=Decimal("4149.47"),
+        binance_order_id="7262226459",
+        mt4_tickets=[76804334, 76805260],
+    )
+
+    action = open_pair_live_reconcile_action(
+        pair,
+        Decimal("0"),
+        [Mt4Position(ticket=1, symbol="ETHUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("3000"))],
+        "XAUUSD",
+    )
+
+    assert action == "clear"

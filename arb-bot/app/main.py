@@ -14,6 +14,7 @@ from app.binance_client import BinanceError, BinanceFuturesClient, PaperBinanceC
 from app.config import Settings, existing_env_paths, load_settings, update_local_config_file, update_mode_file
 from app.logger import setup_logging
 from app.history import build_spread_analysis
+from app.live_reconcile import open_pair_live_reconcile_action
 from app.models import (
     BinancePositionSnapshot,
     EngineStatus,
@@ -70,6 +71,7 @@ _binance_accrued_funding_cache_pair_id: str | None = None
 _binance_accrued_funding_cache_value: Decimal | None = None
 _binance_accrued_funding_cache_ms = 0
 _runtime_state_cache: str | None = None
+_live_pair_reconcile_ms = 0
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 MT4_DIR = Path(__file__).resolve().parents[1] / "mt4"
 RUNTIME_STATE_PATH = settings.sqlite_path.parent / "runtime_state.json"
@@ -789,12 +791,68 @@ async def _restart_after_response() -> None:
 async def _strategy_loop() -> None:
     while True:
         try:
-            await strategy.step()
+            if not await _reconcile_open_pair_live_state():
+                await strategy.step()
         except Exception as exc:  # noqa: BLE001
             strategy.last_error = str(exc)[:240]
             logger.exception("strategy loop error")
         _persist_runtime_state()
         await asyncio.sleep(settings.loop_interval_ms / 1000)
+
+
+async def _reconcile_open_pair_live_state() -> bool:
+    global _live_pair_reconcile_ms
+    if settings.is_dry_run or strategy.open_pair is None:
+        return False
+    if strategy.active_order is not None or strategy.state not in {StrategyState.PAIR_OPEN, StrategyState.PAUSED}:
+        return False
+    if not mt4_bridge.connected():
+        return False
+    now = _now_ms()
+    if now - _live_pair_reconcile_ms < 2000:
+        return False
+    _live_pair_reconcile_ms = now
+    try:
+        binance_qty = await binance_client.position_quantity()
+    except Exception as exc:  # noqa: BLE001
+        strategy.state = StrategyState.PAUSED
+        strategy.last_error = f"组合实盘对账失败，已暂停：{str(exc)[:120]}"
+        storage.record_event("open_pair_live_reconcile_failed", {"error": str(exc)[:160]})
+        return True
+    mt4_positions = mt4_bridge.positions()
+    action = open_pair_live_reconcile_action(strategy.open_pair, binance_qty, mt4_positions, settings.mt4_symbol)
+    if action == "clear":
+        pair = strategy.open_pair
+        storage.record_event(
+            "manual_flat_pair_cleared",
+            {
+                "pair_id": pair.pair_id,
+                "binance_position_qty": str(binance_qty),
+                "mt4_positions": [
+                    {"ticket": position.ticket, "symbol": position.symbol, "side": position.side.value, "lots": str(position.lots)}
+                    for position in mt4_positions
+                ],
+            },
+        )
+        strategy.clear_runtime_state()
+        _persist_runtime_state()
+        return True
+    if action == "pause":
+        strategy.state = StrategyState.PAUSED
+        strategy.last_error = "组合持仓与实盘不一致：币安或 MT4 已有一侧为空，已暂停，请人工确认"
+        storage.record_event(
+            "open_pair_live_mismatch_paused",
+            {
+                "pair_id": strategy.open_pair.pair_id,
+                "binance_position_qty": str(binance_qty),
+                "mt4_positions": [
+                    {"ticket": position.ticket, "symbol": position.symbol, "side": position.side.value, "lots": str(position.lots)}
+                    for position in mt4_positions
+                ],
+            },
+        )
+        return True
+    return False
 
 
 def _load_runtime_state() -> None:
