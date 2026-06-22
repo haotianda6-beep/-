@@ -361,6 +361,8 @@ class RuntimeConfig(BaseModel):
     cancel_min_edge: Decimal
     close_max_spread: Decimal
     close_profit_usd_per_oz: Decimal
+    max_pair_age_minutes: int
+    aged_close_profit_usd_per_oz: Decimal
     min_locked_edge: Decimal
     entry_confirm_ms: int
     min_order_live_ms: int
@@ -388,6 +390,8 @@ class RuntimeConfigUpdate(BaseModel):
     cancel_min_edge: Decimal | None = None
     close_max_spread: Decimal | None = None
     close_profit_usd_per_oz: Decimal | None = None
+    max_pair_age_minutes: int | None = None
+    aged_close_profit_usd_per_oz: Decimal | None = None
     min_locked_edge: Decimal | None = None
     entry_confirm_ms: int | None = None
     min_order_live_ms: int | None = None
@@ -412,6 +416,7 @@ class RuntimeConfigUpdate(BaseModel):
         "cancel_min_edge",
         "close_max_spread",
         "close_profit_usd_per_oz",
+        "aged_close_profit_usd_per_oz",
         "min_locked_edge",
         "max_unhedged_loss_usd_per_oz",
         "daily_loss_limit_usdt",
@@ -436,6 +441,7 @@ class RuntimeConfigUpdate(BaseModel):
         "loop_interval_ms",
         "paper_fill_delay_ms",
         "negative_swap_close_before_minutes",
+        "max_pair_age_minutes",
     )
     @classmethod
     def positive_int(cls, value: int | None) -> int | None:

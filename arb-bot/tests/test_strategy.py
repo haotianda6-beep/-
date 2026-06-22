@@ -868,6 +868,51 @@ async def test_close_trigger_reserves_mt4_follow_slippage_buffer(tmp_path):
     assert trigger == Decimal("1.12")
 
 
+@pytest.mark.asyncio
+async def test_aged_pair_reduces_close_profit_target_but_keeps_follow_buffer(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        settings_kwargs={
+            "CLOSE_PROFIT_USD_PER_OZ": Decimal("0.8"),
+            "AGED_CLOSE_PROFIT_USD_PER_OZ": Decimal("0.1"),
+            "MAX_PAIR_AGE_MINUTES": 60,
+            "MT4_SLIPPAGE_POINTS": 30,
+        },
+    )
+    client.maker_fee_rate = Decimal("0")
+    engine.open_pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("4178.59"),
+        mt4_entry_price=Decimal("4176.67"),
+        binance_order_id="entry-1",
+        mt4_ticket=76804334,
+        mt4_tickets=[76804334],
+        opened_ms=utc_now_ms() - 60 * 60_000,
+    )
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("4175"),
+            ask=Decimal("4175.3"),
+            point=Decimal("0.01"),
+            positions=[
+                Mt4Position(
+                    ticket=76804334,
+                    symbol="XAUUSD",
+                    side=Side.BUY,
+                    lots=Decimal("0.01"),
+                    open_price=Decimal("4176.67"),
+                )
+            ],
+        )
+    )
+
+    trigger = await engine._close_trigger_spread()
+
+    assert trigger == Decimal("1.52")
+
+
 class FillOnCancelPaperClient(PaperBinanceClient):
     async def cancel_order(self, order_id: str):
         order = self._orders.get(order_id)

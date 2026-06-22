@@ -19,6 +19,8 @@ CONFIG_FIELD_TO_ENV = {
     "cancel_min_edge": "CANCEL_MIN_EDGE",
     "close_max_spread": "CLOSE_MAX_SPREAD",
     "close_profit_usd_per_oz": "CLOSE_PROFIT_USD_PER_OZ",
+    "max_pair_age_minutes": "MAX_PAIR_AGE_MINUTES",
+    "aged_close_profit_usd_per_oz": "AGED_CLOSE_PROFIT_USD_PER_OZ",
     "min_locked_edge": "MIN_LOCKED_EDGE",
     "entry_confirm_ms": "ENTRY_CONFIRM_MS",
     "min_order_live_ms": "MIN_ORDER_LIVE_MS",
@@ -74,6 +76,8 @@ class Settings(BaseSettings):
     cancel_min_edge: Decimal = Field(default=Decimal("1.20"), alias="CANCEL_MIN_EDGE")
     close_max_spread: Decimal = Field(default=Decimal("0.30"), alias="CLOSE_MAX_SPREAD")
     close_profit_usd_per_oz: Decimal = Field(default=Decimal("0.80"), alias="CLOSE_PROFIT_USD_PER_OZ")
+    max_pair_age_minutes: int = Field(default=60, alias="MAX_PAIR_AGE_MINUTES")
+    aged_close_profit_usd_per_oz: Decimal = Field(default=Decimal("0.10"), alias="AGED_CLOSE_PROFIT_USD_PER_OZ")
     min_locked_edge: Decimal = Field(default=Decimal("0.80"), alias="MIN_LOCKED_EDGE")
     entry_confirm_ms: int = Field(default=1500, alias="ENTRY_CONFIRM_MS")
     min_order_live_ms: int = Field(default=3000, alias="MIN_ORDER_LIVE_MS")
@@ -98,6 +102,7 @@ class Settings(BaseSettings):
         "open_min_edge",
         "close_max_spread",
         "close_profit_usd_per_oz",
+        "aged_close_profit_usd_per_oz",
         "cancel_min_edge",
         "min_locked_edge",
         "max_unhedged_loss_usd_per_oz",
@@ -132,6 +137,7 @@ class Settings(BaseSettings):
         "loop_interval_ms",
         "paper_fill_delay_ms",
         "negative_swap_close_before_minutes",
+        "max_pair_age_minutes",
     )
     @classmethod
     def non_negative_or_positive_timing(cls, value: int) -> int:

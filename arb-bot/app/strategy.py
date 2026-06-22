@@ -744,7 +744,7 @@ class StrategyEngine:
                     "break_even_spread": str(break_even_spread) if break_even_spread is not None else None,
                     "trigger_spread": str(trigger_spread) if trigger_spread is not None else None,
                     "exit_follow_buffer": str(self._exit_follow_buffer_usd_per_oz()),
-                    "close_profit_usd_per_oz": str(self.settings.close_profit_usd_per_oz),
+                    "close_profit_usd_per_oz": str(self._effective_close_profit_usd_per_oz()),
                 },
             )
             self.active_order = order
@@ -968,7 +968,7 @@ class StrategyEngine:
         if break_even is None:
             trigger = None
         else:
-            trigger = break_even - self.settings.close_profit_usd_per_oz - self._exit_follow_buffer_usd_per_oz()
+            trigger = break_even - self._effective_close_profit_usd_per_oz() - self._exit_follow_buffer_usd_per_oz()
         self._close_trigger_cache = trigger
         self._close_trigger_cache_ms = now
         return trigger
@@ -996,6 +996,14 @@ class StrategyEngine:
     def _exit_follow_buffer_usd_per_oz(self) -> Decimal:
         point = self.mt4.latest_swap_info().point or Decimal("0.01")
         return Decimal(self.settings.mt4_slippage_points) * point
+
+    def _effective_close_profit_usd_per_oz(self) -> Decimal:
+        if not self.open_pair or self.settings.max_pair_age_minutes <= 0:
+            return self.settings.close_profit_usd_per_oz
+        age_ms = utc_now_ms() - self.open_pair.opened_ms
+        if age_ms >= self.settings.max_pair_age_minutes * 60_000:
+            return min(self.settings.close_profit_usd_per_oz, self.settings.aged_close_profit_usd_per_oz)
+        return self.settings.close_profit_usd_per_oz
 
     async def _binance_funding_income_since_open(self) -> Decimal:
         if not self.open_pair or self.settings.is_dry_run:

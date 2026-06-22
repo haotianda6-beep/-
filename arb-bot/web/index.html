@@ -739,6 +739,14 @@
                   <td><div class="input-row"><input id="cfgCloseProfitUsdPerOz" inputmode="decimal" /><small>美元/盎司</small></div></td>
                 </tr>
                 <tr>
+                  <th>持仓降目标时间</th>
+                  <td><div class="input-row"><input id="cfgMaxPairAgeMinutes" inputmode="numeric" /><small>分钟</small></div></td>
+                </tr>
+                <tr>
+                  <th>超时小赚空间</th>
+                  <td><div class="input-row"><input id="cfgAgedCloseProfitUsdPerOz" inputmode="decimal" /><small>美元/盎司</small></div></td>
+                </tr>
+                <tr>
                   <th>最小锁定价差</th>
                   <td><div class="input-row"><input id="cfgMinLockedEdge" inputmode="decimal" /><small>美元</small></div></td>
                 </tr>
@@ -808,6 +816,8 @@
         ["cfgNegativeSwapCloseBefore", "negative_swap_close_before_minutes", "number"],
         ["cfgCloseMaxSpread", "close_max_spread", "number"],
         ["cfgCloseProfitUsdPerOz", "close_profit_usd_per_oz", "number"],
+        ["cfgMaxPairAgeMinutes", "max_pair_age_minutes", "number"],
+        ["cfgAgedCloseProfitUsdPerOz", "aged_close_profit_usd_per_oz", "number"],
         ["cfgMinLockedEdge", "min_locked_edge", "number"],
         ["cfgMt4LotSize", "mt4_lot_size_oz", "number"],
         ["cfgMaxOrderAge", "max_order_age_ms", "number"],
