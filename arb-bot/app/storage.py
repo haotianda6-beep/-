@@ -98,6 +98,29 @@ class Storage:
                 (datetime.now(timezone.utc).isoformat(), kind, clean),
             )
 
+    def get_events(self, start_ms: int, end_ms: int, limit: int = 5000) -> list[dict[str, Any]]:
+        start_iso = datetime.fromtimestamp(start_ms / 1000, timezone.utc).isoformat()
+        end_iso = datetime.fromtimestamp(end_ms / 1000, timezone.utc).isoformat()
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, ts, kind, payload
+                FROM events
+                WHERE ts >= ? AND ts <= ?
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (start_iso, end_iso, limit),
+            ).fetchall()
+        events = []
+        for row in rows:
+            try:
+                payload = json.loads(row[3])
+            except json.JSONDecodeError:
+                payload = {}
+            events.append({"id": int(row[0]), "ts": row[1], "kind": row[2], "payload": payload})
+        return events
+
     def record_pnl(self, pair_id: str, pnl: Decimal) -> None:
         with self._lock, self._connect() as conn:
             conn.execute(

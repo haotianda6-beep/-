@@ -49,6 +49,17 @@ def test_storage_upserts_and_reads_mt4_closed_orders(tmp_path):
     assert saved[0].profit == Decimal("-9.79")
 
 
+def test_storage_reads_events_in_time_window(tmp_path):
+    store = Storage(tmp_path / "test.sqlite3")
+    store.record_event("sample", {"order_id": "1"})
+
+    events = store.get_events(0, 4_102_444_800_000)
+
+    assert len(events) == 1
+    assert events[0]["kind"] == "sample"
+    assert events[0]["payload"]["order_id"] == "1"
+
+
 def test_spread_analysis_detects_return_to_threshold():
     mt4 = [bar(60_038, "4170"), bar(120_038, "4171"), bar(180_038, "4172")]
     binance = [bar(60_000, "4173"), bar(120_000, "4171.40"), bar(180_000, "4175")]
@@ -145,3 +156,51 @@ def test_trade_history_marks_quantity_mismatch_but_keeps_real_net_pnl():
     assert items[0].net_pnl == Decimal("-8.07966002")
     assert "数量不一致" in items[0].status
     assert "币安1.002 XAU / MT4 2 XAU" in items[0].status
+
+
+def test_trade_history_uses_event_link_when_binance_exit_precedes_manual_mt4_close():
+    items = _build_trade_history(
+        [
+            mt4_order(76914108, 1782197129000, 1782208751000, "4116.94", "4124.67", "7.73"),
+            mt4_order(76914311, 1782197247000, 1782208752000, "4112.45", "4124.97", "12.52"),
+            mt4_order(76915294, 1782197978000, 1782208753000, "4113.23", "4124.97", "11.74"),
+            mt4_order(76920625, 1782201758000, 1782208754000, "4098.13", "4124.94", "26.81"),
+        ],
+        [
+            binance_trade(7458901301, "BUY", "4", "4112.07", "2.29000000", 1782204123000),
+            binance_trade(7458903116, "SELL", "4", "4112.25", "0", 1782204127000),
+            binance_trade(7462648650, "BUY", "4", "4120.48", "-32.92000000", 1782207309000),
+        ],
+        [{"income": "0.80985952", "time": 1782201600000}],
+        [
+            {
+                "id": 1,
+                "ts": "2026-06-23T09:35:09+00:00",
+                "kind": "exit_order",
+                "payload": {"order_id": "7462648650", "timestamp_ms": 1782207309643},
+            },
+            {
+                "id": 2,
+                "ts": "2026-06-23T09:35:10+00:00",
+                "kind": "open_pair_live_mismatch_paused",
+                "payload": {
+                    "pair_id": "pair_fa54010fc13a4ea0a29c68de",
+                    "binance_position_qty": "0",
+                    "mt4_positions": [
+                        {"ticket": 76920625, "symbol": "XAUUSD", "side": "BUY", "lots": "0.01"},
+                        {"ticket": 76915294, "symbol": "XAUUSD", "side": "BUY", "lots": "0.01"},
+                        {"ticket": 76914311, "symbol": "XAUUSD", "side": "BUY", "lots": "0.01"},
+                        {"ticket": 76914108, "symbol": "XAUUSD", "side": "BUY", "lots": "0.01"},
+                    ],
+                },
+            },
+        ],
+    )
+
+    assert len(items) == 1
+    assert items[0].binance_exit_order_id == "7458901301 / 7462648650"
+    assert items[0].binance_realized_pnl == Decimal("-30.63000000")
+    assert items[0].mt4_profit == Decimal("58.80")
+    assert items[0].binance_funding_income == Decimal("0.80985952")
+    assert items[0].net_pnl == Decimal("28.97985952")
+    assert "事件链" in items[0].status

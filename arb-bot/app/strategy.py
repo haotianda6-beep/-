@@ -1374,6 +1374,42 @@ class StrategyEngine:
         )
         self.state = StrategyState.CLOSING_MT4
 
+    def queue_mt4_close_after_binance_flat_mismatch(self, mt4_positions: list) -> bool:
+        if not self.open_pair:
+            return False
+        if self.state == StrategyState.CLOSING_MT4 and self.pending_close_tickets:
+            return True
+        expected_side = Side.BUY if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.SELL
+        expected_tickets = set(self.open_pair.mt4_tickets or ([] if self.open_pair.mt4_ticket is None else [self.open_pair.mt4_ticket]))
+        candidates = [
+            position
+            for position in mt4_positions
+            if position.symbol == self.settings.mt4_symbol and position.side == expected_side and position.lots > 0
+        ]
+        if expected_tickets:
+            candidates = [position for position in candidates if position.ticket in expected_tickets]
+        if not candidates:
+            return False
+        self.active_order = None
+        self.exit_force_reason = None
+        self.exit_repair_fill = None
+        self.pending_close_tickets = {position.ticket for position in candidates}
+        self.pending_close_commands = {}
+        for position in candidates:
+            command = self.mt4.queue_close(position.ticket, position.lots, "binance flat mismatch cleanup")
+            self.pending_close_commands[command.command_id] = position.ticket
+        self.state = StrategyState.CLOSING_MT4
+        self.last_error = "检测到币安已空仓但 MT4 仍有同组持仓，已自动发送 MT4 平仓命令"
+        self.storage.record_event(
+            "mt4_close_queued_after_binance_flat_mismatch",
+            {
+                "pair_id": self.open_pair.pair_id,
+                "tickets": [position.ticket for position in candidates],
+                "lots_by_ticket": {str(position.ticket): str(position.lots) for position in candidates},
+            },
+        )
+        return True
+
     async def _complete_partial_exit_order(self, order: OrderUpdate) -> OrderUpdate | None:
         if not self.open_pair:
             return None

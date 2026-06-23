@@ -111,6 +111,35 @@ def test_resume_paused_engine_clears_stale_entry_state(tmp_path):
     assert engine.active_order is None
 
 
+def test_binance_flat_mismatch_queues_mt4_close_without_waiting_for_manual_action(tmp_path):
+    cfg = settings(tmp_path)
+    mt4 = Mt4Bridge(cfg)
+    engine = StrategyEngine(cfg, PaperBinanceClient(cfg), mt4, RiskManager(cfg), Storage(cfg.sqlite_path))
+    engine.open_pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("2"),
+        binance_entry_price=Decimal("4113"),
+        mt4_entry_price=Decimal("4111"),
+        binance_order_id="entry",
+        mt4_tickets=[101, 102],
+    )
+    engine.state = StrategyState.PAIR_OPEN
+    positions = [
+        Mt4Position(ticket=101, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4111")),
+        Mt4Position(ticket=102, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4112")),
+    ]
+
+    assert engine.queue_mt4_close_after_binance_flat_mismatch(positions)
+
+    first = mt4.next_command()
+    second = mt4.next_command()
+    assert engine.state == StrategyState.CLOSING_MT4
+    assert engine.pending_close_tickets == {101, 102}
+    assert first["action"] == "CLOSE"
+    assert second["action"] == "CLOSE"
+    assert {first["ticket"], second["ticket"]} == {101, 102}
+
+
 @pytest.mark.asyncio
 async def test_partial_fill_hedges_only_filled_quantity(tmp_path):
     engine, client, mt4 = await make_engine(

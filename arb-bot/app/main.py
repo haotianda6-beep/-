@@ -4,8 +4,10 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
@@ -60,6 +62,7 @@ FUNDING_INCOME_FAILURE_RETRY_MS = 60_000
 LIVE_PAIR_RECONCILE_INTERVAL_MS = 30_000
 HISTORY_MT4_BATCH_WINDOW_MS = 180_000
 HISTORY_BINANCE_ALIGN_WINDOW_MS = 900_000
+HISTORY_EVENT_EXIT_LINK_WINDOW_MS = 600_000
 QTY_EPSILON = Decimal("0.000001")
 
 settings: Settings = load_settings()
@@ -471,13 +474,19 @@ async def trade_history(days: int = Query(default=7, ge=1, le=30)) -> TradeHisto
         funding_rows = []
     if temporary_history_client is not None:
         await temporary_history_client.stop()
+    event_rows = storage.get_events(start_ms, end_ms)
     return TradeHistoryResponse(
         source="币安真实成交/资金费 + MT4 EA 上传的账户历史",
-        items=_build_trade_history(mt4_orders, binance_trades, funding_rows),
+        items=_build_trade_history(mt4_orders, binance_trades, funding_rows, event_rows),
     )
 
 
-def _build_trade_history(mt4_orders: list[Mt4ClosedOrder], binance_trades: list[dict], funding_rows: list[dict] | None = None) -> list[TradeHistoryItem]:
+def _build_trade_history(
+    mt4_orders: list[Mt4ClosedOrder],
+    binance_trades: list[dict],
+    funding_rows: list[dict] | None = None,
+    event_rows: list[dict[str, Any]] | None = None,
+) -> list[TradeHistoryItem]:
     items: list[TradeHistoryItem] = []
     combined_binance_trades = _combined_binance_order_trades(binance_trades)
     exit_allocations = _allocate_exit_trades(mt4_orders, combined_binance_trades)
@@ -523,8 +532,135 @@ def _build_trade_history(mt4_orders: list[Mt4ClosedOrder], binance_trades: list[
             )
         )
     grouped_items = _group_trade_history_items(items)
-    aligned_items = _align_unmatched_trade_history_items(grouped_items, combined_binance_trades)
+    event_aligned_items = _align_event_linked_trade_history_items(
+        grouped_items,
+        combined_binance_trades,
+        _build_event_exit_links(event_rows or []),
+    )
+    aligned_items = _align_unmatched_trade_history_items(event_aligned_items, combined_binance_trades)
     return _apply_funding_income(aligned_items, funding_rows or [])
+
+
+def _build_event_exit_links(events: list[dict[str, Any]]) -> dict[frozenset[int], dict[str, Any]]:
+    links: dict[frozenset[int], dict[str, Any]] = {}
+    latest_exit_order_id: str | None = None
+    latest_exit_ms: int | None = None
+    for event in sorted(events, key=lambda row: int(row.get("id") or 0)):
+        kind = str(event.get("kind") or "")
+        payload = event.get("payload") or {}
+        event_ms = _event_time_ms(event)
+        if kind in {"exit_order", "exit_order_filled", "exit_cancel_race_filled_following_mt4"}:
+            order_id = payload.get("order_id")
+            if order_id:
+                latest_exit_order_id = str(order_id)
+                latest_exit_ms = _int_field(payload, "timestamp_ms") or event_ms
+        if kind != "open_pair_live_mismatch_paused":
+            continue
+        if Decimal(str(payload.get("binance_position_qty") or "0")) != 0:
+            continue
+        positions = payload.get("mt4_positions") or []
+        tickets = frozenset(int(position["ticket"]) for position in positions if position.get("ticket") is not None)
+        if not tickets or not latest_exit_order_id or latest_exit_ms is None or event_ms is None:
+            continue
+        if event_ms - latest_exit_ms > HISTORY_EVENT_EXIT_LINK_WINDOW_MS:
+            continue
+        links.setdefault(
+            tickets,
+            {
+                "exit_order_id": latest_exit_order_id,
+                "pair_id": payload.get("pair_id"),
+                "linked_ms": event_ms,
+            },
+        )
+    return links
+
+
+def _event_time_ms(event: dict[str, Any]) -> int | None:
+    payload = event.get("payload") or {}
+    payload_ms = _int_field(payload, "timestamp_ms")
+    if payload_ms is not None:
+        return payload_ms
+    ts = event.get("ts")
+    if not ts:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(ts))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp() * 1000)
+
+
+def _align_event_linked_trade_history_items(
+    items: list[TradeHistoryItem],
+    trades: list[dict],
+    links: dict[frozenset[int], dict[str, Any]],
+) -> list[TradeHistoryItem]:
+    if not links or not trades:
+        return items
+    trades_by_order_id = {str(trade.get("orderId") or trade.get("order_id")): trade for trade in trades}
+    aligned: list[TradeHistoryItem] = []
+    for item in items:
+        tickets = frozenset(item.mt4_tickets or ([] if item.mt4_ticket is None else [item.mt4_ticket]))
+        link = links.get(tickets)
+        if not link or item.open_time_ms is None or item.close_time_ms is None or item.mt4_side is None:
+            aligned.append(item)
+            continue
+        final_exit_trade = trades_by_order_id.get(str(link.get("exit_order_id") or ""))
+        if not final_exit_trade:
+            aligned.append(item)
+            continue
+        entry_side = Side.SELL if item.mt4_side == Side.BUY else Side.BUY
+        exit_side = Side.BUY if entry_side == Side.SELL else Side.SELL
+        if str(final_exit_trade.get("side")) != exit_side.value:
+            aligned.append(item)
+            continue
+        realized_trades = _realized_binance_trades_between(trades, exit_side, item.open_time_ms, item.close_time_ms)
+        final_order_id = str(final_exit_trade.get("orderId") or final_exit_trade.get("order_id") or "")
+        if final_order_id and all(str(trade.get("orderId") or trade.get("order_id") or "") != final_order_id for trade in realized_trades):
+            realized_trades.append(final_exit_trade)
+        if not realized_trades:
+            aligned.append(item)
+            continue
+        binance_realized = sum((_decimal_field(trade, "realizedPnl") or Decimal("0") for trade in realized_trades), Decimal("0"))
+        exit_commission = sum((_decimal_field(trade, "commission") or Decimal("0") for trade in realized_trades), Decimal("0"))
+        binance_commission = (item.binance_commission or Decimal("0")) + exit_commission
+        mt4_total = (item.mt4_profit or Decimal("0")) + (item.mt4_swap or Decimal("0")) + (item.mt4_commission or Decimal("0"))
+        order_ids = _join_unique([str(trade.get("orderId") or trade.get("order_id") or "") for trade in realized_trades])
+        ticket_count = len(tickets)
+        suffix = f"（{ticket_count}张合并）" if ticket_count > 1 else ""
+        aligned.append(
+            item.model_copy(
+                update={
+                    "binance_exit_order_id": order_ids,
+                    "binance_exit_side": exit_side,
+                    "binance_exit_price": _decimal_field(final_exit_trade, "price"),
+                    "binance_realized_pnl": binance_realized,
+                    "binance_commission": binance_commission,
+                    "net_pnl": binance_realized - binance_commission + mt4_total,
+                    "status": f"按事件链对齐真实盈亏，含币安补回{suffix}",
+                }
+            )
+        )
+    aligned.sort(key=lambda row: row.close_time_ms or 0, reverse=True)
+    return aligned
+
+
+def _realized_binance_trades_between(trades: list[dict], side: Side, start_ms: int, end_ms: int) -> list[dict]:
+    rows = []
+    for trade in trades:
+        if str(trade.get("side")) != side.value:
+            continue
+        trade_time = _int_field(trade, "time")
+        if trade_time is None or trade_time < start_ms - 60_000 or trade_time > end_ms + 60_000:
+            continue
+        realized = _decimal_field(trade, "realizedPnl") or Decimal("0")
+        if realized == 0:
+            continue
+        rows.append(trade)
+    rows.sort(key=lambda row: _int_field(row, "time") or 0)
+    return rows
 
 
 def _apply_funding_income(items: list[TradeHistoryItem], funding_rows: list[dict]) -> list[TradeHistoryItem]:
@@ -1054,6 +1190,22 @@ async def _reconcile_open_pair_live_state() -> bool:
         _persist_runtime_state()
         return True
     if action == "pause":
+        mt4_symbol_positions = [position for position in mt4_positions if position.symbol == settings.mt4_symbol]
+        if binance_qty == 0 and mt4_symbol_positions:
+            if strategy.queue_mt4_close_after_binance_flat_mismatch(mt4_symbol_positions):
+                storage.record_event(
+                    "open_pair_live_mismatch_auto_mt4_close",
+                    {
+                        "pair_id": strategy.open_pair.pair_id if strategy.open_pair else None,
+                        "binance_position_qty": str(binance_qty),
+                        "mt4_positions": [
+                            {"ticket": position.ticket, "symbol": position.symbol, "side": position.side.value, "lots": str(position.lots)}
+                            for position in mt4_symbol_positions
+                        ],
+                    },
+                )
+                _persist_runtime_state()
+                return True
         strategy.state = StrategyState.PAUSED
         strategy.last_error = "组合持仓与实盘不一致：币安或 MT4 方向/数量不匹配，已暂停，请人工确认"
         storage.record_event(
