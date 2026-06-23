@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
 
-from app.binance_client import BinanceError, BinanceFuturesClient, PaperBinanceClient
+from app.binance_client import BinanceBaseClient, BinanceError, BinanceFuturesClient, PaperBinanceClient
 from app.config import Settings, existing_env_paths, load_settings, update_local_config_file, update_mode_file
 from app.logger import setup_logging
 from app.history import build_spread_analysis
@@ -58,6 +58,9 @@ POSITION_RISK_FAILURE_RETRY_MS = 30_000
 FUNDING_INCOME_CACHE_TTL_MS = 60_000
 FUNDING_INCOME_FAILURE_RETRY_MS = 60_000
 LIVE_PAIR_RECONCILE_INTERVAL_MS = 30_000
+HISTORY_MT4_BATCH_WINDOW_MS = 180_000
+HISTORY_BINANCE_ALIGN_WINDOW_MS = 900_000
+QTY_EPSILON = Decimal("0.000001")
 
 settings: Settings = load_settings()
 storage = Storage(settings.sqlite_path)
@@ -451,16 +454,23 @@ async def trade_history(days: int = Query(default=7, ge=1, le=30)) -> TradeHisto
     end_ms = utc_now_ms()
     start_ms = end_ms - days * 86_400_000
     mt4_orders = storage.get_mt4_closed_orders(settings.mt4_symbol, start_ms, end_ms, limit=100)
+    history_client: BinanceBaseClient = binance_client
+    temporary_history_client: BinanceFuturesClient | None = None
+    if isinstance(binance_client, PaperBinanceClient) and settings.binance_api_key and settings.binance_api_secret:
+        temporary_history_client = BinanceFuturesClient(settings)
+        history_client = temporary_history_client
     try:
-        binance_trades = await binance_client.user_trades(start_ms, end_ms, limit=1000)
+        binance_trades = await history_client.user_trades(start_ms, end_ms, limit=1000)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Binance trade history unavailable: %s", str(exc)[:160])
         binance_trades = []
     try:
-        funding_rows = await binance_client.funding_income(start_ms, end_ms, limit=1000)
+        funding_rows = await history_client.funding_income(start_ms, end_ms, limit=1000)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Binance funding history unavailable: %s", str(exc)[:160])
         funding_rows = []
+    if temporary_history_client is not None:
+        await temporary_history_client.stop()
     return TradeHistoryResponse(
         source="币安真实成交/资金费 + MT4 EA 上传的账户历史",
         items=_build_trade_history(mt4_orders, binance_trades, funding_rows),
@@ -469,13 +479,14 @@ async def trade_history(days: int = Query(default=7, ge=1, le=30)) -> TradeHisto
 
 def _build_trade_history(mt4_orders: list[Mt4ClosedOrder], binance_trades: list[dict], funding_rows: list[dict] | None = None) -> list[TradeHistoryItem]:
     items: list[TradeHistoryItem] = []
-    exit_allocations = _allocate_exit_trades(mt4_orders, binance_trades)
+    combined_binance_trades = _combined_binance_order_trades(binance_trades)
+    exit_allocations = _allocate_exit_trades(mt4_orders, combined_binance_trades)
     for mt4_order in mt4_orders:
         quantity_oz = mt4_order.lots * settings.mt4_lot_size_oz
         entry_side = Side.SELL if mt4_order.side == Side.BUY else Side.BUY
         exit_side = Side.BUY if entry_side == Side.SELL else Side.SELL
-        entry_trade = _match_binance_trade(binance_trades, entry_side, quantity_oz, mt4_order.open_time_ms)
-        exit_trade = exit_allocations.get(mt4_order.ticket) or _match_binance_trade(binance_trades, exit_side, quantity_oz, mt4_order.close_time_ms)
+        entry_trade = _match_binance_trade(combined_binance_trades, entry_side, quantity_oz, mt4_order.open_time_ms)
+        exit_trade = exit_allocations.get(mt4_order.ticket) or _match_binance_trade(combined_binance_trades, exit_side, quantity_oz, mt4_order.close_time_ms)
         binance_realized = _decimal_field(exit_trade, "realizedPnl") if exit_trade else None
         entry_commission = (_decimal_field(entry_trade, "commission") if entry_trade else None) or Decimal("0")
         exit_commission = (_decimal_field(exit_trade, "commission") if exit_trade else None) or Decimal("0")
@@ -511,7 +522,9 @@ def _build_trade_history(mt4_orders: list[Mt4ClosedOrder], binance_trades: list[
                 status=status,
             )
         )
-    return _apply_funding_income(_group_trade_history_items(items), funding_rows or [])
+    grouped_items = _group_trade_history_items(items)
+    aligned_items = _align_unmatched_trade_history_items(grouped_items, combined_binance_trades)
+    return _apply_funding_income(aligned_items, funding_rows or [])
 
 
 def _apply_funding_income(items: list[TradeHistoryItem], funding_rows: list[dict]) -> list[TradeHistoryItem]:
@@ -540,17 +553,114 @@ def _apply_funding_income(items: list[TradeHistoryItem], funding_rows: list[dict
 
 
 def _group_trade_history_items(items: list[TradeHistoryItem]) -> list[TradeHistoryItem]:
-    grouped: dict[tuple, list[TradeHistoryItem]] = {}
+    grouped: dict[str, list[TradeHistoryItem]] = {}
+    unmatched: list[TradeHistoryItem] = []
     for item in items:
         if item.binance_exit_order_id:
-            key = ("binance_exit", item.binance_exit_order_id)
+            key = item.binance_exit_order_id
+            grouped.setdefault(key, []).append(item)
         else:
-            close_bucket = (item.close_time_ms or 0) // 120_000
-            key = ("mt4_batch", item.mt4_side.value if item.mt4_side else None, close_bucket)
-        grouped.setdefault(key, []).append(item)
+            unmatched.append(item)
     rows = [_merge_trade_group(group) for group in grouped.values()]
+    rows.extend(_merge_trade_group(group) for group in _cluster_mt4_history_batches(unmatched))
     rows.sort(key=lambda item: item.close_time_ms or 0, reverse=True)
     return rows
+
+
+def _cluster_mt4_history_batches(items: list[TradeHistoryItem]) -> list[list[TradeHistoryItem]]:
+    batches: list[list[TradeHistoryItem]] = []
+    sorted_items = sorted(items, key=lambda item: (item.mt4_side.value if item.mt4_side else "", item.close_time_ms or 0))
+    for item in sorted_items:
+        last_batch = batches[-1] if batches else []
+        last_item = last_batch[-1] if last_batch else None
+        same_side = bool(last_item and last_item.mt4_side == item.mt4_side)
+        last_close = last_item.close_time_ms if last_item else None
+        current_close = item.close_time_ms
+        near_close = last_close is not None and current_close is not None and abs(current_close - last_close) <= HISTORY_MT4_BATCH_WINDOW_MS
+        if same_side and near_close:
+            last_batch.append(item)
+        else:
+            batches.append([item])
+    return batches
+
+
+def _align_unmatched_trade_history_items(items: list[TradeHistoryItem], trades: list[dict]) -> list[TradeHistoryItem]:
+    if not trades:
+        return items
+    used_exit_order_ids = {
+        order_id
+        for item in items
+        for order_id in _split_order_ids(item.binance_exit_order_id)
+        if order_id
+    }
+    aligned: list[TradeHistoryItem] = []
+    for item in sorted(items, key=lambda row: row.close_time_ms or 0):
+        if item.net_pnl is not None or not item.mt4_side or item.close_time_ms is None:
+            aligned.append(item)
+            continue
+        quantity_oz = item.quantity_oz or Decimal("0")
+        entry_side = Side.SELL if item.mt4_side == Side.BUY else Side.BUY
+        exit_side = Side.BUY if entry_side == Side.SELL else Side.SELL
+        exit_trade = _match_binance_trade_loose(
+            trades,
+            exit_side,
+            item.close_time_ms,
+            used_order_ids=used_exit_order_ids,
+            preferred_quantity=quantity_oz,
+            prefer_realized=True,
+        )
+        if not exit_trade:
+            aligned.append(item)
+            continue
+        exit_order_id = str(exit_trade.get("orderId") or exit_trade.get("order_id") or "")
+        if exit_order_id:
+            used_exit_order_ids.add(exit_order_id)
+        entry_trade = None
+        if item.open_time_ms is not None:
+            entry_trade = _match_binance_trade_loose(
+                trades,
+                entry_side,
+                item.open_time_ms,
+                used_order_ids=set(),
+                preferred_quantity=quantity_oz,
+                prefer_realized=False,
+            )
+        entry_commission = (_decimal_field(entry_trade, "commission") if entry_trade else None) or Decimal("0")
+        exit_commission = (_decimal_field(exit_trade, "commission") if exit_trade else None) or Decimal("0")
+        binance_commission = entry_commission + exit_commission
+        binance_realized = _decimal_field(exit_trade, "realizedPnl")
+        mt4_total = (item.mt4_profit or Decimal("0")) + (item.mt4_swap or Decimal("0")) + (item.mt4_commission or Decimal("0"))
+        net = binance_realized - binance_commission + mt4_total if binance_realized is not None else None
+        aligned.append(
+            item.model_copy(
+                update={
+                    "binance_entry_order_id": item.binance_entry_order_id or (str(entry_trade.get("orderId")) if entry_trade else None),
+                    "binance_entry_side": item.binance_entry_side or (entry_side if entry_trade else None),
+                    "binance_entry_price": item.binance_entry_price or (_decimal_field(entry_trade, "price") if entry_trade else None),
+                    "binance_exit_order_id": str(exit_trade.get("orderId")) if exit_trade else None,
+                    "binance_exit_side": exit_side,
+                    "binance_exit_price": _decimal_field(exit_trade, "price"),
+                    "binance_realized_pnl": binance_realized,
+                    "binance_commission": binance_commission,
+                    "net_pnl": net,
+                    "status": _aligned_history_status(item, entry_trade, exit_trade),
+                }
+            )
+        )
+    aligned.sort(key=lambda row: row.close_time_ms or 0, reverse=True)
+    return aligned
+
+
+def _aligned_history_status(item: TradeHistoryItem, entry_trade: dict | None, exit_trade: dict) -> str:
+    ticket_count = len(item.mt4_tickets or ([] if item.mt4_ticket is None else [item.mt4_ticket]))
+    suffix = f"（{ticket_count}张合并）" if ticket_count > 1 else ""
+    binance_qty = _decimal_field(exit_trade, "qty")
+    mt4_qty = item.quantity_oz or Decimal("0")
+    if binance_qty is not None and abs(binance_qty - mt4_qty) > QTY_EPSILON:
+        return f"数量不一致，按时间对齐真实盈亏（币安{_fmt_decimal(binance_qty)} XAU / MT4 {_fmt_decimal(mt4_qty)} XAU）{suffix}"
+    if entry_trade:
+        return f"按时间对齐真实盈亏{suffix}"
+    return f"按时间对齐真实平仓，开仓成交未完全匹配{suffix}"
 
 
 def _merge_trade_group(group: list[TradeHistoryItem]) -> TradeHistoryItem:
@@ -566,6 +676,13 @@ def _merge_trade_group(group: list[TradeHistoryItem]) -> TradeHistoryItem:
     net_pnl = _sum_optional_decimal([item.net_pnl for item in group], require_all=True)
     tickets = [ticket for item in group for ticket in (item.mt4_tickets or ([] if item.mt4_ticket is None else [item.mt4_ticket]))]
     complete = all(item.status == "完整真实数据" for item in group)
+    has_exit_net = all(item.binance_exit_order_id and item.net_pnl is not None for item in group)
+    if complete:
+        status = f"完整真实数据（{len(group)}张合并）"
+    elif has_exit_net:
+        status = f"真实平仓数据，开仓成交未完全匹配（{len(group)}张合并）"
+    else:
+        status = f"部分缺少币安成交匹配（{len(group)}张合并）"
     return TradeHistoryItem(
         open_time_ms=min((item.open_time_ms for item in group if item.open_time_ms is not None), default=None),
         close_time_ms=max((item.close_time_ms for item in group if item.close_time_ms is not None), default=None),
@@ -588,7 +705,7 @@ def _merge_trade_group(group: list[TradeHistoryItem]) -> TradeHistoryItem:
         mt4_swap=mt4_swap,
         mt4_commission=mt4_commission,
         net_pnl=net_pnl,
-        status=f"{'完整真实数据' if complete else '部分缺少币安成交匹配'}（{len(group)}张合并）",
+        status=status,
     )
 
 
@@ -624,6 +741,17 @@ def _join_unique(values: list[str | None]) -> str | None:
     return " / ".join(seen) if seen else None
 
 
+def _split_order_ids(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [part.strip() for part in value.split("/") if part.strip()]
+
+
+def _fmt_decimal(value: Decimal) -> str:
+    normalized = value.normalize()
+    return format(normalized, "f")
+
+
 def _allocate_exit_trades(mt4_orders: list[Mt4ClosedOrder], trades: list[dict]) -> dict[int, dict]:
     allocations: dict[int, dict] = {}
     for trade in sorted(trades, key=lambda item: _int_field(item, "time") or 0):
@@ -652,13 +780,13 @@ def _allocate_exit_trades(mt4_orders: list[Mt4ClosedOrder], trades: list[dict]) 
         used_qty = Decimal("0")
         selected = []
         for _, order, quantity_oz in candidates:
-            if used_qty + quantity_oz > trade_qty + Decimal("0.000001"):
+            if used_qty + quantity_oz > trade_qty + QTY_EPSILON:
                 continue
             selected.append((order, quantity_oz))
             used_qty += quantity_oz
-            if abs(used_qty - trade_qty) <= Decimal("0.000001"):
+            if abs(used_qty - trade_qty) <= QTY_EPSILON:
                 break
-        if not selected:
+        if not selected or abs(used_qty - trade_qty) > QTY_EPSILON:
             continue
         realized = _decimal_field(trade, "realizedPnl") or Decimal("0")
         commission = _decimal_field(trade, "commission") or Decimal("0")
@@ -689,13 +817,13 @@ def _match_binance_trade(trades: list[dict], side: Side, quantity: Decimal, targ
             continue
         order_id = str(trade.get("orderId") or trade.get("order_id") or f"trade-{trade_time}")
         grouped.setdefault(order_id, []).append(trade)
-        if abs(qty - quantity) <= Decimal("0.000001"):
+        if abs(qty - quantity) <= QTY_EPSILON:
             candidates.append((distance, trade))
     if not candidates:
         grouped_candidates = []
         for parts in grouped.values():
             total_qty = sum((_decimal_field(part, "qty") or Decimal("0") for part in parts), Decimal("0"))
-            if abs(total_qty - quantity) > Decimal("0.000001"):
+            if abs(total_qty - quantity) > QTY_EPSILON:
                 continue
             closest = min(abs((_int_field(part, "time") or target_time_ms) - target_time_ms) for part in parts)
             grouped_candidates.append((closest, _combine_trade_parts(parts)))
@@ -707,6 +835,53 @@ def _match_binance_trade(trades: list[dict], side: Side, quantity: Decimal, targ
     return candidates[0][1]
 
 
+def _combined_binance_order_trades(trades: list[dict]) -> list[dict]:
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    passthrough: list[dict] = []
+    for trade in trades:
+        order_id = str(trade.get("orderId") or trade.get("order_id") or "")
+        side = str(trade.get("side") or "")
+        if not order_id or not side:
+            passthrough.append(trade)
+            continue
+        grouped.setdefault((order_id, side), []).append(trade)
+    combined = [_combine_trade_parts(parts) for parts in grouped.values()]
+    combined.extend(passthrough)
+    return combined
+
+
+def _match_binance_trade_loose(
+    trades: list[dict],
+    side: Side,
+    target_time_ms: int,
+    used_order_ids: set[str],
+    preferred_quantity: Decimal | None = None,
+    prefer_realized: bool = False,
+) -> dict | None:
+    candidates = []
+    for trade in trades:
+        if str(trade.get("side")) != side.value:
+            continue
+        order_id = str(trade.get("orderId") or trade.get("order_id") or "")
+        if order_id and order_id in used_order_ids:
+            continue
+        trade_time = _int_field(trade, "time")
+        if trade_time is None:
+            continue
+        distance = abs(trade_time - target_time_ms)
+        if distance > HISTORY_BINANCE_ALIGN_WINDOW_MS:
+            continue
+        qty = _decimal_field(trade, "qty") or Decimal("0")
+        quantity_distance = abs(qty - preferred_quantity) if preferred_quantity is not None else Decimal("0")
+        realized = _decimal_field(trade, "realizedPnl") or Decimal("0")
+        realized_rank = 0 if (not prefer_realized or realized != 0) else 1
+        candidates.append((realized_rank, quantity_distance, distance, trade))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+    return candidates[0][3]
+
+
 def _combine_trade_parts(parts: list[dict]) -> dict:
     first = dict(parts[0])
     total_qty = sum((_decimal_field(part, "qty") or Decimal("0") for part in parts), Decimal("0"))
@@ -715,10 +890,12 @@ def _combine_trade_parts(parts: list[dict]) -> dict:
     notional = sum(((_decimal_field(part, "price") or Decimal("0")) * (_decimal_field(part, "qty") or Decimal("0")) for part in parts), Decimal("0"))
     realized = sum((_decimal_field(part, "realizedPnl") or Decimal("0") for part in parts), Decimal("0"))
     commission = sum((_decimal_field(part, "commission") or Decimal("0") for part in parts), Decimal("0"))
+    times = [_int_field(part, "time") for part in parts]
     first["qty"] = str(total_qty)
     first["price"] = str(notional / total_qty)
     first["realizedPnl"] = str(realized)
     first["commission"] = str(commission)
+    first["time"] = max(time for time in times if time is not None) if any(time is not None for time in times) else first.get("time")
     return first
 
 

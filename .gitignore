@@ -2,6 +2,7 @@
 node_modules/
 dist/
 build/
+data/
 __pycache__/
 *.pyc
 *.tsbuildinfo

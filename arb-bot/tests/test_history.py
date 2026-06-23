@@ -3,6 +3,7 @@ from decimal import Decimal
 from app.history import compare_spreads
 from app.models import HistoryBar, Mt4ClosedOrder, Side
 from app.storage import Storage
+from app.main import _build_trade_history
 
 
 def bar(ts: int, close: str) -> HistoryBar:
@@ -73,3 +74,74 @@ def test_spread_analysis_reports_unaligned_bars():
 
     assert not result.ready
     assert result.reason == "MT4 和 Binance 的K线时间没有对齐"
+
+
+def mt4_order(
+    ticket: int,
+    open_time_ms: int,
+    close_time_ms: int,
+    open_price: str,
+    close_price: str,
+    profit: str,
+    swap: str = "0",
+) -> Mt4ClosedOrder:
+    return Mt4ClosedOrder(
+        ticket=ticket,
+        symbol="XAUUSD",
+        side=Side.BUY,
+        lots=Decimal("0.01"),
+        open_time_ms=open_time_ms,
+        close_time_ms=close_time_ms,
+        open_price=Decimal(open_price),
+        close_price=Decimal(close_price),
+        profit=Decimal(profit),
+        swap=Decimal(swap),
+        commission=Decimal("0"),
+        magic_number=260612,
+    )
+
+
+def binance_trade(order_id: int, side: str, qty: str, price: str, realized: str, time_ms: int) -> dict:
+    return {
+        "orderId": order_id,
+        "side": side,
+        "qty": qty,
+        "price": price,
+        "realizedPnl": realized,
+        "commission": "0",
+        "time": time_ms,
+    }
+
+
+def test_trade_history_aligns_grouped_exit_with_real_net_pnl():
+    items = _build_trade_history(
+        [
+            mt4_order(76904392, 1782193000000, 1782193640000, "4150.00", "4119.22", "-1.45"),
+            mt4_order(76858510, 1782133221000, 1782193644000, "4156.64", "4116.67", "-75.94", "-0.64"),
+        ],
+        [binance_trade(7445463165, "BUY", "2", "4121.84", "75.64", 1782193645000)],
+        [],
+    )
+
+    assert len(items) == 1
+    assert items[0].binance_exit_order_id == "7445463165"
+    assert items[0].net_pnl == Decimal("-2.39")
+    assert "真实" in items[0].status
+
+
+def test_trade_history_marks_quantity_mismatch_but_keeps_real_net_pnl():
+    items = _build_trade_history(
+        [
+            mt4_order(76910622, 1782194492000, 1782194928000, "4126.66", "4116.67", "-9.99"),
+            mt4_order(76909629, 1782193701000, 1782195003000, "4120.71", "4113.66", "-7.05"),
+        ],
+        [binance_trade(7447479800, "BUY", "1.002", "4114", "8.96033998", 1782194930000)],
+        [],
+    )
+
+    assert len(items) == 1
+    assert items[0].binance_exit_order_id == "7447479800"
+    assert items[0].quantity_oz == Decimal("2.00")
+    assert items[0].net_pnl == Decimal("-8.07966002")
+    assert "数量不一致" in items[0].status
+    assert "币安1.002 XAU / MT4 2 XAU" in items[0].status
