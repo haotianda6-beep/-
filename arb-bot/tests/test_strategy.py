@@ -113,7 +113,10 @@ def test_resume_paused_engine_clears_stale_entry_state(tmp_path):
 
 @pytest.mark.asyncio
 async def test_partial_fill_hedges_only_filled_quantity(tmp_path):
-    engine, client, mt4 = await make_engine(tmp_path)
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        settings_kwargs={"MT4_MIN_LOT": Decimal("0.001"), "MT4_LOT_STEP": Decimal("0.001")},
+    )
     await engine.step()
     order = engine.active_order
     assert order is not None
@@ -128,6 +131,28 @@ async def test_partial_fill_hedges_only_filled_quantity(tmp_path):
     assert engine.active_order.status == OrderStatus.CANCELED
     assert engine.active_order.executed_qty == Decimal("0.4")
     assert engine.state == StrategyState.HEDGING_MT4
+
+
+@pytest.mark.asyncio
+async def test_sub_minimum_mt4_partial_fill_rolls_back_binance_without_hedge(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path)
+    await engine.step()
+    order = engine.active_order
+    assert order is not None
+    await client.simulate_fill(order.order_id, Decimal("0.002"), Decimal("2002"))
+
+    await engine.step()
+
+    assert mt4.next_command() == {"command": "NONE"}
+    market_closes = [
+        item
+        for item in client._orders.values()
+        if item.is_maker is False and item.reduce_only and item.side == Side.BUY
+    ]
+    assert market_closes
+    assert market_closes[-1].executed_qty == Decimal("0.002")
+    assert engine.state == StrategyState.IDLE
+    assert engine.active_order is None
 
 
 @pytest.mark.asyncio
@@ -359,7 +384,10 @@ async def test_stale_quote_cancel_race_fill_emergency_closes_binance(tmp_path):
 
 @pytest.mark.asyncio
 async def test_mt4_failure_triggers_emergency_close(tmp_path):
-    engine, client, mt4 = await make_engine(tmp_path)
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        settings_kwargs={"MT4_MIN_LOT": Decimal("0.001"), "MT4_LOT_STEP": Decimal("0.001")},
+    )
     await engine.step()
     order = engine.active_order
     assert order is not None
@@ -498,6 +526,54 @@ async def test_exit_order_cancels_when_spread_widens_before_fill(tmp_path):
     assert engine.state == StrategyState.PAIR_OPEN
     assert engine.active_order is None
     assert mt4.next_command() == {"command": "NONE"}
+
+
+@pytest.mark.asyncio
+async def test_exit_fill_reopens_binance_when_mt4_follow_would_lose(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path)
+    await open_live_pair(engine, client, mt4, ticket=123456)
+
+    client.set_quote(Decimal("2000.0"), Decimal("2000.1"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("2000.0"),
+            ask=Decimal("2000.1"),
+            positions=[
+                Mt4Position(ticket=123456, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+        )
+    )
+    await engine.step()
+    exit_order = engine.active_order
+    assert exit_order is not None
+    await client.simulate_fill(exit_order.order_id, Decimal("1"), Decimal("2000"))
+    client.set_quote(Decimal("2000.0"), Decimal("2000.1"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1998.0"),
+            ask=Decimal("1998.1"),
+            positions=[
+                Mt4Position(ticket=123456, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+        )
+    )
+
+    await engine.step()
+
+    assert mt4.next_command() == {"command": "NONE"}
+    reopens = [
+        item
+        for item in client._orders.values()
+        if item.is_maker is False and not item.reduce_only and item.side == Side.SELL
+    ]
+    assert reopens
+    assert reopens[-1].executed_qty == Decimal("1")
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.open_pair is not None
+    assert engine.open_pair.realized_pnl == Decimal("2")
+    assert engine.open_pair.binance_entry_price == reopens[-1].avg_price
 
 
 @pytest.mark.asyncio

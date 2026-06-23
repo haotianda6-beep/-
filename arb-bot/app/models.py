@@ -378,6 +378,8 @@ class RuntimeConfig(BaseModel):
     negative_swap_close_before_minutes: int
     target_oz: Decimal
     mt4_lot_size_oz: Decimal
+    mt4_min_lot: Decimal
+    mt4_lot_step: Decimal
     mt4_slippage_points: int
     loop_interval_ms: int
     paper_auto_fill: bool
@@ -408,6 +410,8 @@ class RuntimeConfigUpdate(BaseModel):
     negative_swap_close_before_minutes: int | None = None
     target_oz: Decimal | None = None
     mt4_lot_size_oz: Decimal | None = None
+    mt4_min_lot: Decimal | None = None
+    mt4_lot_step: Decimal | None = None
     mt4_slippage_points: int | None = None
     loop_interval_ms: int | None = None
     paper_auto_fill: bool | None = None
@@ -425,6 +429,8 @@ class RuntimeConfigUpdate(BaseModel):
         "add_edge_growth_usd",
         "target_oz",
         "mt4_lot_size_oz",
+        "mt4_min_lot",
+        "mt4_lot_step",
         "binance_entry_offset_usd",
     )
     @classmethod

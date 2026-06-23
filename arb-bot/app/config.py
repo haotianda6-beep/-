@@ -36,6 +36,8 @@ CONFIG_FIELD_TO_ENV = {
     "negative_swap_close_before_minutes": "NEGATIVE_SWAP_CLOSE_BEFORE_MINUTES",
     "target_oz": "TARGET_OZ",
     "mt4_lot_size_oz": "MT4_LOT_SIZE_OZ",
+    "mt4_min_lot": "MT4_MIN_LOT",
+    "mt4_lot_step": "MT4_LOT_STEP",
     "mt4_slippage_points": "MT4_SLIPPAGE_POINTS",
     "loop_interval_ms": "LOOP_INTERVAL_MS",
     "paper_auto_fill": "PAPER_AUTO_FILL",
@@ -94,6 +96,8 @@ class Settings(BaseSettings):
     negative_swap_close_before_minutes: int = Field(default=30, alias="NEGATIVE_SWAP_CLOSE_BEFORE_MINUTES")
     target_oz: Decimal = Field(default=Decimal("1"), alias="TARGET_OZ")
     mt4_lot_size_oz: Decimal = Field(default=Decimal("100"), alias="MT4_LOT_SIZE_OZ")
+    mt4_min_lot: Decimal = Field(default=Decimal("0.01"), alias="MT4_MIN_LOT")
+    mt4_lot_step: Decimal = Field(default=Decimal("0.01"), alias="MT4_LOT_STEP")
     mt4_slippage_points: int = Field(default=30, alias="MT4_SLIPPAGE_POINTS")
     sqlite_path: Path = Field(default=Path("data/arb.sqlite3"), alias="SQLITE_PATH")
     loop_interval_ms: int = Field(default=50, alias="LOOP_INTERVAL_MS")
@@ -112,6 +116,8 @@ class Settings(BaseSettings):
         "add_edge_growth_usd",
         "target_oz",
         "mt4_lot_size_oz",
+        "mt4_min_lot",
+        "mt4_lot_step",
         "binance_entry_offset_usd",
         "binance_tick_size",
         "binance_qty_step",

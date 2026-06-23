@@ -979,6 +979,8 @@ def _runtime_config() -> RuntimeConfig:
         negative_swap_close_before_minutes=settings.negative_swap_close_before_minutes,
         target_oz=settings.target_oz,
         mt4_lot_size_oz=settings.mt4_lot_size_oz,
+        mt4_min_lot=settings.mt4_min_lot,
+        mt4_lot_step=settings.mt4_lot_step,
         mt4_slippage_points=settings.mt4_slippage_points,
         loop_interval_ms=settings.loop_interval_ms,
         paper_auto_fill=settings.paper_auto_fill,
@@ -1147,7 +1149,7 @@ def _profitable_spread_threshold(
 ) -> Decimal | None:
     if actual_entry_spread is None or fees is None or pair.quantity_oz <= 0:
         return None
-    adjustment = (accrued_funding or Decimal("0")) + (accrued_swap or Decimal("0")) - fees
+    adjustment = pair.realized_pnl + (accrued_funding or Decimal("0")) + (accrued_swap or Decimal("0")) - fees
     return actual_entry_spread + (adjustment / pair.quantity_oz)
 
 
@@ -1221,10 +1223,10 @@ def _estimate_close_gross(
     if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
         binance_exit = round_down(binance_quote.bid, binance_client.filters.tick_size)
         mt4_exit = mt4_quote.bid
-        return (binance_entry - binance_exit) * qty + (mt4_exit - mt4_entry) * qty
+        return pair.realized_pnl + (binance_entry - binance_exit) * qty + (mt4_exit - mt4_entry) * qty
     binance_exit = round_up(binance_quote.ask, binance_client.filters.tick_size)
     mt4_exit = mt4_quote.ask
-    return (binance_exit - binance_entry) * qty + (mt4_entry - mt4_exit) * qty
+    return pair.realized_pnl + (binance_exit - binance_entry) * qty + (mt4_entry - mt4_exit) * qty
 
 
 def _estimate_binance_fees(

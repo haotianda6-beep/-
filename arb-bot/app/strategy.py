@@ -582,6 +582,9 @@ class StrategyEngine:
             )
             return
         lots = qty / self.settings.mt4_lot_size_oz
+        if not self._mt4_lots_executable(lots):
+            await self._rollback_unhedgeable_entry_fill(qty, lots)
+            return
         max_price = fill_price - self.settings.min_locked_edge if self.active_plan.mt4_hedge_side == Side.BUY else None
         min_price = fill_price + self.settings.min_locked_edge if self.active_plan.mt4_hedge_side == Side.SELL else None
         self.mt4.queue_market_order(
@@ -594,6 +597,48 @@ class StrategyEngine:
         self.hedge_started_ms = utc_now_ms()
         self.pending_hedge_qty += qty
         self.state = StrategyState.HEDGING_MT4
+
+    def _mt4_lots_executable(self, lots: Decimal) -> bool:
+        if lots < self.settings.mt4_min_lot:
+            return False
+        if self.settings.mt4_lot_step <= 0:
+            return True
+        return round_down(lots, self.settings.mt4_lot_step) == lots
+
+    async def _rollback_unhedgeable_entry_fill(self, qty: Decimal, lots: Decimal) -> None:
+        if not self.active_order:
+            return
+        side = Side.BUY if self.active_order.side == Side.SELL else Side.SELL
+        position_side = "SHORT" if self.active_order.side == Side.SELL else "LONG"
+        close_order = await self.binance.place_market_order(
+            OrderRequest(
+                symbol=self.settings.binance_symbol,
+                side=side,
+                quantity=qty,
+                post_only=False,
+                reduce_only=True,
+                position_side=position_side,
+            )
+        )
+        self.storage.record_event(
+            "entry_fill_too_small_rolled_back",
+            {
+                "entry_order_id": self.active_order.order_id,
+                "entry_side": self.active_order.side.value,
+                "quantity": str(qty),
+                "mt4_lots": str(lots),
+                "mt4_min_lot": str(self.settings.mt4_min_lot),
+                "mt4_lot_step": str(self.settings.mt4_lot_step),
+                "close_order_id": close_order.order_id,
+                "close_status": close_order.status.value,
+                "close_executed_qty": str(close_order.executed_qty),
+            },
+        )
+        if close_order.executed_qty < qty:
+            self.state = StrategyState.PAUSED
+            self.last_error = "币安小额部分成交回滚未完全成交，已暂停，请人工确认"
+            return
+        self._clear_entry()
 
     async def _check_hedge_timeout(self) -> None:
         if self.hedge_started_ms <= 0:
@@ -940,7 +985,12 @@ class StrategyEngine:
                 return
         if not order or order.status != OrderStatus.FILLED:
             if order and order.status == OrderStatus.NEW and not self.exit_force_reason and not await self._exit_spread_still_valid():
-                await self.binance.cancel_order(order.order_id)
+                try:
+                    await self.binance.cancel_order(order.order_id)
+                except BinanceError as exc:
+                    if not _binance_order_missing(exc):
+                        raise
+                    self.storage.record_event("exit_cancel_not_visible", {"order_id": order.order_id, "error": str(exc)[:160]})
                 self.active_order = None
                 self.state = StrategyState.PAIR_OPEN
                 self.storage.record_event(
@@ -949,7 +999,87 @@ class StrategyEngine:
                 )
             return
         self.active_order = order
+        if not self.exit_force_reason and not await self._exit_fill_follow_ok(order):
+            if await self._reopen_binance_after_bad_exit_follow(order):
+                return
         await self._queue_mt4_close_after_exit_order(order)
+
+    async def _exit_fill_follow_ok(self, order: OrderUpdate) -> bool:
+        actual_spread = self._exit_fill_spread(order)
+        break_even = await self._break_even_spread()
+        if actual_spread is None or break_even is None:
+            return True
+        return actual_spread <= break_even - self._effective_close_profit_usd_per_oz()
+
+    def _exit_fill_spread(self, order: OrderUpdate) -> Decimal | None:
+        if not self.open_pair:
+            return None
+        mt4_quote = self.mt4.latest_quote()
+        if not mt4_quote:
+            return None
+        if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            return order.avg_price - mt4_quote.bid
+        return mt4_quote.ask - order.avg_price
+
+    async def _reopen_binance_after_bad_exit_follow(self, order: OrderUpdate) -> bool:
+        if not self.open_pair:
+            return False
+        pair = self.open_pair
+        side = Side.SELL if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.BUY
+        reopen = await self.binance.place_market_order(
+            OrderRequest(
+                symbol=self.settings.binance_symbol,
+                side=side,
+                quantity=order.executed_qty,
+                post_only=False,
+                reduce_only=False,
+            )
+        )
+        realized = self._binance_exit_realized_pnl(order)
+        mt4_entry = self._mt4_average_entry_price() or pair.mt4_entry_price
+        new_edge = self._entry_spread(pair.direction, reopen.avg_price, mt4_entry)
+        self.storage.record_event(
+            "exit_follow_would_lose_reopened_binance",
+            {
+                "exit_order_id": order.order_id,
+                "exit_avg_price": str(order.avg_price),
+                "exit_qty": str(order.executed_qty),
+                "actual_follow_spread": str(self._exit_fill_spread(order)),
+                "break_even_spread": str(await self._break_even_spread()),
+                "reopen_order_id": reopen.order_id,
+                "reopen_side": reopen.side.value,
+                "reopen_status": reopen.status.value,
+                "reopen_executed_qty": str(reopen.executed_qty),
+                "reopen_avg_price": str(reopen.avg_price),
+                "realized_pnl": str(realized),
+            },
+        )
+        if reopen.executed_qty < order.executed_qty:
+            self.state = StrategyState.PAUSED
+            self.last_error = "币安平仓后重开对冲未完全成交，已暂停，请人工确认"
+            return True
+        self.open_pair = pair.model_copy(
+            update={
+                "binance_entry_price": reopen.avg_price,
+                "binance_order_id": reopen.order_id,
+                "realized_pnl": pair.realized_pnl + realized,
+                "base_edge": new_edge if pair.add_count == 0 else pair.base_edge,
+                "last_add_edge": new_edge,
+            }
+        )
+        self.active_order = None
+        self.exit_force_reason = None
+        self._close_trigger_cache = None
+        self._close_trigger_cache_ms = 0
+        self.state = StrategyState.PAIR_OPEN
+        return True
+
+    def _binance_exit_realized_pnl(self, order: OrderUpdate) -> Decimal:
+        if not self.open_pair:
+            return Decimal("0")
+        if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            return (self.open_pair.binance_entry_price - order.avg_price) * order.executed_qty
+        return (order.avg_price - self.open_pair.binance_entry_price) * order.executed_qty
 
     async def _queue_mt4_close_after_exit_order(self, order: OrderUpdate) -> None:
         if not self.open_pair:
@@ -1228,7 +1358,7 @@ class StrategyEngine:
         funding = await self._binance_funding_income_since_open()
         accrued_swap = self._mt4_accrued_swap() or Decimal("0")
         estimated_fees = self._estimated_round_trip_fees(binance_entry, include_entry_fee=not entry_fee_included)
-        return entry_spread + ((funding + accrued_swap - estimated_fees) / self.open_pair.quantity_oz)
+        return entry_spread + ((self.open_pair.realized_pnl + funding + accrued_swap - estimated_fees) / self.open_pair.quantity_oz)
 
     def _exit_follow_buffer_usd_per_oz(self) -> Decimal:
         point = self.mt4.latest_swap_info().point or Decimal("0.01")
