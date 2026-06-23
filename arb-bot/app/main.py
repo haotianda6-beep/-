@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -87,6 +88,7 @@ _binance_accrued_funding_failure_ms = 0
 _runtime_state_cache: str | None = None
 _live_pair_reconcile_ms = 0
 _live_pair_reconcile_error_count = 0
+_live_pair_operation_cooldown_until_ms = 0
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 MT4_DIR = Path(__file__).resolve().parents[1] / "mt4"
 RUNTIME_STATE_PATH = settings.sqlite_path.parent / "runtime_state.json"
@@ -146,13 +148,28 @@ async def _cancel_unfilled_active_order_on_shutdown() -> None:
 
 
 async def _reconcile_live_startup_state() -> None:
+    global _live_pair_operation_cooldown_until_ms
     if settings.is_dry_run:
         return
     await _cancel_orphan_arb_orders("startup")
     try:
         qty = await binance_client.position_quantity()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("failed to inspect Binance position on startup: %s", str(exc)[:160])
+        error_text = str(exc)[:160]
+        logger.warning("failed to inspect Binance position on startup: %s", error_text)
+        if strategy.open_pair is not None and is_transient_live_reconcile_error(error_text):
+            cooldown_ms = _binance_transient_cooldown_ms(error_text)
+            _live_pair_operation_cooldown_until_ms = max(
+                _live_pair_operation_cooldown_until_ms,
+                _now_ms() + cooldown_ms,
+            )
+            strategy.state = StrategyState.PAIR_OPEN
+            strategy.last_error = f"启动时币安接口临时限频，已等待冷却约 {cooldown_ms // 1000} 秒后再对账"
+            storage.record_event(
+                "startup_live_reconcile_transient_cooldown",
+                {"error": error_text, "cooldown_ms": cooldown_ms},
+            )
+            return
         strategy.state = StrategyState.PAUSED
         strategy.last_error = "启动时检查币安持仓失败，已暂停自动挂单"
         return
@@ -166,12 +183,26 @@ async def _reconcile_live_startup_state() -> None:
 
 
 async def _cancel_orphan_arb_orders(reason: str) -> None:
+    global _live_pair_operation_cooldown_until_ms
     if settings.is_dry_run:
         return
     try:
         orders = await binance_client.open_orders()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("failed to inspect open Binance orders during %s: %s", reason, str(exc)[:160])
+        error_text = str(exc)[:160]
+        logger.warning("failed to inspect open Binance orders during %s: %s", reason, error_text)
+        if strategy.open_pair is not None and is_transient_live_reconcile_error(error_text):
+            cooldown_ms = _binance_transient_cooldown_ms(error_text)
+            _live_pair_operation_cooldown_until_ms = max(
+                _live_pair_operation_cooldown_until_ms,
+                _now_ms() + cooldown_ms,
+            )
+            strategy.last_error = f"检查币安遗留挂单时接口临时限频，已等待冷却约 {cooldown_ms // 1000} 秒"
+            storage.record_event(
+                "orphan_order_check_transient_cooldown",
+                {"reason": reason, "error": error_text, "cooldown_ms": cooldown_ms},
+            )
+            return
         strategy.state = StrategyState.PAUSED
         strategy.last_error = "检查币安遗留挂单失败，已暂停自动挂单"
         return
@@ -1126,7 +1157,11 @@ async def _restart_after_response() -> None:
 async def _strategy_loop() -> None:
     while True:
         try:
-            if not await _reconcile_open_pair_live_state():
+            if _live_pair_operation_cooldown_until_ms > _now_ms():
+                remaining_ms = _live_pair_operation_cooldown_until_ms - _now_ms()
+                if strategy.open_pair is not None and strategy.state == StrategyState.PAIR_OPEN:
+                    strategy.last_error = f"币安接口临时限频冷却中，约 {max(1, remaining_ms // 1000)} 秒后重新对账"
+            elif not await _reconcile_open_pair_live_state():
                 await strategy.step()
         except Exception as exc:  # noqa: BLE001
             strategy.last_error = str(exc)[:240]
@@ -1136,7 +1171,7 @@ async def _strategy_loop() -> None:
 
 
 async def _reconcile_open_pair_live_state() -> bool:
-    global _live_pair_reconcile_ms, _live_pair_reconcile_error_count
+    global _live_pair_reconcile_ms, _live_pair_reconcile_error_count, _live_pair_operation_cooldown_until_ms
     if settings.is_dry_run or strategy.open_pair is None:
         return False
     if strategy.active_order is not None or strategy.state not in {StrategyState.PAIR_OPEN, StrategyState.PAUSED}:
@@ -1158,9 +1193,20 @@ async def _reconcile_open_pair_live_state() -> bool:
             "open_pair_live_reconcile_failed",
             {"error": error_text, "count": _live_pair_reconcile_error_count},
         )
-        if is_transient_live_reconcile_error(error_text) and _live_pair_reconcile_error_count < 3:
-            strategy.last_error = f"组合实盘对账暂时失败，已跳过本轮：{error_text}"
-            return False
+        if is_transient_live_reconcile_error(error_text):
+            cooldown_ms = _binance_transient_cooldown_ms(error_text)
+            _live_pair_operation_cooldown_until_ms = max(
+                _live_pair_operation_cooldown_until_ms,
+                _now_ms() + cooldown_ms,
+            )
+            if _paused_for_transient_reconcile():
+                strategy.state = StrategyState.PAIR_OPEN
+            strategy.last_error = f"币安接口临时限频，已冷却约 {cooldown_ms // 1000} 秒后再对账；冷却期间不发起新挂单/撤单"
+            storage.record_event(
+                "open_pair_live_reconcile_transient_cooldown",
+                {"error": error_text, "cooldown_ms": cooldown_ms},
+            )
+            return True
         strategy.state = StrategyState.PAUSED
         strategy.last_error = f"组合实盘对账失败，已暂停：{error_text}"
         return True
@@ -1235,7 +1281,35 @@ async def _reconcile_open_pair_live_state() -> bool:
             },
         )
         return True
+    if _paused_for_transient_reconcile():
+        strategy.state = StrategyState.PAIR_OPEN
+        strategy.last_error = None
+        storage.record_event(
+            "open_pair_live_transient_reconcile_recovered",
+            {
+                "pair_id": strategy.open_pair.pair_id,
+                "binance_position_qty": str(binance_qty),
+            },
+        )
+        return True
     return False
+
+
+def _paused_for_transient_reconcile() -> bool:
+    return (
+        strategy.state == StrategyState.PAUSED
+        and bool(strategy.last_error)
+        and strategy.last_error.startswith("组合实盘对账失败")
+        and is_transient_live_reconcile_error(strategy.last_error)
+    )
+
+
+def _binance_transient_cooldown_ms(error_text: str) -> int:
+    match = re.search(r"banned until (\d{13})", error_text)
+    if match:
+        wait_ms = int(match.group(1)) - utc_now_ms() + 5_000
+        return max(30_000, min(wait_ms, 300_000))
+    return 60_000
 
 
 def _load_runtime_state() -> None:
@@ -1253,6 +1327,13 @@ def _load_runtime_state() -> None:
                 restored_state = StrategyState.PAUSED
             strategy.state = restored_state if restored_state in {StrategyState.PAIR_OPEN, StrategyState.PAUSED} else StrategyState.PAUSED
             strategy.last_error = data.get("last_error")
+            if _paused_for_transient_reconcile():
+                strategy.state = StrategyState.PAIR_OPEN
+                strategy.last_error = "上次因币安接口临时限频暂停，已恢复组合持仓监控并等待重新对账"
+                storage.record_event(
+                    "runtime_state_transient_pause_resumed",
+                    {"pair_id": strategy.open_pair.pair_id},
+                )
             storage.record_event("runtime_state_restored", {"pair_id": strategy.open_pair.pair_id, "state": strategy.state.value})
     except Exception as exc:  # noqa: BLE001
         strategy.state = StrategyState.PAUSED

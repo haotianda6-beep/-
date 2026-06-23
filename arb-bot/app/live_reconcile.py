@@ -15,6 +15,8 @@ def is_transient_live_reconcile_error(error_text: str) -> bool:
         or "recvWindow" in error_text
         or "-1003" in error_text
         or "Too many requests" in error_text
+        or "418" in error_text
+        or "I'm a teapot" in error_text
     )
 
 

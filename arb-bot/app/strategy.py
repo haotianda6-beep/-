@@ -1614,17 +1614,6 @@ class StrategyEngine:
         if not self.open_pair or self.open_pair.quantity_oz <= 0:
             return None
         binance_entry = self.open_pair.binance_entry_price
-        entry_fee_included = False
-        try:
-            snapshot = await self.binance.position_snapshot()
-            if snapshot and snapshot.position_amt != 0:
-                if snapshot.break_even_price is not None and snapshot.break_even_price > 0:
-                    binance_entry = snapshot.break_even_price
-                    entry_fee_included = True
-                elif snapshot.entry_price is not None:
-                    binance_entry = snapshot.entry_price
-        except Exception as exc:  # noqa: BLE001
-            self.storage.record_event("close_binance_entry_snapshot_failed", {"error": str(exc)[:160]})
         mt4_entry = self._mt4_average_entry_price() or self.open_pair.mt4_entry_price
         if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             entry_spread = binance_entry - mt4_entry
@@ -1632,7 +1621,7 @@ class StrategyEngine:
             entry_spread = mt4_entry - binance_entry
         funding = await self._binance_funding_income_since_open()
         accrued_swap = self._mt4_accrued_swap() or Decimal("0")
-        estimated_fees = self._estimated_round_trip_fees(binance_entry, include_entry_fee=not entry_fee_included)
+        estimated_fees = self._estimated_round_trip_fees(binance_entry, include_entry_fee=True)
         return entry_spread + ((self.open_pair.realized_pnl + funding + accrued_swap - estimated_fees) / self.open_pair.quantity_oz)
 
     def _exit_follow_buffer_usd_per_oz(self) -> Decimal:

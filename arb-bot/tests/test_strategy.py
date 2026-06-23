@@ -1783,7 +1783,7 @@ async def test_maybe_exit_blocks_loss_even_if_old_cache_would_allow_order(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_close_trigger_uses_binance_break_even_price_when_available(tmp_path):
+async def test_close_trigger_uses_recorded_entry_without_binance_snapshot_poll(tmp_path):
     engine, client, mt4 = await make_engine(
         tmp_path,
         BreakEvenSnapshotPaperClient,
@@ -1818,7 +1818,7 @@ async def test_close_trigger_uses_binance_break_even_price_when_available(tmp_pa
 
     trigger = await engine._close_trigger_spread()
 
-    assert trigger == Decimal("0.7")
+    assert trigger == Decimal("1.2")
 
 
 @pytest.mark.asyncio
@@ -2003,12 +2003,7 @@ class PositionTrackingPaperClient(PaperBinanceClient):
 
 class BreakEvenSnapshotPaperClient(PaperBinanceClient):
     async def position_snapshot(self) -> BinancePositionSnapshot | None:
-        return BinancePositionSnapshot(
-            symbol=self.settings.binance_symbol,
-            position_amt=Decimal("-1"),
-            entry_price=Decimal("2002"),
-            break_even_price=Decimal("2001.5"),
-        )
+        raise AssertionError("close trigger calculation must not poll Binance position snapshot")
 
 
 async def open_live_pair(
