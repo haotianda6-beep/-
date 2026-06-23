@@ -9,6 +9,10 @@ from app.models import Mt4Position, OpenPair
 LiveReconcileAction = Literal["clear", "pause"]
 
 
+def is_transient_live_reconcile_error(error_text: str) -> bool:
+    return "-1021" in error_text or "recvWindow" in error_text
+
+
 def open_pair_live_reconcile_action(
     open_pair: OpenPair | None,
     binance_position_qty: Decimal,

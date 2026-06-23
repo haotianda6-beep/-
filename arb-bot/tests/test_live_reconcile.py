@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app.live_reconcile import open_pair_live_reconcile_action
+from app.live_reconcile import is_transient_live_reconcile_error, open_pair_live_reconcile_action
 from app.models import Mt4Position, OpenPair, PairDirection, Side
 
 
@@ -57,3 +57,8 @@ def test_open_pair_reconcile_ignores_other_mt4_symbols_when_xau_is_flat() -> Non
     )
 
     assert action == "clear"
+
+
+def test_binance_recv_window_error_is_transient() -> None:
+    assert is_transient_live_reconcile_error('{"code":-1021,"msg":"Timestamp for this request is outside of the recvWindow."}')
+    assert not is_transient_live_reconcile_error('{"code":-2015,"msg":"Invalid API-key, IP, or permissions."}')
