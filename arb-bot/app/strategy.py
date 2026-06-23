@@ -130,7 +130,6 @@ def _binance_post_only_rejected(exc: BinanceError) -> bool:
 
 
 MIN_ADD_AFTER_OPEN_MS = 30_000
-CLOSE_TRIGGER_CACHE_TTL_MS = 30_000
 FUNDING_INCOME_CACHE_TTL_MS = 60_000
 FUNDING_INCOME_FAILURE_RETRY_MS = 60_000
 
@@ -168,8 +167,6 @@ class StrategyEngine:
         self.exit_force_reason: str | None = None
         self.exit_repair_fill: OrderUpdate | None = None
         self.last_error: str | None = None
-        self._close_trigger_cache_ms = 0
-        self._close_trigger_cache: Decimal | None = None
         self._funding_income_cache_pair_id: str | None = None
         self._funding_income_cache_value = Decimal("0")
         self._funding_income_cache_ms = 0
@@ -802,8 +799,6 @@ class StrategyEngine:
         self.hedged_qty = Decimal("0")
         self.pending_hedge_qty = Decimal("0")
         self.hedge_started_ms = 0
-        self._close_trigger_cache = None
-        self._close_trigger_cache_ms = 0
         self.state = StrategyState.PAIR_OPEN
 
     async def _maybe_add_position(self, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> bool:
@@ -922,6 +917,8 @@ class StrategyEngine:
         current_spread = self._current_exit_spread(binance_quote, mt4_quote)
         break_even_spread = await self._break_even_spread()
         trigger_spread = await self._close_trigger_spread()
+        if not force and (current_spread is None or trigger_spread is None or current_spread > trigger_spread):
+            return
         if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             side = Side.BUY
             price = round_down(binance_quote.bid, self.binance.filters.tick_size)
@@ -1319,8 +1316,6 @@ class StrategyEngine:
         self.active_order = None
         self.exit_repair_fill = None
         self.exit_force_reason = None
-        self._close_trigger_cache = None
-        self._close_trigger_cache_ms = 0
         self.state = StrategyState.PAIR_OPEN
 
     def _binance_exit_realized_pnl(self, order: OrderUpdate) -> Decimal:
@@ -1608,16 +1603,11 @@ class StrategyEngine:
     async def _close_trigger_spread(self) -> Decimal | None:
         if not self.open_pair:
             return None
-        now = utc_now_ms()
-        if self._close_trigger_cache is not None and now - self._close_trigger_cache_ms <= CLOSE_TRIGGER_CACHE_TTL_MS:
-            return self._close_trigger_cache
         break_even = await self._break_even_spread()
         if break_even is None:
             trigger = None
         else:
             trigger = break_even - self._effective_close_profit_usd_per_oz() - self._exit_follow_buffer_usd_per_oz()
-        self._close_trigger_cache = trigger
-        self._close_trigger_cache_ms = now
         return trigger
 
     async def _break_even_spread(self) -> Decimal | None:
@@ -1778,8 +1768,6 @@ class StrategyEngine:
         self.hedged_qty = Decimal("0")
         self.pending_hedge_qty = Decimal("0")
         self.hedge_started_ms = 0
-        self._close_trigger_cache = None
-        self._close_trigger_cache_ms = 0
         self.state = StrategyState.PAIR_OPEN if return_to_pair else StrategyState.IDLE
 
     def _reset_all(self) -> None:
@@ -1798,8 +1786,6 @@ class StrategyEngine:
         self.hedged_qty = Decimal("0")
         self.pending_hedge_qty = Decimal("0")
         self.hedge_started_ms = 0
-        self._close_trigger_cache = None
-        self._close_trigger_cache_ms = 0
         if had_open_pair:
             self.last_pair_closed_ms = utc_now_ms()
         self.state = StrategyState.IDLE

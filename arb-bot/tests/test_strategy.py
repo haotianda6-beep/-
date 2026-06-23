@@ -1732,6 +1732,57 @@ async def test_close_trigger_uses_actual_entry_spread_without_close_max_cap(tmp_
 
 
 @pytest.mark.asyncio
+async def test_close_trigger_does_not_reuse_stale_cached_value(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        settings_kwargs={"CLOSE_PROFIT_USD_PER_OZ": Decimal("0.8"), "MT4_SLIPPAGE_POINTS": 30},
+    )
+    client.maker_fee_rate = Decimal("0")
+    engine.open_pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("2"),
+        binance_entry_price=Decimal("4129.64"),
+        mt4_entry_price=Decimal("4127.795"),
+        binance_order_id="entry-1",
+        mt4_tickets=[76930330, 76931173],
+    )
+    engine._close_trigger_cache = Decimal("2.92")
+    engine._close_trigger_cache_ms = utc_now_ms()
+
+    trigger = await engine._close_trigger_spread()
+
+    assert trigger == Decimal("0.745")
+
+
+@pytest.mark.asyncio
+async def test_maybe_exit_blocks_loss_even_if_old_cache_would_allow_order(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        settings_kwargs={"CLOSE_PROFIT_USD_PER_OZ": Decimal("0.8"), "MT4_SLIPPAGE_POINTS": 30},
+    )
+    client.maker_fee_rate = Decimal("0")
+    engine.open_pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("2"),
+        binance_entry_price=Decimal("4129.64"),
+        mt4_entry_price=Decimal("4127.795"),
+        binance_order_id="entry-1",
+        mt4_tickets=[76930330, 76931173],
+    )
+    engine.state = StrategyState.PAIR_OPEN
+    engine._close_trigger_cache = Decimal("2.92")
+    engine._close_trigger_cache_ms = utc_now_ms()
+    binance_quote = MarketQuote(symbol="XAUUSDT", bid=Decimal("4133.96"), ask=Decimal("4134.10"))
+    mt4_quote = MarketQuote(symbol="XAUUSD", bid=Decimal("4131.10"), ask=Decimal("4131.41"))
+    client.set_quote(binance_quote.bid, binance_quote.ask)
+
+    await engine._maybe_exit(binance_quote, mt4_quote)
+
+    assert engine.active_order is None
+    assert all(not order.reduce_only for order in client._orders.values())
+
+
+@pytest.mark.asyncio
 async def test_close_trigger_uses_binance_break_even_price_when_available(tmp_path):
     engine, client, mt4 = await make_engine(
         tmp_path,
