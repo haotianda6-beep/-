@@ -61,4 +61,5 @@ def test_open_pair_reconcile_ignores_other_mt4_symbols_when_xau_is_flat() -> Non
 
 def test_binance_recv_window_error_is_transient() -> None:
     assert is_transient_live_reconcile_error('{"code":-1021,"msg":"Timestamp for this request is outside of the recvWindow."}')
+    assert is_transient_live_reconcile_error('{"code":-1003,"msg":"Too many requests; current limit of IP is 2400 requests per minute."}')
     assert not is_transient_live_reconcile_error('{"code":-2015,"msg":"Invalid API-key, IP, or permissions."}')

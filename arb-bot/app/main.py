@@ -53,6 +53,11 @@ from app.strategy import (
 
 setup_logging()
 logger = logging.getLogger(__name__)
+POSITION_RISK_CACHE_TTL_MS = 10_000
+POSITION_RISK_FAILURE_RETRY_MS = 30_000
+FUNDING_INCOME_CACHE_TTL_MS = 60_000
+FUNDING_INCOME_FAILURE_RETRY_MS = 60_000
+LIVE_PAIR_RECONCILE_INTERVAL_MS = 30_000
 
 settings: Settings = load_settings()
 storage = Storage(settings.sqlite_path)
@@ -65,11 +70,14 @@ app = FastAPI(title="黄金价差执行器", version="0.1.0")
 _loop_task: asyncio.Task | None = None
 _binance_position_qty_cache: Decimal | None = None
 _binance_position_qty_cache_ms = 0
+_binance_position_qty_failure_ms = 0
 _binance_position_snapshot_cache: BinancePositionSnapshot | None = None
 _binance_position_snapshot_cache_ms = 0
+_binance_position_snapshot_failure_ms = 0
 _binance_accrued_funding_cache_pair_id: str | None = None
 _binance_accrued_funding_cache_value: Decimal | None = None
 _binance_accrued_funding_cache_ms = 0
+_binance_accrued_funding_failure_ms = 0
 _runtime_state_cache: str | None = None
 _live_pair_reconcile_ms = 0
 _live_pair_reconcile_error_count = 0
@@ -274,32 +282,40 @@ async def status() -> EngineStatus:
 
 
 async def _binance_position_quantity() -> Decimal | None:
-    global _binance_position_qty_cache, _binance_position_qty_cache_ms
+    global _binance_position_qty_cache, _binance_position_qty_cache_ms, _binance_position_qty_failure_ms
     snapshot = await _binance_position_snapshot()
     if snapshot is not None:
         return snapshot.position_amt
     now = _now_ms()
-    if _binance_position_qty_cache is not None and now - _binance_position_qty_cache_ms <= 1500:
+    if _binance_position_qty_cache is not None and now - _binance_position_qty_cache_ms <= POSITION_RISK_CACHE_TTL_MS:
+        return _binance_position_qty_cache
+    if now - _binance_position_qty_failure_ms <= POSITION_RISK_FAILURE_RETRY_MS:
         return _binance_position_qty_cache
     try:
         _binance_position_qty_cache = await binance_client.position_quantity()
         _binance_position_qty_cache_ms = now
+        _binance_position_qty_failure_ms = 0
     except Exception as exc:  # noqa: BLE001
+        _binance_position_qty_failure_ms = now
         logger.warning("Binance position quantity unavailable: %s", str(exc)[:160])
     return _binance_position_qty_cache
 
 
 async def _binance_position_snapshot() -> BinancePositionSnapshot | None:
-    global _binance_position_snapshot_cache, _binance_position_snapshot_cache_ms
+    global _binance_position_snapshot_cache, _binance_position_snapshot_cache_ms, _binance_position_snapshot_failure_ms
     now = _now_ms()
-    if _binance_position_snapshot_cache is not None and now - _binance_position_snapshot_cache_ms <= 1500:
+    if _binance_position_snapshot_cache is not None and now - _binance_position_snapshot_cache_ms <= POSITION_RISK_CACHE_TTL_MS:
+        return _binance_position_snapshot_cache
+    if now - _binance_position_snapshot_failure_ms <= POSITION_RISK_FAILURE_RETRY_MS:
         return _binance_position_snapshot_cache
     try:
         snapshot = await binance_client.position_snapshot()
         if snapshot is not None:
             _binance_position_snapshot_cache = snapshot
             _binance_position_snapshot_cache_ms = now
+            _binance_position_snapshot_failure_ms = 0
     except Exception as exc:  # noqa: BLE001
+        _binance_position_snapshot_failure_ms = now
         logger.warning("Binance position snapshot unavailable: %s", str(exc)[:160])
     return _binance_position_snapshot_cache
 
@@ -811,11 +827,13 @@ async def _reconcile_open_pair_live_state() -> bool:
     if not mt4_bridge.connected():
         return False
     now = _now_ms()
-    if now - _live_pair_reconcile_ms < 2000:
+    if now - _live_pair_reconcile_ms < LIVE_PAIR_RECONCILE_INTERVAL_MS:
         return False
     _live_pair_reconcile_ms = now
     try:
-        binance_qty = await binance_client.position_quantity()
+        binance_qty = await _binance_position_quantity()
+        if binance_qty is None:
+            raise RuntimeError("Binance position cache unavailable")
     except Exception as exc:  # noqa: BLE001
         _live_pair_reconcile_error_count += 1
         error_text = str(exc)[:160]
@@ -825,7 +843,7 @@ async def _reconcile_open_pair_live_state() -> bool:
         )
         if is_transient_live_reconcile_error(error_text) and _live_pair_reconcile_error_count < 3:
             strategy.last_error = f"组合实盘对账暂时失败，已跳过本轮：{error_text}"
-            return True
+            return False
         strategy.state = StrategyState.PAUSED
         strategy.last_error = f"组合实盘对账失败，已暂停：{error_text}"
         return True
@@ -1015,23 +1033,30 @@ async def _binance_accrued_funding(pair) -> Decimal | None:
     global _binance_accrued_funding_cache_pair_id
     global _binance_accrued_funding_cache_value
     global _binance_accrued_funding_cache_ms
+    global _binance_accrued_funding_failure_ms
     if settings.is_dry_run:
         return None
     now = _now_ms()
     if (
         _binance_accrued_funding_cache_pair_id == pair.pair_id
         and _binance_accrued_funding_cache_value is not None
-        and now - _binance_accrued_funding_cache_ms <= 10_000
+        and now - _binance_accrued_funding_cache_ms <= FUNDING_INCOME_CACHE_TTL_MS
     ):
         return _binance_accrued_funding_cache_value
+    if now - _binance_accrued_funding_failure_ms <= FUNDING_INCOME_FAILURE_RETRY_MS:
+        if _binance_accrued_funding_cache_pair_id == pair.pair_id:
+            return _binance_accrued_funding_cache_value
+        return None
     try:
         rows = await binance_client.funding_income(pair.opened_ms - 60_000, utc_now_ms(), limit=1000)
         total = sum((_decimal_field(row, "income") or Decimal("0") for row in rows), Decimal("0"))
         _binance_accrued_funding_cache_pair_id = pair.pair_id
         _binance_accrued_funding_cache_value = total
         _binance_accrued_funding_cache_ms = now
+        _binance_accrued_funding_failure_ms = 0
         return total
     except Exception as exc:  # noqa: BLE001
+        _binance_accrued_funding_failure_ms = now
         logger.warning("Binance funding income unavailable: %s", str(exc)[:160])
         if _binance_accrued_funding_cache_pair_id == pair.pair_id:
             return _binance_accrued_funding_cache_value

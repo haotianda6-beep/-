@@ -31,6 +31,8 @@ from app.models import (
 
 
 logger = logging.getLogger(__name__)
+ACCOUNT_SNAPSHOT_CACHE_MS = 10_000
+ACCOUNT_SNAPSHOT_FAILURE_RETRY_MS = 30_000
 
 
 class BinanceError(Exception):
@@ -102,6 +104,7 @@ class PaperBinanceClient(BinanceBaseClient):
         self._funding: BinanceFundingInfo | None = None
         self._account: AccountSnapshot | None = None
         self._account_cache_ms = 0
+        self._account_failure_ms = 0
 
     async def start(self) -> None:
         if self._use_live_market_data:
@@ -205,12 +208,16 @@ class PaperBinanceClient(BinanceBaseClient):
         if not self._use_live_market_data:
             return self._account
         now = utc_now_ms()
-        if self._account and now - self._account_cache_ms <= 3000:
+        if self._account and now - self._account_cache_ms <= ACCOUNT_SNAPSHOT_CACHE_MS:
+            return self._account
+        if now - self._account_failure_ms <= ACCOUNT_SNAPSHOT_FAILURE_RETRY_MS:
             return self._account
         try:
             self._account = _parse_account_snapshot(await self._signed("GET", "/fapi/v2/account", {}))
             self._account_cache_ms = now
+            self._account_failure_ms = 0
         except Exception as exc:  # noqa: BLE001
+            self._account_failure_ms = now
             logger.warning("Binance paper account snapshot unavailable: %s", str(exc)[:160])
         return self._account
 
@@ -338,6 +345,7 @@ class BinanceFuturesClient(BinanceBaseClient):
         self._hedge_mode = False
         self._account: AccountSnapshot | None = None
         self._account_cache_ms = 0
+        self._account_failure_ms = 0
 
     async def start(self) -> None:
         await self._load_exchange_info()
@@ -402,12 +410,16 @@ class BinanceFuturesClient(BinanceBaseClient):
 
     async def account_snapshot(self) -> AccountSnapshot | None:
         now = utc_now_ms()
-        if self._account and now - self._account_cache_ms <= 3000:
+        if self._account and now - self._account_cache_ms <= ACCOUNT_SNAPSHOT_CACHE_MS:
+            return self._account
+        if now - self._account_failure_ms <= ACCOUNT_SNAPSHOT_FAILURE_RETRY_MS:
             return self._account
         try:
             self._account = _parse_account_snapshot(await self._signed("GET", "/fapi/v2/account", {}))
             self._account_cache_ms = now
+            self._account_failure_ms = 0
         except Exception as exc:  # noqa: BLE001
+            self._account_failure_ms = now
             logger.warning("Binance account snapshot unavailable: %s", str(exc)[:160])
         return self._account
 

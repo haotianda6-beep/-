@@ -125,6 +125,9 @@ def _binance_order_missing(exc: BinanceError) -> bool:
 
 
 MIN_ADD_AFTER_OPEN_MS = 30_000
+CLOSE_TRIGGER_CACHE_TTL_MS = 30_000
+FUNDING_INCOME_CACHE_TTL_MS = 60_000
+FUNDING_INCOME_FAILURE_RETRY_MS = 60_000
 
 
 class StrategyEngine:
@@ -160,6 +163,10 @@ class StrategyEngine:
         self.last_error: str | None = None
         self._close_trigger_cache_ms = 0
         self._close_trigger_cache: Decimal | None = None
+        self._funding_income_cache_pair_id: str | None = None
+        self._funding_income_cache_value = Decimal("0")
+        self._funding_income_cache_ms = 0
+        self._funding_income_failure_ms = 0
 
     async def step(self) -> None:
         await self._handle_mt4_reports()
@@ -1041,7 +1048,7 @@ class StrategyEngine:
         if not self.open_pair:
             return None
         now = utc_now_ms()
-        if self._close_trigger_cache is not None and now - self._close_trigger_cache_ms <= 2000:
+        if self._close_trigger_cache is not None and now - self._close_trigger_cache_ms <= CLOSE_TRIGGER_CACHE_TTL_MS:
             return self._close_trigger_cache
         break_even = await self._break_even_spread()
         if break_even is None:
@@ -1087,16 +1094,29 @@ class StrategyEngine:
     async def _binance_funding_income_since_open(self) -> Decimal:
         if not self.open_pair or self.settings.is_dry_run:
             return Decimal("0")
+        now = utc_now_ms()
+        if (
+            self._funding_income_cache_pair_id == self.open_pair.pair_id
+            and now - self._funding_income_cache_ms <= FUNDING_INCOME_CACHE_TTL_MS
+        ):
+            return self._funding_income_cache_value
+        if now - self._funding_income_failure_ms <= FUNDING_INCOME_FAILURE_RETRY_MS:
+            return self._funding_income_cache_value if self._funding_income_cache_pair_id == self.open_pair.pair_id else Decimal("0")
         try:
             rows = await self.binance.funding_income(self.open_pair.opened_ms - 60_000, utc_now_ms(), limit=1000)
         except Exception as exc:  # noqa: BLE001
+            self._funding_income_failure_ms = now
             self.storage.record_event("close_funding_income_failed", {"error": str(exc)[:160]})
-            return Decimal("0")
+            return self._funding_income_cache_value if self._funding_income_cache_pair_id == self.open_pair.pair_id else Decimal("0")
         total = Decimal("0")
         for row in rows:
             value = row.get("income")
             if value is not None:
                 total += Decimal(str(value))
+        self._funding_income_cache_pair_id = self.open_pair.pair_id
+        self._funding_income_cache_value = total
+        self._funding_income_cache_ms = now
+        self._funding_income_failure_ms = 0
         return total
 
     def _estimated_round_trip_fees(self, binance_entry: Decimal) -> Decimal:

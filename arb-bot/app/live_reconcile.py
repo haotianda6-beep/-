@@ -10,7 +10,12 @@ LiveReconcileAction = Literal["clear", "pause"]
 
 
 def is_transient_live_reconcile_error(error_text: str) -> bool:
-    return "-1021" in error_text or "recvWindow" in error_text
+    return (
+        "-1021" in error_text
+        or "recvWindow" in error_text
+        or "-1003" in error_text
+        or "Too many requests" in error_text
+    )
 
 
 def open_pair_live_reconcile_action(
