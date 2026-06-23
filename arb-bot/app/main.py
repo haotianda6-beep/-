@@ -1568,10 +1568,9 @@ def _execution_plan(metrics: PositionMetrics | None = None) -> ExecutionPlanStat
 def _pair_add_plan(pair, binance_quote: MarketQuote, mt4_quote: MarketQuote, metrics: PositionMetrics | None = None):
     if settings.max_add_count <= 0 or pair.add_count >= settings.max_add_count:
         return None
-    base_edge = _pair_add_base_edge(pair, metrics)
-    if base_edge is None:
+    trigger_edge = _pair_next_add_trigger_edge(pair, metrics)
+    if trigger_edge is None:
         return None
-    trigger_edge = base_edge + settings.add_edge_growth_usd
     return build_directional_entry_plan(settings, binance_client.filters, binance_quote, mt4_quote, pair.direction, trigger_edge)
 
 
@@ -1580,13 +1579,13 @@ def _pair_add_summary(pair, binance_quote: MarketQuote, mt4_quote: MarketQuote, 
         return "补仓已关闭。"
     if pair.add_count >= settings.max_add_count:
         return f"补仓次数 {pair.add_count}/{settings.max_add_count}，已达上限。"
-    base_edge = _pair_add_base_edge(pair, metrics)
-    if base_edge is None:
+    anchor_edge = _pair_add_anchor_edge(pair, metrics)
+    if anchor_edge is None:
         return "补仓基准价差缺失，暂不补仓。"
-    trigger_edge = base_edge + settings.add_edge_growth_usd
+    trigger_edge = anchor_edge + settings.add_edge_growth_usd
     current_edge = binance_quote.ask - mt4_quote.ask if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else mt4_quote.bid - binance_quote.bid
-    label = "上次补仓有效价差" if pair.add_count > 0 else "首仓有效价差"
-    return f"补仓观察：已补 {pair.add_count}/{settings.max_add_count} 次，{label} {base_edge:.4f} 美元，下次触发 {trigger_edge:.4f} 美元，当前同向价差 {current_edge:.4f} 美元。"
+    label = "上次补仓" if pair.add_count > 0 else "首仓基准"
+    return f"补仓观察：已补 {pair.add_count}/{settings.max_add_count} 次，下次补仓基差 {trigger_edge:.4f} 美元（{label} {anchor_edge:.4f} + 增加 {settings.add_edge_growth_usd:.4f}），当前同向价差 {current_edge:.4f} 美元。"
 
 
 def _mt4_limit_text(side: Side | None, price: Decimal | None) -> str:
@@ -1597,15 +1596,20 @@ def _mt4_limit_text(side: Side | None, price: Decimal | None) -> str:
     return "未设置"
 
 
-def _pair_add_base_edge(pair, metrics: PositionMetrics | None = None) -> Decimal | None:
+def _pair_next_add_trigger_edge(pair, metrics: PositionMetrics | None = None) -> Decimal | None:
+    anchor = _pair_add_anchor_edge(pair, metrics)
+    if anchor is None:
+        return None
+    return anchor + settings.add_edge_growth_usd
+
+
+def _pair_add_anchor_edge(pair, metrics: PositionMetrics | None = None) -> Decimal | None:
     if pair.add_count == 0:
         base = pair.base_edge
         if metrics and metrics.actual_entry_spread is not None:
-            return max(base, metrics.actual_entry_spread) if base is not None else metrics.actual_entry_spread
+            return metrics.actual_entry_spread
         mt4_entry, _lots = _mt4_average_entry_price(pair)
         current = _actual_entry_spread(pair, pair.binance_entry_price, mt4_entry or pair.mt4_entry_price)
-        if base is not None and current is not None:
-            return max(base, current)
         return base if current is None else current
     return pair.last_add_edge or pair.base_edge
 

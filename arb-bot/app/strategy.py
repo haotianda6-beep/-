@@ -362,10 +362,9 @@ class StrategyEngine:
         if not binance_quote or not mt4_quote:
             return False
         if self.adding_to_pair and self.open_pair:
-            base_edge = self._last_add_edge()
-            if base_edge is None:
+            min_edge = self._next_add_trigger_edge()
+            if min_edge is None:
                 return False
-            min_edge = base_edge + self.settings.add_edge_growth_usd
             return self._current_edge(self.active_plan.direction, binance_quote, mt4_quote) >= min_edge
         if self.active_plan.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             return binance_quote.ask - mt4_quote.ask >= self.settings.cancel_min_edge
@@ -804,10 +803,9 @@ class StrategyEngine:
             return False
         if utc_now_ms() - self.open_pair.opened_ms < MIN_ADD_AFTER_OPEN_MS:
             return False
-        base_edge = self._last_add_edge()
-        if base_edge is None:
+        trigger_edge = self._next_add_trigger_edge()
+        if trigger_edge is None:
             return False
-        trigger_edge = base_edge + self.settings.add_edge_growth_usd
         plan = build_directional_entry_plan(
             self.settings,
             self.binance.filters,
@@ -866,13 +864,21 @@ class StrategyEngine:
         self.state = StrategyState.QUOTING_BINANCE_ENTRY
         return True
 
-    def _last_add_edge(self) -> Decimal | None:
+    def _next_add_trigger_edge(self) -> Decimal | None:
+        anchor = self._add_anchor_edge()
+        if anchor is None:
+            return None
+        return anchor + self.settings.add_edge_growth_usd
+
+    def _add_anchor_edge(self) -> Decimal | None:
         if not self.open_pair:
             return None
         if self.open_pair.add_count == 0:
+            base = self.open_pair.base_edge
             actual = self._current_pair_entry_spread()
             if actual is not None:
                 return actual
+            return base
         return self.open_pair.last_add_edge or self.open_pair.base_edge
 
     def _entry_spread(self, direction: PairDirection, binance_entry: Decimal, mt4_entry: Decimal) -> Decimal:
@@ -1213,7 +1219,7 @@ class StrategyEngine:
                 "binance_order_id": repair.order_id,
                 "realized_pnl": pair.realized_pnl + realized,
                 "base_edge": new_edge if pair.add_count == 0 else pair.base_edge,
-                "last_add_edge": new_edge,
+                "last_add_edge": new_edge if pair.add_count == 0 else pair.last_add_edge,
             }
         )
         self.active_order = None
