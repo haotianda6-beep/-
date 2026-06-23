@@ -5,6 +5,7 @@ import pytest
 from app.binance_client import BinanceError, PaperBinanceClient
 from app.config import Settings
 from app.models import (
+    BinancePositionSnapshot,
     ExchangeFilters,
     MarketQuote,
     Mt4Position,
@@ -121,7 +122,7 @@ async def test_partial_fill_hedges_only_filled_quantity(tmp_path):
     command = mt4.next_command()
     assert command["action"] == "BUY"
     assert Decimal(str(command["lots"])) == Decimal("0.004")
-    assert command["max_price"] is None
+    assert Decimal(str(command["max_price"])) == Decimal("2001.20")
     assert command["min_price"] is None
     assert engine.state == StrategyState.HEDGING_MT4
 
@@ -1044,6 +1045,45 @@ async def test_close_trigger_uses_actual_entry_spread_without_close_max_cap(tmp_
 
 
 @pytest.mark.asyncio
+async def test_close_trigger_uses_binance_break_even_price_when_available(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        BreakEvenSnapshotPaperClient,
+        settings_kwargs={"CLOSE_PROFIT_USD_PER_OZ": Decimal("0.8"), "MT4_SLIPPAGE_POINTS": 0},
+    )
+    client.maker_fee_rate = Decimal("0")
+    engine.open_pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("2002"),
+        mt4_entry_price=Decimal("2000"),
+        binance_order_id="entry-1",
+        mt4_ticket=76804334,
+        mt4_tickets=[76804334],
+    )
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("1999.3"),
+            positions=[
+                Mt4Position(
+                    ticket=76804334,
+                    symbol="XAUUSD",
+                    side=Side.BUY,
+                    lots=Decimal("0.01"),
+                    open_price=Decimal("2000"),
+                )
+            ],
+        )
+    )
+
+    trigger = await engine._close_trigger_spread()
+
+    assert trigger == Decimal("0.7")
+
+
+@pytest.mark.asyncio
 async def test_close_trigger_reserves_mt4_follow_slippage_buffer(tmp_path):
     engine, client, mt4 = await make_engine(
         tmp_path,
@@ -1165,6 +1205,16 @@ class PositionTrackingPaperClient(PaperBinanceClient):
             signed = order.executed_qty if order.side == Side.BUY else -order.executed_qty
             qty += signed
         return qty
+
+
+class BreakEvenSnapshotPaperClient(PaperBinanceClient):
+    async def position_snapshot(self) -> BinancePositionSnapshot | None:
+        return BinancePositionSnapshot(
+            symbol=self.settings.binance_symbol,
+            position_amt=Decimal("-1"),
+            entry_price=Decimal("2002"),
+            break_even_price=Decimal("2001.5"),
+        )
 
 
 async def open_live_pair(

@@ -549,7 +549,15 @@ class StrategyEngine:
             )
             return
         lots = qty / self.settings.mt4_lot_size_oz
-        self.mt4.queue_market_order(self.active_plan.mt4_hedge_side, lots, "entry hedge")
+        max_price = fill_price - self.settings.min_locked_edge if self.active_plan.mt4_hedge_side == Side.BUY else None
+        min_price = fill_price + self.settings.min_locked_edge if self.active_plan.mt4_hedge_side == Side.SELL else None
+        self.mt4.queue_market_order(
+            self.active_plan.mt4_hedge_side,
+            lots,
+            "entry hedge",
+            max_price=max_price,
+            min_price=min_price,
+        )
         self.hedge_started_ms = utc_now_ms()
         self.pending_hedge_qty += qty
         self.state = StrategyState.HEDGING_MT4
@@ -1063,10 +1071,15 @@ class StrategyEngine:
         if not self.open_pair or self.open_pair.quantity_oz <= 0:
             return None
         binance_entry = self.open_pair.binance_entry_price
+        entry_fee_included = False
         try:
             snapshot = await self.binance.position_snapshot()
-            if snapshot and snapshot.entry_price is not None and snapshot.position_amt != 0:
-                binance_entry = snapshot.entry_price
+            if snapshot and snapshot.position_amt != 0:
+                if snapshot.break_even_price is not None and snapshot.break_even_price > 0:
+                    binance_entry = snapshot.break_even_price
+                    entry_fee_included = True
+                elif snapshot.entry_price is not None:
+                    binance_entry = snapshot.entry_price
         except Exception as exc:  # noqa: BLE001
             self.storage.record_event("close_binance_entry_snapshot_failed", {"error": str(exc)[:160]})
         mt4_entry = self._mt4_average_entry_price() or self.open_pair.mt4_entry_price
@@ -1076,7 +1089,7 @@ class StrategyEngine:
             entry_spread = mt4_entry - binance_entry
         funding = await self._binance_funding_income_since_open()
         accrued_swap = self._mt4_accrued_swap() or Decimal("0")
-        estimated_fees = self._estimated_round_trip_fees(binance_entry)
+        estimated_fees = self._estimated_round_trip_fees(binance_entry, include_entry_fee=not entry_fee_included)
         return entry_spread + ((funding + accrued_swap - estimated_fees) / self.open_pair.quantity_oz)
 
     def _exit_follow_buffer_usd_per_oz(self) -> Decimal:
@@ -1119,7 +1132,7 @@ class StrategyEngine:
         self._funding_income_failure_ms = 0
         return total
 
-    def _estimated_round_trip_fees(self, binance_entry: Decimal) -> Decimal:
+    def _estimated_round_trip_fees(self, binance_entry: Decimal, include_entry_fee: bool = True) -> Decimal:
         if not self.open_pair:
             return Decimal("0")
         fee_rate = self.binance.maker_fee_rate or self.settings.binance_maker_fee_rate or Decimal("0")
@@ -1130,7 +1143,10 @@ class StrategyEngine:
             exit_price = round_up(quote.ask, self.binance.filters.tick_size)
         else:
             exit_price = binance_entry
-        return (binance_entry + exit_price) * self.open_pair.quantity_oz * abs(fee_rate)
+        notional = exit_price * self.open_pair.quantity_oz
+        if include_entry_fee:
+            notional += binance_entry * self.open_pair.quantity_oz
+        return notional * abs(fee_rate)
 
     def _mt4_average_entry_price(self) -> Decimal | None:
         if not self.open_pair:

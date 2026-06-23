@@ -979,14 +979,14 @@ async def _position_metrics() -> PositionMetrics:
 
     qty = pair.quantity_oz
     binance_snapshot = await _binance_position_snapshot()
-    binance_entry_price = _actual_binance_entry_price(pair, binance_snapshot)
+    binance_entry_price, entry_fee_included = _effective_binance_entry_price(pair, binance_snapshot)
     mt4_entry_price, mt4_lots = _mt4_average_entry_price(pair)
     funding_estimate = _estimate_binance_funding(pair, qty, funding, binance_quote)
     mt4_swap_estimate = _estimate_mt4_swap(pair, qty, swap_info)
     accrued_funding = await _binance_accrued_funding(pair)
     accrued_swap = _mt4_accrued_swap(pair)
     gross = _estimate_close_gross(pair, binance_quote, mt4_quote, binance_entry_price, mt4_entry_price)
-    fees = _estimate_binance_fees(pair, binance_quote, binance_entry_price)
+    fees = _estimate_binance_fees(pair, binance_quote, binance_entry_price, include_entry_fee=not entry_fee_included)
     actual_entry_spread = _actual_entry_spread(pair, binance_entry_price, mt4_entry_price)
     current_exit_spread = _current_exit_spread(pair, binance_quote, mt4_quote)
     profitable_spread_threshold = _profitable_spread_threshold(pair, actual_entry_spread, accrued_funding, accrued_swap, fees)
@@ -1063,10 +1063,13 @@ async def _binance_accrued_funding(pair) -> Decimal | None:
         return None
 
 
-def _actual_binance_entry_price(pair, snapshot: BinancePositionSnapshot | None) -> Decimal:
-    if snapshot and snapshot.entry_price is not None and snapshot.position_amt != 0:
-        return snapshot.entry_price
-    return pair.binance_entry_price
+def _effective_binance_entry_price(pair, snapshot: BinancePositionSnapshot | None) -> tuple[Decimal, bool]:
+    if snapshot and snapshot.position_amt != 0:
+        if snapshot.break_even_price is not None and snapshot.break_even_price > 0:
+            return snapshot.break_even_price, True
+        if snapshot.entry_price is not None:
+            return snapshot.entry_price, False
+    return pair.binance_entry_price, False
 
 
 def _mt4_average_entry_price(pair) -> tuple[Decimal | None, Decimal | None]:
@@ -1198,7 +1201,12 @@ def _estimate_close_gross(
     return (binance_exit - binance_entry) * qty + (mt4_entry - mt4_exit) * qty
 
 
-def _estimate_binance_fees(pair, binance_quote: MarketQuote | None, binance_entry_price: Decimal | None = None) -> Decimal | None:
+def _estimate_binance_fees(
+    pair,
+    binance_quote: MarketQuote | None,
+    binance_entry_price: Decimal | None = None,
+    include_entry_fee: bool = True,
+) -> Decimal | None:
     fee_rate = binance_client.maker_fee_rate
     if fee_rate is None or not binance_quote:
         return None
@@ -1208,7 +1216,10 @@ def _estimate_binance_fees(pair, binance_quote: MarketQuote | None, binance_entr
         exit_price = round_down(binance_quote.bid, binance_client.filters.tick_size)
     else:
         exit_price = round_up(binance_quote.ask, binance_client.filters.tick_size)
-    return (entry_price * qty + exit_price * qty) * abs(fee_rate)
+    notional = exit_price * qty
+    if include_entry_fee:
+        notional += entry_price * qty
+    return notional * abs(fee_rate)
 
 
 def _execution_plan(metrics: PositionMetrics | None = None) -> ExecutionPlanStatus:
@@ -1217,11 +1228,14 @@ def _execution_plan(metrics: PositionMetrics | None = None) -> ExecutionPlanStat
     plan = strategy.active_plan
     if order:
         follow_side = plan.mt4_hedge_side if plan else None
+        mt4_price_limit = plan.mt4_price_limit if plan else None
         if order.reduce_only:
             summary = f"币安当前平仓挂单：{_side_text(order.side)} {order.orig_qty} XAU，价格 {order.price}，状态 {_order_status_text(order.status.value)}；币安全部成交后 MT4 逐张市价平仓。"
             follow_side = Side.SELL if strategy.open_pair and strategy.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.BUY
+            mt4_price_limit = None
         else:
-            summary = f"币安当前挂单：{_side_text(order.side)} {order.orig_qty} XAU，价格 {order.price}，状态 {_order_status_text(order.status.value)}；成交后 MT4 立即市价对冲，不检查价差保护价。"
+            limit_text = f"，MT4 保护价 {_mt4_limit_text(follow_side, mt4_price_limit)}" if follow_side and mt4_price_limit is not None else ""
+            summary = f"币安当前挂单：{_side_text(order.side)} {order.orig_qty} XAU，价格 {order.price}，状态 {_order_status_text(order.status.value)}；成交后 MT4 立即市价对冲{limit_text}。"
         return ExecutionPlanStatus(
             summary=summary,
             active_binance_order=True,
@@ -1231,7 +1245,7 @@ def _execution_plan(metrics: PositionMetrics | None = None) -> ExecutionPlanStat
             binance_order_qty=order.orig_qty,
             binance_order_executed_qty=order.executed_qty,
             mt4_follow_side=follow_side,
-            mt4_price_limit=None,
+            mt4_price_limit=mt4_price_limit,
             max_follow_seconds=max_follow_seconds,
         )
 
@@ -1280,12 +1294,12 @@ def _execution_plan(metrics: PositionMetrics | None = None) -> ExecutionPlanStat
         add_plan = _pair_add_plan(pair, binance_quote, mt4_quote, metrics)
         if add_plan:
             return ExecutionPlanStatus(
-                summary=f"补仓条件已满足：{add_summary}；币安将同向挂 {_side_text(add_plan.binance_side)} 限价 {add_plan.limit_price}，数量 {add_plan.quantity_oz} XAU；成交后 MT4 同向 {_side_text(add_plan.mt4_hedge_side)} 市价跟随。",
+                summary=f"补仓条件已满足：{add_summary}；币安将同向挂 {_side_text(add_plan.binance_side)} 限价 {add_plan.limit_price}，数量 {add_plan.quantity_oz} XAU；成交后 MT4 同向 {_side_text(add_plan.mt4_hedge_side)} 市价跟随，保护价 {_mt4_limit_text(add_plan.mt4_hedge_side, add_plan.mt4_price_limit)}。",
                 binance_order_side=add_plan.binance_side,
                 binance_order_price=add_plan.limit_price,
                 binance_order_qty=add_plan.quantity_oz,
                 mt4_follow_side=add_plan.mt4_hedge_side,
-                mt4_price_limit=None,
+                mt4_price_limit=add_plan.mt4_price_limit,
                 max_follow_seconds=max_follow_seconds,
             )
         spread = _current_exit_spread(pair, binance_quote, mt4_quote)
@@ -1320,12 +1334,12 @@ def _execution_plan(metrics: PositionMetrics | None = None) -> ExecutionPlanStat
             confirm_left = max(0, settings.entry_confirm_ms - strategy.entry_candidate_age_ms())
             confirm_text = "已通过稳定确认" if confirm_left == 0 else f"还需稳定 {confirm_left} 毫秒"
             return ExecutionPlanStatus(
-                summary=f"开仓条件已满足：{confirm_text}；币安将挂 {_side_text(entry_plan.binance_side)} 限价 {entry_plan.limit_price}，数量 {entry_plan.quantity_oz} XAU；成交后 MT4 {_side_text(entry_plan.mt4_hedge_side)} 立即市价对冲，不检查价差保护价。",
+                summary=f"开仓条件已满足：{confirm_text}；币安将挂 {_side_text(entry_plan.binance_side)} 限价 {entry_plan.limit_price}，数量 {entry_plan.quantity_oz} XAU；成交后 MT4 {_side_text(entry_plan.mt4_hedge_side)} 立即市价对冲，保护价 {_mt4_limit_text(entry_plan.mt4_hedge_side, entry_plan.mt4_price_limit)}。",
                 binance_order_side=entry_plan.binance_side,
                 binance_order_price=entry_plan.limit_price,
                 binance_order_qty=entry_plan.quantity_oz,
                 mt4_follow_side=entry_plan.mt4_hedge_side,
-                mt4_price_limit=None,
+                mt4_price_limit=entry_plan.mt4_price_limit,
                 max_follow_seconds=max_follow_seconds,
             )
         high_edge = binance_quote.ask - mt4_quote.ask
@@ -1357,16 +1371,28 @@ def _pair_add_summary(pair, binance_quote: MarketQuote, mt4_quote: MarketQuote, 
         return "补仓基准价差缺失，暂不补仓。"
     trigger_edge = base_edge + settings.add_edge_growth_usd
     current_edge = binance_quote.ask - mt4_quote.ask if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else mt4_quote.bid - binance_quote.bid
-    label = "上次补仓实际价差" if pair.add_count > 0 else "首仓实际价差"
+    label = "上次补仓有效价差" if pair.add_count > 0 else "首仓有效价差"
     return f"补仓观察：已补 {pair.add_count}/{settings.max_add_count} 次，{label} {base_edge:.4f} 美元，下次触发 {trigger_edge:.4f} 美元，当前同向价差 {current_edge:.4f} 美元。"
+
+
+def _mt4_limit_text(side: Side | None, price: Decimal | None) -> str:
+    if side == Side.BUY and price is not None:
+        return f"最高 {price}"
+    if side == Side.SELL and price is not None:
+        return f"最低 {price}"
+    return "未设置"
 
 
 def _pair_add_base_edge(pair, metrics: PositionMetrics | None = None) -> Decimal | None:
     if pair.add_count == 0:
+        base = pair.base_edge
         if metrics and metrics.actual_entry_spread is not None:
-            return metrics.actual_entry_spread
+            return max(base, metrics.actual_entry_spread) if base is not None else metrics.actual_entry_spread
         mt4_entry, _lots = _mt4_average_entry_price(pair)
-        return _actual_entry_spread(pair, pair.binance_entry_price, mt4_entry or pair.mt4_entry_price)
+        current = _actual_entry_spread(pair, pair.binance_entry_price, mt4_entry or pair.mt4_entry_price)
+        if base is not None and current is not None:
+            return max(base, current)
+        return base if current is None else current
     return pair.last_add_edge or pair.base_edge
 
 
