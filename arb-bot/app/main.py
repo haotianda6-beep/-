@@ -281,15 +281,15 @@ async def status() -> EngineStatus:
     )
 
 
-async def _binance_position_quantity() -> Decimal | None:
+async def _binance_position_quantity(force: bool = False) -> Decimal | None:
     global _binance_position_qty_cache, _binance_position_qty_cache_ms, _binance_position_qty_failure_ms
-    snapshot = await _binance_position_snapshot()
+    snapshot = await _binance_position_snapshot(force=force)
     if snapshot is not None:
         return snapshot.position_amt
     now = _now_ms()
-    if _binance_position_qty_cache is not None and now - _binance_position_qty_cache_ms <= POSITION_RISK_CACHE_TTL_MS:
+    if not force and _binance_position_qty_cache is not None and now - _binance_position_qty_cache_ms <= POSITION_RISK_CACHE_TTL_MS:
         return _binance_position_qty_cache
-    if now - _binance_position_qty_failure_ms <= POSITION_RISK_FAILURE_RETRY_MS:
+    if not force and now - _binance_position_qty_failure_ms <= POSITION_RISK_FAILURE_RETRY_MS:
         return _binance_position_qty_cache
     try:
         _binance_position_qty_cache = await binance_client.position_quantity()
@@ -298,15 +298,17 @@ async def _binance_position_quantity() -> Decimal | None:
     except Exception as exc:  # noqa: BLE001
         _binance_position_qty_failure_ms = now
         logger.warning("Binance position quantity unavailable: %s", str(exc)[:160])
+        if force:
+            raise
     return _binance_position_qty_cache
 
 
-async def _binance_position_snapshot() -> BinancePositionSnapshot | None:
+async def _binance_position_snapshot(force: bool = False) -> BinancePositionSnapshot | None:
     global _binance_position_snapshot_cache, _binance_position_snapshot_cache_ms, _binance_position_snapshot_failure_ms
     now = _now_ms()
-    if _binance_position_snapshot_cache is not None and now - _binance_position_snapshot_cache_ms <= POSITION_RISK_CACHE_TTL_MS:
+    if not force and _binance_position_snapshot_cache is not None and now - _binance_position_snapshot_cache_ms <= POSITION_RISK_CACHE_TTL_MS:
         return _binance_position_snapshot_cache
-    if now - _binance_position_snapshot_failure_ms <= POSITION_RISK_FAILURE_RETRY_MS:
+    if not force and now - _binance_position_snapshot_failure_ms <= POSITION_RISK_FAILURE_RETRY_MS:
         return _binance_position_snapshot_cache
     try:
         snapshot = await binance_client.position_snapshot()
@@ -317,6 +319,8 @@ async def _binance_position_snapshot() -> BinancePositionSnapshot | None:
     except Exception as exc:  # noqa: BLE001
         _binance_position_snapshot_failure_ms = now
         logger.warning("Binance position snapshot unavailable: %s", str(exc)[:160])
+        if force:
+            raise
     return _binance_position_snapshot_cache
 
 
@@ -831,7 +835,7 @@ async def _reconcile_open_pair_live_state() -> bool:
         return False
     _live_pair_reconcile_ms = now
     try:
-        binance_qty = await _binance_position_quantity()
+        binance_qty = await _binance_position_quantity(force=True)
         if binance_qty is None:
             raise RuntimeError("Binance position cache unavailable")
     except Exception as exc:  # noqa: BLE001
@@ -849,7 +853,13 @@ async def _reconcile_open_pair_live_state() -> bool:
         return True
     _live_pair_reconcile_error_count = 0
     mt4_positions = mt4_bridge.positions()
-    action = open_pair_live_reconcile_action(strategy.open_pair, binance_qty, mt4_positions, settings.mt4_symbol)
+    action = open_pair_live_reconcile_action(
+        strategy.open_pair,
+        binance_qty,
+        mt4_positions,
+        settings.mt4_symbol,
+        settings.mt4_lot_size_oz,
+    )
     if action == "clear":
         pair = strategy.open_pair
         storage.record_event(
@@ -868,9 +878,24 @@ async def _reconcile_open_pair_live_state() -> bool:
         return True
     if action == "pause":
         strategy.state = StrategyState.PAUSED
-        strategy.last_error = "组合持仓与实盘不一致：币安或 MT4 已有一侧为空，已暂停，请人工确认"
+        strategy.last_error = "组合持仓与实盘不一致：币安或 MT4 方向/数量不匹配，已暂停，请人工确认"
         storage.record_event(
             "open_pair_live_mismatch_paused",
+            {
+                "pair_id": strategy.open_pair.pair_id,
+                "binance_position_qty": str(binance_qty),
+                "mt4_positions": [
+                    {"ticket": position.ticket, "symbol": position.symbol, "side": position.side.value, "lots": str(position.lots)}
+                    for position in mt4_positions
+                ],
+            },
+        )
+        return True
+    if strategy.state == StrategyState.PAUSED and strategy.last_error and strategy.last_error.startswith("组合持仓与实盘不一致"):
+        strategy.state = StrategyState.PAIR_OPEN
+        strategy.last_error = None
+        storage.record_event(
+            "open_pair_live_mismatch_recovered",
             {
                 "pair_id": strategy.open_pair.pair_id,
                 "binance_position_qty": str(binance_qty),
@@ -943,6 +968,7 @@ def _runtime_config() -> RuntimeConfig:
         entry_confirm_ms=settings.entry_confirm_ms,
         min_order_live_ms=settings.min_order_live_ms,
         requote_cooldown_ms=settings.requote_cooldown_ms,
+        post_exit_reentry_cooldown_ms=settings.post_exit_reentry_cooldown_ms,
         max_order_age_ms=settings.max_order_age_ms,
         max_quote_age_ms=settings.max_quote_age_ms,
         max_hedge_delay_ms=settings.max_hedge_delay_ms,

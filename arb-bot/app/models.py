@@ -367,6 +367,7 @@ class RuntimeConfig(BaseModel):
     entry_confirm_ms: int
     min_order_live_ms: int
     requote_cooldown_ms: int
+    post_exit_reentry_cooldown_ms: int
     max_order_age_ms: int
     max_quote_age_ms: int
     max_hedge_delay_ms: int
@@ -396,6 +397,7 @@ class RuntimeConfigUpdate(BaseModel):
     entry_confirm_ms: int | None = None
     min_order_live_ms: int | None = None
     requote_cooldown_ms: int | None = None
+    post_exit_reentry_cooldown_ms: int | None = None
     max_order_age_ms: int | None = None
     max_quote_age_ms: int | None = None
     max_hedge_delay_ms: int | None = None
@@ -438,6 +440,7 @@ class RuntimeConfigUpdate(BaseModel):
         "entry_confirm_ms",
         "min_order_live_ms",
         "requote_cooldown_ms",
+        "post_exit_reentry_cooldown_ms",
         "loop_interval_ms",
         "paper_fill_delay_ms",
         "negative_swap_close_before_minutes",

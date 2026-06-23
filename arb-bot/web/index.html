@@ -719,6 +719,10 @@
                   <td><div class="input-row"><input id="cfgRequoteCooldownMs" inputmode="numeric" /><small>毫秒</small></div></td>
                 </tr>
                 <tr>
+                  <th>平仓后再开冷却</th>
+                  <td><div class="input-row"><input id="cfgPostExitReentryCooldownMs" inputmode="numeric" /><small>毫秒</small></div></td>
+                </tr>
+                <tr>
                   <th>补仓增加价差</th>
                   <td><div class="input-row"><input id="cfgAddEdgeGrowthUsd" inputmode="decimal" /><small>美元</small></div></td>
                 </tr>
@@ -811,6 +815,7 @@
         ["cfgCancelMinEdge", "cancel_min_edge", "number"],
         ["cfgMinOrderLiveMs", "min_order_live_ms", "number"],
         ["cfgRequoteCooldownMs", "requote_cooldown_ms", "number"],
+        ["cfgPostExitReentryCooldownMs", "post_exit_reentry_cooldown_ms", "number"],
         ["cfgAddEdgeGrowthUsd", "add_edge_growth_usd", "number"],
         ["cfgMaxAddCount", "max_add_count", "number"],
         ["cfgNegativeSwapCloseBefore", "negative_swap_close_before_minutes", "number"],

@@ -172,6 +172,7 @@ class StrategyEngine:
         self._funding_income_cache_value = Decimal("0")
         self._funding_income_cache_ms = 0
         self._funding_income_failure_ms = 0
+        self.last_pair_closed_ms = 0
 
     async def step(self) -> None:
         await self._handle_mt4_reports()
@@ -248,6 +249,11 @@ class StrategyEngine:
 
     async def _maybe_enter(self, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> None:
         if not binance_quote or not mt4_quote:
+            return
+        if (
+            self.last_pair_closed_ms
+            and utc_now_ms() - self.last_pair_closed_ms < self.settings.post_exit_reentry_cooldown_ms
+        ):
             return
         if self.last_entry_cancel_ms and utc_now_ms() - self.last_entry_cancel_ms < self.settings.requote_cooldown_ms:
             return
@@ -1358,6 +1364,7 @@ class StrategyEngine:
         self.state = StrategyState.PAIR_OPEN if return_to_pair else StrategyState.IDLE
 
     def _reset_all(self) -> None:
+        had_open_pair = self.open_pair is not None
         self._clear_entry_candidate()
         self.active_plan = None
         self.active_order = None
@@ -1372,4 +1379,6 @@ class StrategyEngine:
         self.hedge_started_ms = 0
         self._close_trigger_cache = None
         self._close_trigger_cache_ms = 0
+        if had_open_pair:
+            self.last_pair_closed_ms = utc_now_ms()
         self.state = StrategyState.IDLE

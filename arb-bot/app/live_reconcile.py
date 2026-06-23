@@ -23,6 +23,8 @@ def open_pair_live_reconcile_action(
     binance_position_qty: Decimal,
     mt4_positions: list[Mt4Position],
     mt4_symbol: str,
+    mt4_lot_size_oz: Decimal = Decimal("100"),
+    tolerance: Decimal = Decimal("0.0001"),
 ) -> LiveReconcileAction | None:
     if open_pair is None:
         return None
@@ -32,5 +34,18 @@ def open_pair_live_reconcile_action(
     if binance_flat and mt4_flat:
         return "clear"
     if binance_flat or mt4_flat:
+        return "pause"
+    binance_should_be_short = open_pair.direction.name == "BINANCE_SHORT_MT4_LONG"
+    if binance_should_be_short and binance_position_qty >= 0:
+        return "pause"
+    if not binance_should_be_short and binance_position_qty <= 0:
+        return "pause"
+    if abs(abs(binance_position_qty) - open_pair.quantity_oz) > tolerance:
+        return "pause"
+    expected_mt4_side = "BUY" if binance_should_be_short else "SELL"
+    if any(position.side.value != expected_mt4_side for position in mt4_symbol_positions):
+        return "pause"
+    mt4_qty = sum((position.lots for position in mt4_symbol_positions), Decimal("0")) * mt4_lot_size_oz
+    if abs(mt4_qty - open_pair.quantity_oz) > tolerance:
         return "pause"
     return None

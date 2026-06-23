@@ -501,6 +501,57 @@ async def test_exit_order_cancels_when_spread_widens_before_fill(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_full_exit_blocks_immediate_reentry_until_cooldown(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        settings_kwargs={"POST_EXIT_REENTRY_COOLDOWN_MS": 60000},
+    )
+    await open_live_pair(engine, client, mt4, ticket=123456)
+
+    client.set_quote(Decimal("2000.0"), Decimal("2000.1"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("2000.0"),
+            ask=Decimal("2000.1"),
+            positions=[
+                Mt4Position(ticket=123456, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+        )
+    )
+    await engine.step()
+    exit_order = engine.active_order
+    assert exit_order is not None
+    await client.simulate_fill(exit_order.order_id, Decimal("1"), Decimal("2000"))
+    await engine.step()
+    close_command = mt4.next_command()
+    mt4.submit_report(
+        Mt4Report(
+            command_id=close_command["command_id"],
+            status="ok",
+            action="CLOSE",
+            ticket=123456,
+            fill_price=Decimal("2000"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await engine.step()
+    assert engine.state == StrategyState.IDLE
+    assert engine.open_pair is None
+
+    client.set_quote(Decimal("2001"), Decimal("2002"))
+    mt4.update_tick(Mt4Tick(symbol="XAUUSD", bid=Decimal("1999"), ask=Decimal("2000")))
+    await engine.step()
+    assert engine.state == StrategyState.IDLE
+    assert engine.active_order is None
+
+    engine.last_pair_closed_ms -= 60000
+    await engine.step()
+    assert engine.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert engine.active_order is not None
+
+
+@pytest.mark.asyncio
 async def test_partial_exit_completes_binance_with_market_before_mt4_close(tmp_path):
     engine, client, mt4 = await make_engine(tmp_path)
     await engine.step()

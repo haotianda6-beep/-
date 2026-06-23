@@ -39,6 +39,72 @@ def test_open_pair_reconcile_pauses_when_only_binance_is_flat() -> None:
     assert action == "pause"
 
 
+def test_open_pair_reconcile_pauses_when_binance_quantity_mismatches() -> None:
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("2"),
+        binance_entry_price=Decimal("4152.68"),
+        mt4_entry_price=Decimal("4149.47"),
+        binance_order_id="7262226459",
+        mt4_tickets=[76804334, 76805260],
+    )
+
+    action = open_pair_live_reconcile_action(
+        pair,
+        Decimal("-1"),
+        [
+            Mt4Position(ticket=76804334, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4149.47")),
+            Mt4Position(ticket=76805260, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4149.47")),
+        ],
+        "XAUUSD",
+    )
+
+    assert action == "pause"
+
+
+def test_open_pair_reconcile_pauses_when_mt4_quantity_mismatches() -> None:
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("2"),
+        binance_entry_price=Decimal("4152.68"),
+        mt4_entry_price=Decimal("4149.47"),
+        binance_order_id="7262226459",
+        mt4_tickets=[76804334, 76805260],
+    )
+
+    action = open_pair_live_reconcile_action(
+        pair,
+        Decimal("-2"),
+        [Mt4Position(ticket=76804334, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4149.47"))],
+        "XAUUSD",
+    )
+
+    assert action == "pause"
+
+
+def test_open_pair_reconcile_allows_matching_live_positions() -> None:
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("2"),
+        binance_entry_price=Decimal("4152.68"),
+        mt4_entry_price=Decimal("4149.47"),
+        binance_order_id="7262226459",
+        mt4_tickets=[76804334, 76805260],
+    )
+
+    action = open_pair_live_reconcile_action(
+        pair,
+        Decimal("-2"),
+        [
+            Mt4Position(ticket=76804334, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4149.47")),
+            Mt4Position(ticket=76805260, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4149.47")),
+        ],
+        "XAUUSD",
+    )
+
+    assert action is None
+
+
 def test_open_pair_reconcile_ignores_other_mt4_symbols_when_xau_is_flat() -> None:
     pair = OpenPair(
         direction=PairDirection.BINANCE_SHORT_MT4_LONG,
