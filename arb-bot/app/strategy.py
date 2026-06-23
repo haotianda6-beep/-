@@ -155,6 +155,7 @@ class StrategyEngine:
         self.last_entry_cancel_ms = 0
         self.active_plan: EntryPlan | None = None
         self.active_order: OrderUpdate | None = None
+        self.active_add_trigger_edge: Decimal | None = None
         self.order_created_ms = 0
         self.hedge_started_ms = 0
         self.pending_hedge_qty = Decimal("0")
@@ -757,6 +758,12 @@ class StrategyEngine:
             binance_entry_price = ((self.open_pair.binance_entry_price * old_qty) + (self.active_order.avg_price * active_qty)) / new_qty
             mt4_entry_price = ((self.open_pair.mt4_entry_price * old_qty) + (mt4_fill_price * active_qty)) / new_qty
             add_edge = self._entry_spread(self.open_pair.direction, self.active_order.avg_price, mt4_fill_price)
+            add_trigger_edge = (
+                self.active_add_trigger_edge
+                or self.open_pair.last_add_trigger_edge
+                or self.open_pair.last_add_edge
+                or self.open_pair.base_edge
+            )
             tickets = list(self.open_pair.mt4_tickets or ([] if self.open_pair.mt4_ticket is None else [self.open_pair.mt4_ticket]))
             if ticket is not None:
                 tickets.append(ticket)
@@ -770,6 +777,7 @@ class StrategyEngine:
                     "mt4_tickets": tickets,
                     "add_count": self.open_pair.add_count + 1,
                     "last_add_edge": add_edge,
+                    "last_add_trigger_edge": add_trigger_edge,
                 }
             )
         else:
@@ -785,9 +793,11 @@ class StrategyEngine:
                 mt4_tickets=tickets,
                 base_edge=entry_edge,
                 last_add_edge=entry_edge,
+                last_add_trigger_edge=None,
             )
         self.active_plan = None
         self.active_order = None
+        self.active_add_trigger_edge = None
         self.adding_to_pair = False
         self.hedged_qty = Decimal("0")
         self.pending_hedge_qty = Decimal("0")
@@ -857,6 +867,7 @@ class StrategyEngine:
             return True
         self.active_plan = plan
         self.active_order = order
+        self.active_add_trigger_edge = trigger_edge
         self.order_created_ms = utc_now_ms()
         self.hedged_qty = Decimal("0")
         self.pending_hedge_qty = Decimal("0")
@@ -879,7 +890,7 @@ class StrategyEngine:
             if actual is not None:
                 return actual
             return base
-        return self.open_pair.last_add_edge or self.open_pair.base_edge
+        return self.open_pair.last_add_trigger_edge or self.open_pair.last_add_edge or self.open_pair.base_edge
 
     def _entry_spread(self, direction: PairDirection, binance_entry: Decimal, mt4_entry: Decimal) -> Decimal:
         if direction == PairDirection.BINANCE_SHORT_MT4_LONG:
@@ -1220,6 +1231,7 @@ class StrategyEngine:
                 "realized_pnl": pair.realized_pnl + realized,
                 "base_edge": new_edge if pair.add_count == 0 else pair.base_edge,
                 "last_add_edge": new_edge if pair.add_count == 0 else pair.last_add_edge,
+                "last_add_trigger_edge": None if pair.add_count == 0 else pair.last_add_trigger_edge,
             }
         )
         self.active_order = None
@@ -1613,6 +1625,7 @@ class StrategyEngine:
         )
         self.active_plan = None
         self.active_order = None
+        self.active_add_trigger_edge = None
         self.adding_to_pair = False
         self.exit_force_reason = None
         self.exit_repair_fill = None
@@ -1640,6 +1653,7 @@ class StrategyEngine:
         self._clear_entry_candidate()
         self.active_plan = None
         self.active_order = None
+        self.active_add_trigger_edge = None
         self.adding_to_pair = False
         self.exit_force_reason = None
         self.exit_repair_fill = None
@@ -1655,6 +1669,7 @@ class StrategyEngine:
         self._clear_entry_candidate()
         self.active_plan = None
         self.active_order = None
+        self.active_add_trigger_edge = None
         self.open_pair = None
         self.adding_to_pair = False
         self.exit_force_reason = None

@@ -1135,13 +1135,15 @@
         const storedBase = Number(pair.base_edge);
         const rawBase = count === 0 && Number.isFinite(actualEntry)
           ? actualEntry
-          : (pair.last_add_edge ?? pair.base_edge);
+          : (pair.last_add_trigger_edge ?? pair.last_add_edge ?? pair.base_edge);
         if (rawBase === null || rawBase === undefined || rawBase === "") return `已补 ${count}/${maxCount} 次，等待补仓基准`;
         const baseEdge = Number(rawBase);
         if (!Number.isFinite(baseEdge)) return `已补 ${count}/${maxCount} 次，等待补仓基准`;
         const addGrowth = Number(config.add_edge_growth_usd || 0);
         const trigger = baseEdge + addGrowth;
-        const baseLabel = count > 0 ? "上次补仓" : "首仓基准";
+        const baseLabel = count > 0 ? "上次触发阶梯" : "首仓基准";
+        const actualAddEdge = Number(pair.last_add_edge);
+        const actualAddText = count > 0 && Number.isFinite(actualAddEdge) ? `，上次实得价差 ${fmt(actualAddEdge)} 美元` : "";
         const actualEntryText = count > 0 && Number.isFinite(actualEntry) ? `，组合有效开仓价差 ${fmt(actualEntry)} 美元` : "";
         let current = null;
         if (binanceQuote && mt4Quote) {
@@ -1150,7 +1152,7 @@
             : Number(mt4Quote.bid) - Number(binanceQuote.bid);
         }
         const currentText = Number.isFinite(current) ? `，当前同向价差 ${fmt(current)} 美元` : "";
-        return `已补 ${count}/${maxCount} 次，下次补仓基差 ${fmt(trigger)} 美元（${baseLabel} ${fmt(baseEdge)} + 增加 ${fmt(addGrowth)}）${actualEntryText}${currentText}`;
+        return `已补 ${count}/${maxCount} 次，下次补仓基差 ${fmt(trigger)} 美元（${baseLabel} ${fmt(baseEdge)} + 增加 ${fmt(addGrowth)}）${actualAddText}${actualEntryText}${currentText}`;
       }
 
       function renderMt4Positions(positions) {

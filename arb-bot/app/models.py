@@ -308,6 +308,7 @@ class OpenPair(BaseModel):
     realized_pnl: Decimal = Decimal("0")
     base_edge: Decimal | None = None
     last_add_edge: Decimal | None = None
+    last_add_trigger_edge: Decimal | None = None
     add_count: int = 0
 
 

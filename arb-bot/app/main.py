@@ -1584,8 +1584,10 @@ def _pair_add_summary(pair, binance_quote: MarketQuote, mt4_quote: MarketQuote, 
         return "补仓基准价差缺失，暂不补仓。"
     trigger_edge = anchor_edge + settings.add_edge_growth_usd
     current_edge = binance_quote.ask - mt4_quote.ask if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else mt4_quote.bid - binance_quote.bid
-    label = "上次补仓" if pair.add_count > 0 else "首仓基准"
-    return f"补仓观察：已补 {pair.add_count}/{settings.max_add_count} 次，下次补仓基差 {trigger_edge:.4f} 美元（{label} {anchor_edge:.4f} + 增加 {settings.add_edge_growth_usd:.4f}），当前同向价差 {current_edge:.4f} 美元。"
+    if pair.add_count > 0:
+        actual_text = f"，上次实得价差 {pair.last_add_edge:.4f} 美元" if pair.last_add_edge is not None else ""
+        return f"补仓观察：已补 {pair.add_count}/{settings.max_add_count} 次，下次补仓基差 {trigger_edge:.4f} 美元（上次触发阶梯 {anchor_edge:.4f} + 增加 {settings.add_edge_growth_usd:.4f}）{actual_text}，当前同向价差 {current_edge:.4f} 美元。"
+    return f"补仓观察：已补 {pair.add_count}/{settings.max_add_count} 次，下次补仓基差 {trigger_edge:.4f} 美元（首仓基准 {anchor_edge:.4f} + 增加 {settings.add_edge_growth_usd:.4f}），当前同向价差 {current_edge:.4f} 美元。"
 
 
 def _mt4_limit_text(side: Side | None, price: Decimal | None) -> str:
@@ -1611,7 +1613,7 @@ def _pair_add_anchor_edge(pair, metrics: PositionMetrics | None = None) -> Decim
         mt4_entry, _lots = _mt4_average_entry_price(pair)
         current = _actual_entry_spread(pair, pair.binance_entry_price, mt4_entry or pair.mt4_entry_price)
         return base if current is None else current
-    return pair.last_add_edge or pair.base_edge
+    return pair.last_add_trigger_edge or pair.last_add_edge or pair.base_edge
 
 
 def _negative_swap_close_summary(pair) -> str | None:

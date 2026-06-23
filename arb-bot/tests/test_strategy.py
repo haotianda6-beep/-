@@ -1291,6 +1291,7 @@ async def test_add_position_after_first_add_uses_last_add_edge_plus_growth(tmp_p
         opened_ms=utc_now_ms() - MIN_ADD_AFTER_OPEN_MS,
         base_edge=Decimal("1.13"),
         last_add_edge=Decimal("2.13"),
+        last_add_trigger_edge=Decimal("2.13"),
         add_count=1,
     )
     engine.state = StrategyState.PAIR_OPEN
@@ -1333,6 +1334,70 @@ async def test_add_position_after_first_add_uses_last_add_edge_plus_growth(tmp_p
     assert engine.adding_to_pair is True
     assert engine.active_plan is not None
     assert engine.active_plan.edge == Decimal("3.13")
+
+
+@pytest.mark.asyncio
+async def test_add_position_ladder_uses_last_trigger_not_actual_fill_after_second_add(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        PositionTrackingPaperClient,
+        settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 5},
+    )
+    engine.open_pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("3"),
+        binance_entry_price=Decimal("4116.45"),
+        mt4_entry_price=Decimal("4114.176666666666666666666667"),
+        binance_order_id="entry-with-two-adds",
+        mt4_ticket=111111,
+        mt4_tickets=[111111, 222222, 333333],
+        opened_ms=utc_now_ms() - MIN_ADD_AFTER_OPEN_MS,
+        base_edge=Decimal("2.23"),
+        last_add_edge=Decimal("2.46"),
+        last_add_trigger_edge=Decimal("3.13"),
+        add_count=2,
+    )
+    engine.state = StrategyState.PAIR_OPEN
+    client._orders.clear()
+    client._orders["entry-with-two-adds"] = OrderUpdate(
+        order_id="entry-with-two-adds",
+        client_order_id="entry-with-two-adds",
+        symbol="XAUUSDT",
+        side=Side.SELL,
+        status=OrderStatus.FILLED,
+        price=Decimal("4116.45"),
+        orig_qty=Decimal("3"),
+        executed_qty=Decimal("3"),
+        avg_price=Decimal("4116.45"),
+    )
+    mt4_positions = [
+        Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4116.79")),
+        Mt4Position(ticket=222222, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4112.53")),
+        Mt4Position(ticket=333333, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4113.21")),
+    ]
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("4110"),
+            ask=Decimal("4111"),
+            positions=mt4_positions,
+            account_margin=Decimal("13.02"),
+        )
+    )
+    client.set_quote(Decimal("4114.12"), Decimal("4115.12"))
+
+    await engine.step()
+
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.active_order is None
+
+    client.set_quote(Decimal("4114.13"), Decimal("4115.13"))
+    await engine.step()
+
+    assert engine.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert engine.adding_to_pair is True
+    assert engine.active_plan is not None
+    assert engine.active_plan.edge == Decimal("4.13")
 
 
 @pytest.mark.asyncio
@@ -1461,6 +1526,7 @@ async def test_add_position_records_actual_add_fill_spread(tmp_path):
 
     assert engine.open_pair is not None
     assert engine.open_pair.last_add_edge == Decimal("4.0")
+    assert engine.open_pair.last_add_trigger_edge == Decimal("3")
 
 
 @pytest.mark.asyncio
@@ -1477,6 +1543,7 @@ async def test_exit_repair_does_not_move_add_ladder_anchor_after_add(tmp_path):
         opened_ms=utc_now_ms() - MIN_ADD_AFTER_OPEN_MS,
         base_edge=Decimal("1.13"),
         last_add_edge=Decimal("2.13"),
+        last_add_trigger_edge=Decimal("2.13"),
         add_count=1,
     )
     mt4.update_tick(
