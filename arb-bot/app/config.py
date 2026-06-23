@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     post_exit_reentry_cooldown_ms: int = Field(default=60000, alias="POST_EXIT_REENTRY_COOLDOWN_MS")
     max_order_age_ms: int = Field(default=300, alias="MAX_ORDER_AGE_MS")
     max_quote_age_ms: int = Field(default=1500, alias="MAX_QUOTE_AGE_MS")
-    max_hedge_delay_ms: int = Field(default=5000, alias="MAX_HEDGE_DELAY_MS")
+    max_hedge_delay_ms: int = Field(default=10000, alias="MAX_HEDGE_DELAY_MS")
     max_unhedged_loss_usd_per_oz: Decimal = Field(default=Decimal("0.80"), alias="MAX_UNHEDGED_LOSS_USD_PER_OZ")
     daily_loss_limit_usdt: Decimal = Field(default=Decimal("50"), alias="DAILY_LOSS_LIMIT_USDT")
     add_edge_growth_usd: Decimal = Field(default=Decimal("1"), alias="ADD_EDGE_GROWTH_USD")

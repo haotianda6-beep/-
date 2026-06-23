@@ -628,7 +628,7 @@ async def test_full_exit_blocks_immediate_reentry_until_cooldown(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_partial_exit_completes_binance_with_market_before_mt4_close(tmp_path):
+async def test_partial_exit_rolls_back_binance_without_mt4_close(tmp_path):
     engine, client, mt4 = await make_engine(tmp_path)
     await engine.step()
     entry_order = engine.active_order
@@ -657,18 +657,18 @@ async def test_partial_exit_completes_binance_with_market_before_mt4_close(tmp_p
 
     await engine.step()
 
-    market_closes = [
+    reopen_orders = [
         order
         for order in client._orders.values()
-        if order.is_maker is False and order.reduce_only and order.side == Side.BUY
+        if order.is_maker is False and not order.reduce_only and order.side == Side.SELL
     ]
-    assert market_closes
-    assert market_closes[-1].executed_qty == Decimal("0.6")
-    close_command = mt4.next_command()
-    assert close_command["action"] == "CLOSE"
-    assert close_command["ticket"] == 123456
-    assert Decimal(str(close_command["lots"])) == Decimal("0.01")
-    assert engine.state == StrategyState.CLOSING_MT4
+    assert reopen_orders
+    assert reopen_orders[-1].executed_qty == Decimal("0.4")
+    assert mt4.next_command() == {"command": "NONE"}
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.open_pair is not None
+    assert engine.open_pair.realized_pnl == Decimal("0.8")
+    assert engine.open_pair.binance_entry_price == Decimal("2001.2")
 
 
 @pytest.mark.asyncio
@@ -682,12 +682,56 @@ async def test_partial_exit_market_incomplete_pauses_before_mt4_close(tmp_path):
     exit_order = engine.active_order
     assert exit_order is not None
     await client.simulate_fill(exit_order.order_id, Decimal("0.4"), Decimal("2000"))
+    engine.exit_force_reason = "测试强制平仓"
 
     await engine.step()
 
     assert engine.state == StrategyState.PAUSED
     assert engine.last_error == "币安剩余平仓市价单未完全成交，已暂停，不能继续平 MT4"
     assert mt4.next_command() == {"command": "NONE"}
+
+
+@pytest.mark.asyncio
+async def test_exit_fill_follow_check_reserves_mt4_slippage_buffer(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        settings_kwargs={"CLOSE_PROFIT_USD_PER_OZ": Decimal("0.8"), "MT4_SLIPPAGE_POINTS": 30},
+    )
+    client.maker_fee_rate = Decimal("0")
+    engine.open_pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("2002"),
+        mt4_entry_price=Decimal("2000"),
+        binance_order_id="entry-1",
+        mt4_ticket=123456,
+        mt4_tickets=[123456],
+    )
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("1999.3"),
+            point=Decimal("0.01"),
+            positions=[
+                Mt4Position(ticket=123456, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+        )
+    )
+    exit_order = OrderUpdate(
+        order_id="exit-1",
+        client_order_id="arb_exit",
+        symbol="XAUUSDT",
+        side=Side.BUY,
+        status=OrderStatus.FILLED,
+        price=Decimal("2000"),
+        orig_qty=Decimal("1"),
+        executed_qty=Decimal("1"),
+        avg_price=Decimal("2000"),
+        reduce_only=True,
+    )
+
+    assert await engine._exit_fill_follow_ok(exit_order) is False
 
 
 @pytest.mark.asyncio

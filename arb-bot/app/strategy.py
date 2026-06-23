@@ -980,7 +980,10 @@ class StrategyEngine:
         else:
             order = await self.binance.get_order(self.active_order.order_id)
         if order and order.status in {OrderStatus.PARTIALLY_FILLED, OrderStatus.CANCELED, OrderStatus.EXPIRED} and order.executed_qty > 0:
-            order = await self._complete_partial_exit_order(order)
+            if self.exit_force_reason:
+                order = await self._complete_partial_exit_order(order)
+            else:
+                order = await self._rollback_partial_exit_fill(order)
             if order is None:
                 return
         if not order or order.status != OrderStatus.FILLED:
@@ -1009,7 +1012,7 @@ class StrategyEngine:
         break_even = await self._break_even_spread()
         if actual_spread is None or break_even is None:
             return True
-        return actual_spread <= break_even - self._effective_close_profit_usd_per_oz()
+        return actual_spread <= break_even - self._effective_close_profit_usd_per_oz() - self._exit_follow_buffer_usd_per_oz()
 
     def _exit_fill_spread(self, order: OrderUpdate) -> Decimal | None:
         if not self.open_pair:
@@ -1037,7 +1040,6 @@ class StrategyEngine:
         )
         realized = self._binance_exit_realized_pnl(order)
         mt4_entry = self._mt4_average_entry_price() or pair.mt4_entry_price
-        new_edge = self._entry_spread(pair.direction, reopen.avg_price, mt4_entry)
         self.storage.record_event(
             "exit_follow_would_lose_reopened_binance",
             {
@@ -1058,9 +1060,15 @@ class StrategyEngine:
             self.state = StrategyState.PAUSED
             self.last_error = "币安平仓后重开对冲未完全成交，已暂停，请人工确认"
             return True
+        remaining_qty = max(Decimal("0"), pair.quantity_oz - order.executed_qty)
+        restored_qty = remaining_qty + reopen.executed_qty
+        binance_entry_price = reopen.avg_price
+        if restored_qty > 0 and remaining_qty > 0:
+            binance_entry_price = ((pair.binance_entry_price * remaining_qty) + (reopen.avg_price * reopen.executed_qty)) / restored_qty
+        new_edge = self._entry_spread(pair.direction, binance_entry_price, mt4_entry)
         self.open_pair = pair.model_copy(
             update={
-                "binance_entry_price": reopen.avg_price,
+                "binance_entry_price": binance_entry_price,
                 "binance_order_id": reopen.order_id,
                 "realized_pnl": pair.realized_pnl + realized,
                 "base_edge": new_edge if pair.add_count == 0 else pair.base_edge,
@@ -1073,6 +1081,33 @@ class StrategyEngine:
         self._close_trigger_cache_ms = 0
         self.state = StrategyState.PAIR_OPEN
         return True
+
+    async def _rollback_partial_exit_fill(self, order: OrderUpdate) -> OrderUpdate | None:
+        if not self.open_pair:
+            return None
+        checked = order
+        if order.status == OrderStatus.PARTIALLY_FILLED:
+            try:
+                canceled = await self.binance.cancel_order(order.order_id)
+                if canceled is not None:
+                    checked = canceled
+            except BinanceError as exc:
+                if not _binance_order_missing(exc):
+                    raise
+                self.storage.record_event("partial_exit_cancel_not_visible", {"order_id": order.order_id, "error": str(exc)[:160]})
+        if checked.status == OrderStatus.FILLED:
+            return checked
+        self.storage.record_event(
+            "partial_exit_rolled_back",
+            {
+                "order_id": checked.order_id,
+                "executed_qty": str(checked.executed_qty),
+                "status": checked.status.value,
+                "reason": "非强制平仓只接受币安全部限价成交，部分成交先重开币安对冲",
+            },
+        )
+        await self._reopen_binance_after_bad_exit_follow(checked)
+        return None
 
     def _binance_exit_realized_pnl(self, order: OrderUpdate) -> Decimal:
         if not self.open_pair:
