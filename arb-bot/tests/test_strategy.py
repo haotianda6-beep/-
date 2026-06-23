@@ -529,7 +529,7 @@ async def test_exit_order_cancels_when_spread_widens_before_fill(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_exit_fill_reopens_binance_when_mt4_follow_would_lose(tmp_path):
+async def test_exit_fill_uses_post_only_repair_when_mt4_follow_would_lose(tmp_path):
     engine, client, mt4 = await make_engine(tmp_path)
     await open_live_pair(engine, client, mt4, ticket=123456)
 
@@ -563,17 +563,27 @@ async def test_exit_fill_reopens_binance_when_mt4_follow_would_lose(tmp_path):
     await engine.step()
 
     assert mt4.next_command() == {"command": "NONE"}
-    reopens = [
+    repairs = [
+        item
+        for item in client._orders.values()
+        if item.is_maker is True and not item.reduce_only and item.side == Side.SELL and item.orig_qty == Decimal("1")
+    ]
+    market_reopens = [
         item
         for item in client._orders.values()
         if item.is_maker is False and not item.reduce_only and item.side == Side.SELL
     ]
-    assert reopens
-    assert reopens[-1].executed_qty == Decimal("1")
+    assert repairs
+    assert market_reopens == []
+    assert engine.state == StrategyState.REPAIRING_BINANCE_EXIT
+
+    await client.simulate_fill(repairs[-1].order_id, Decimal("1"), Decimal("2001.1"))
+    await engine.step()
+
     assert engine.state == StrategyState.PAIR_OPEN
     assert engine.open_pair is not None
     assert engine.open_pair.realized_pnl == Decimal("2")
-    assert engine.open_pair.binance_entry_price == reopens[-1].avg_price
+    assert engine.open_pair.binance_entry_price == Decimal("2001.1")
 
 
 @pytest.mark.asyncio
@@ -657,18 +667,23 @@ async def test_partial_exit_rolls_back_binance_without_mt4_close(tmp_path):
 
     await engine.step()
 
-    reopen_orders = [
+    repair_orders = [
         order
         for order in client._orders.values()
-        if order.is_maker is False and not order.reduce_only and order.side == Side.SELL
+        if order.is_maker is True and not order.reduce_only and order.side == Side.SELL and order.orig_qty == Decimal("0.4")
     ]
-    assert reopen_orders
-    assert reopen_orders[-1].executed_qty == Decimal("0.4")
+    assert repair_orders
     assert mt4.next_command() == {"command": "NONE"}
+    assert engine.state == StrategyState.REPAIRING_BINANCE_EXIT
+
+    repair_order = repair_orders[-1]
+    await client.simulate_fill(repair_order.order_id, Decimal("0.4"), Decimal("2001.1"))
+    await engine.step()
+
     assert engine.state == StrategyState.PAIR_OPEN
     assert engine.open_pair is not None
     assert engine.open_pair.realized_pnl == Decimal("0.8")
-    assert engine.open_pair.binance_entry_price == Decimal("2001.2")
+    assert engine.open_pair.binance_entry_price == Decimal("2001.64")
 
 
 @pytest.mark.asyncio
@@ -732,6 +747,106 @@ async def test_exit_fill_follow_check_reserves_mt4_slippage_buffer(tmp_path):
     )
 
     assert await engine._exit_fill_follow_ok(exit_order) is False
+
+
+@pytest.mark.asyncio
+async def test_live_exit_order_cancels_when_mt4_follow_would_lose(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        settings_kwargs={"CLOSE_PROFIT_USD_PER_OZ": Decimal("0.8"), "MT4_SLIPPAGE_POINTS": 30},
+    )
+    client.maker_fee_rate = Decimal("0")
+    await open_live_pair(engine, client, mt4, ticket=123456, binance_fill_price=Decimal("2002"), mt4_fill_price=Decimal("2000"))
+
+    client.set_quote(Decimal("2000.0"), Decimal("2000.1"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999.4"),
+            ask=Decimal("1999.7"),
+            point=Decimal("0.01"),
+            positions=[
+                Mt4Position(ticket=123456, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+        )
+    )
+    await engine.step()
+    exit_order = engine.active_order
+    assert exit_order is not None
+    assert engine.state == StrategyState.QUOTING_BINANCE_EXIT
+
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1998.4"),
+            ask=Decimal("1998.7"),
+            point=Decimal("0.01"),
+            positions=[
+                Mt4Position(ticket=123456, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+        )
+    )
+    await engine.step()
+
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.active_order is None
+    assert client._orders[exit_order.order_id].status == OrderStatus.CANCELED
+    assert mt4.next_command() == {"command": "NONE"}
+
+
+@pytest.mark.asyncio
+async def test_bad_exit_fill_repairs_with_post_only_not_market(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        settings_kwargs={"CLOSE_PROFIT_USD_PER_OZ": Decimal("0.8"), "MT4_SLIPPAGE_POINTS": 30},
+    )
+    client.maker_fee_rate = Decimal("0")
+    await open_live_pair(engine, client, mt4, ticket=123456, binance_fill_price=Decimal("2002"), mt4_fill_price=Decimal("2000"))
+
+    client.set_quote(Decimal("2000.0"), Decimal("2000.1"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999.4"),
+            ask=Decimal("1999.7"),
+            point=Decimal("0.01"),
+            positions=[
+                Mt4Position(ticket=123456, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+        )
+    )
+    await engine.step()
+    exit_order = engine.active_order
+    assert exit_order is not None
+    await client.simulate_fill(exit_order.order_id, Decimal("1"), Decimal("2000"))
+
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1998.4"),
+            ask=Decimal("1998.7"),
+            point=Decimal("0.01"),
+            positions=[
+                Mt4Position(ticket=123456, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+        )
+    )
+    await engine.step()
+
+    repair_orders = [
+        order
+        for order in client._orders.values()
+        if order.is_maker is True and not order.reduce_only and order.side == Side.SELL and order.orig_qty == Decimal("1")
+    ]
+    market_repairs = [
+        order
+        for order in client._orders.values()
+        if order.is_maker is False and not order.reduce_only and order.side == Side.SELL
+    ]
+    assert repair_orders
+    assert market_repairs == []
+    assert engine.state == StrategyState.REPAIRING_BINANCE_EXIT
+    assert mt4.next_command() == {"command": "NONE"}
 
 
 @pytest.mark.asyncio

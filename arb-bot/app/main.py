@@ -1434,7 +1434,11 @@ def _execution_plan(metrics: PositionMetrics | None = None) -> ExecutionPlanStat
     if order:
         follow_side = plan.mt4_hedge_side if plan else None
         mt4_price_limit = plan.mt4_price_limit if plan else None
-        if order.reduce_only:
+        if strategy.state == StrategyState.REPAIRING_BINANCE_EXIT:
+            summary = f"币安平仓部分成交后正在用 Post Only 补回：{_side_text(order.side)} {order.orig_qty} XAU，价格 {order.price}，状态 {_order_status_text(order.status.value)}；补回成交前不会平 MT4，不走币安市价。"
+            follow_side = None
+            mt4_price_limit = None
+        elif order.reduce_only:
             summary = f"币安当前平仓挂单：{_side_text(order.side)} {order.orig_qty} XAU，价格 {order.price}，状态 {_order_status_text(order.status.value)}；币安全部成交后 MT4 逐张市价平仓。"
             follow_side = Side.SELL if strategy.open_pair and strategy.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.BUY
             mt4_price_limit = None

@@ -165,6 +165,7 @@ class StrategyEngine:
         self.pending_close_commands: dict[str, int] = {}
         self.orphan_close_commands: dict[str, int] = {}
         self.exit_force_reason: str | None = None
+        self.exit_repair_fill: OrderUpdate | None = None
         self.last_error: str | None = None
         self._close_trigger_cache_ms = 0
         self._close_trigger_cache: Decimal | None = None
@@ -208,6 +209,8 @@ class StrategyEngine:
             await self._maybe_exit(binance_quote, mt4_quote)
         elif self.state == StrategyState.QUOTING_BINANCE_EXIT:
             await self._check_exit_order()
+        elif self.state == StrategyState.REPAIRING_BINANCE_EXIT:
+            await self._check_exit_repair_order()
 
     def _can_resume_pair_after_transient_quote_pause(
         self,
@@ -987,7 +990,7 @@ class StrategyEngine:
             if order is None:
                 return
         if not order or order.status != OrderStatus.FILLED:
-            if order and order.status == OrderStatus.NEW and not self.exit_force_reason and not await self._exit_spread_still_valid():
+            if order and order.status == OrderStatus.NEW and not self.exit_force_reason and not await self._exit_order_follow_still_profitable(order):
                 try:
                     await self.binance.cancel_order(order.order_id)
                 except BinanceError as exc:
@@ -997,22 +1000,62 @@ class StrategyEngine:
                 self.active_order = None
                 self.state = StrategyState.PAIR_OPEN
                 self.storage.record_event(
-                    "exit_order_canceled_spread_widened",
-                    {"order_id": order.order_id, "reason": "平仓挂单等待期间价差走扩"},
+                    "exit_order_canceled_unprofitable_follow",
+                    {
+                        "order_id": order.order_id,
+                        "reason": "平仓挂单等待期间按币安挂单价和当前 MT4 可平价测算会亏",
+                        "projected_spread": str(self._exit_order_projected_spread(order)),
+                        "threshold_spread": str(await self._exit_order_profit_threshold()),
+                    },
                 )
             return
         self.active_order = order
         if not self.exit_force_reason and not await self._exit_fill_follow_ok(order):
-            if await self._reopen_binance_after_bad_exit_follow(order):
-                return
+            self.storage.record_event(
+                "exit_follow_would_lose_repairing_binance",
+                {
+                    "exit_order_id": order.order_id,
+                    "exit_avg_price": str(order.avg_price),
+                    "exit_qty": str(order.executed_qty),
+                    "actual_follow_spread": str(self._exit_fill_spread(order)),
+                    "threshold_spread": str(await self._exit_order_profit_threshold()),
+                    "reason": "币安平仓已成交但 MT4 跟随会亏，改用币安 Post Only 补回，不走市价",
+                },
+            )
+            await self._place_exit_repair_order(order)
+            return
         await self._queue_mt4_close_after_exit_order(order)
 
     async def _exit_fill_follow_ok(self, order: OrderUpdate) -> bool:
         actual_spread = self._exit_fill_spread(order)
-        break_even = await self._break_even_spread()
-        if actual_spread is None or break_even is None:
+        threshold = await self._exit_order_profit_threshold()
+        if actual_spread is None or threshold is None:
             return True
-        return actual_spread <= break_even - self._effective_close_profit_usd_per_oz() - self._exit_follow_buffer_usd_per_oz()
+        return actual_spread <= threshold
+
+    async def _exit_order_follow_still_profitable(self, order: OrderUpdate) -> bool:
+        projected_spread = self._exit_order_projected_spread(order)
+        threshold = await self._exit_order_profit_threshold()
+        if projected_spread is None or threshold is None:
+            return True
+        return projected_spread <= threshold
+
+    async def _exit_order_profit_threshold(self) -> Decimal | None:
+        break_even = await self._break_even_spread()
+        if break_even is None:
+            return None
+        return break_even - self._effective_close_profit_usd_per_oz() - self._exit_follow_buffer_usd_per_oz()
+
+    def _exit_order_projected_spread(self, order: OrderUpdate) -> Decimal | None:
+        if not self.open_pair:
+            return None
+        mt4_quote = self.mt4.latest_quote()
+        price = order.price if order.price is not None and order.price > 0 else order.avg_price
+        if not mt4_quote or price is None:
+            return None
+        if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            return price - mt4_quote.bid
+        return mt4_quote.ask - price
 
     def _exit_fill_spread(self, order: OrderUpdate) -> Decimal | None:
         if not self.open_pair:
@@ -1023,64 +1066,6 @@ class StrategyEngine:
         if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             return order.avg_price - mt4_quote.bid
         return mt4_quote.ask - order.avg_price
-
-    async def _reopen_binance_after_bad_exit_follow(self, order: OrderUpdate) -> bool:
-        if not self.open_pair:
-            return False
-        pair = self.open_pair
-        side = Side.SELL if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.BUY
-        reopen = await self.binance.place_market_order(
-            OrderRequest(
-                symbol=self.settings.binance_symbol,
-                side=side,
-                quantity=order.executed_qty,
-                post_only=False,
-                reduce_only=False,
-            )
-        )
-        realized = self._binance_exit_realized_pnl(order)
-        mt4_entry = self._mt4_average_entry_price() or pair.mt4_entry_price
-        self.storage.record_event(
-            "exit_follow_would_lose_reopened_binance",
-            {
-                "exit_order_id": order.order_id,
-                "exit_avg_price": str(order.avg_price),
-                "exit_qty": str(order.executed_qty),
-                "actual_follow_spread": str(self._exit_fill_spread(order)),
-                "break_even_spread": str(await self._break_even_spread()),
-                "reopen_order_id": reopen.order_id,
-                "reopen_side": reopen.side.value,
-                "reopen_status": reopen.status.value,
-                "reopen_executed_qty": str(reopen.executed_qty),
-                "reopen_avg_price": str(reopen.avg_price),
-                "realized_pnl": str(realized),
-            },
-        )
-        if reopen.executed_qty < order.executed_qty:
-            self.state = StrategyState.PAUSED
-            self.last_error = "币安平仓后重开对冲未完全成交，已暂停，请人工确认"
-            return True
-        remaining_qty = max(Decimal("0"), pair.quantity_oz - order.executed_qty)
-        restored_qty = remaining_qty + reopen.executed_qty
-        binance_entry_price = reopen.avg_price
-        if restored_qty > 0 and remaining_qty > 0:
-            binance_entry_price = ((pair.binance_entry_price * remaining_qty) + (reopen.avg_price * reopen.executed_qty)) / restored_qty
-        new_edge = self._entry_spread(pair.direction, binance_entry_price, mt4_entry)
-        self.open_pair = pair.model_copy(
-            update={
-                "binance_entry_price": binance_entry_price,
-                "binance_order_id": reopen.order_id,
-                "realized_pnl": pair.realized_pnl + realized,
-                "base_edge": new_edge if pair.add_count == 0 else pair.base_edge,
-                "last_add_edge": new_edge,
-            }
-        )
-        self.active_order = None
-        self.exit_force_reason = None
-        self._close_trigger_cache = None
-        self._close_trigger_cache_ms = 0
-        self.state = StrategyState.PAIR_OPEN
-        return True
 
     async def _rollback_partial_exit_fill(self, order: OrderUpdate) -> OrderUpdate | None:
         if not self.open_pair:
@@ -1106,8 +1091,137 @@ class StrategyEngine:
                 "reason": "非强制平仓只接受币安全部限价成交，部分成交先重开币安对冲",
             },
         )
-        await self._reopen_binance_after_bad_exit_follow(checked)
+        await self._place_exit_repair_order(checked)
         return None
+
+    async def _place_exit_repair_order(self, exit_fill: OrderUpdate) -> None:
+        if not self.open_pair:
+            return
+        quote = self.binance.latest_quote()
+        if not quote:
+            self.state = StrategyState.PAUSED
+            self.last_error = "币安平仓部分成交后缺少报价，不能用限价补回，已暂停"
+            return
+        if exit_fill.side == Side.BUY:
+            side = Side.SELL
+            price = round_up(quote.ask + self.settings.binance_entry_offset_usd, self.binance.filters.tick_size)
+        else:
+            side = Side.BUY
+            price = round_down(quote.bid - self.settings.binance_entry_offset_usd, self.binance.filters.tick_size)
+        try:
+            repair = await self.binance.place_post_only_order(
+                OrderRequest(
+                    symbol=self.settings.binance_symbol,
+                    side=side,
+                    quantity=exit_fill.executed_qty,
+                    price=price,
+                    post_only=True,
+                    reduce_only=False,
+                )
+            )
+        except BinanceError as exc:
+            if not _binance_post_only_rejected(exc):
+                raise
+            self.state = StrategyState.PAUSED
+            self.last_error = "币安平仓部分成交后 Post Only 补回被拒，已暂停，未走市价"
+            self.storage.record_event(
+                "exit_repair_post_only_rejected",
+                {"exit_order_id": exit_fill.order_id, "quantity": str(exit_fill.executed_qty), "price": str(price), "error": str(exc)[:160]},
+            )
+            return
+        self.storage.record_event(
+            "exit_repair_order",
+            {
+                **repair.model_dump(mode="json"),
+                "source_exit_order_id": exit_fill.order_id,
+                "source_exit_qty": str(exit_fill.executed_qty),
+                "reason": "平仓部分成交后使用币安 Post Only 补回，不走市价",
+            },
+        )
+        if repair.status == OrderStatus.REJECTED:
+            self.state = StrategyState.PAUSED
+            self.last_error = "币安平仓部分成交后限价补回被拒，已暂停，未走市价"
+            return
+        self.exit_repair_fill = exit_fill
+        self.active_order = repair
+        self.order_created_ms = utc_now_ms()
+        self.state = StrategyState.REPAIRING_BINANCE_EXIT
+
+    async def _check_exit_repair_order(self) -> None:
+        if not self.active_order or not self.exit_repair_fill or not self.open_pair:
+            self.state = StrategyState.PAIR_OPEN if self.open_pair else StrategyState.IDLE
+            return
+        order = await self.binance.get_order(self.active_order.order_id)
+        if not order:
+            return
+        self.active_order = order
+        if order.status == OrderStatus.FILLED and order.executed_qty >= self.exit_repair_fill.executed_qty:
+            self._apply_exit_repair_fill(self.exit_repair_fill, order)
+            return
+        if order.status == OrderStatus.PARTIALLY_FILLED:
+            return
+        if order.status in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED}:
+            self.state = StrategyState.PAUSED
+            self.last_error = "币安限价补回单未成交，已暂停；为避免手续费没有走市价"
+            self.storage.record_event(
+                "exit_repair_failed",
+                {"repair_order_id": order.order_id, "status": order.status.value, "executed_qty": str(order.executed_qty)},
+            )
+            return
+        if utc_now_ms() - self.order_created_ms <= self.settings.max_order_age_ms:
+            return
+        canceled = await self._cancel_or_refresh_expired_exit_order(order)
+        if canceled and canceled.status == OrderStatus.FILLED and canceled.executed_qty >= self.exit_repair_fill.executed_qty:
+            self._apply_exit_repair_fill(self.exit_repair_fill, canceled)
+            return
+        if canceled and canceled.executed_qty > 0:
+            self.state = StrategyState.PAUSED
+            self.last_error = "币安限价补回单只有部分成交，已暂停；为避免手续费没有走市价"
+            self.storage.record_event(
+                "exit_repair_partial_paused",
+                {"repair_order_id": canceled.order_id, "executed_qty": str(canceled.executed_qty), "target_qty": str(self.exit_repair_fill.executed_qty)},
+            )
+            return
+        await self._place_exit_repair_order(self.exit_repair_fill)
+
+    def _apply_exit_repair_fill(self, exit_fill: OrderUpdate, repair: OrderUpdate) -> None:
+        if not self.open_pair:
+            return
+        pair = self.open_pair
+        realized = self._binance_exit_realized_pnl(exit_fill)
+        mt4_entry = self._mt4_average_entry_price() or pair.mt4_entry_price
+        remaining_qty = max(Decimal("0"), pair.quantity_oz - exit_fill.executed_qty)
+        restored_qty = remaining_qty + repair.executed_qty
+        binance_entry_price = repair.avg_price
+        if restored_qty > 0 and remaining_qty > 0:
+            binance_entry_price = ((pair.binance_entry_price * remaining_qty) + (repair.avg_price * repair.executed_qty)) / restored_qty
+        new_edge = self._entry_spread(pair.direction, binance_entry_price, mt4_entry)
+        self.storage.record_event(
+            "exit_repair_filled",
+            {
+                "exit_order_id": exit_fill.order_id,
+                "exit_qty": str(exit_fill.executed_qty),
+                "repair_order_id": repair.order_id,
+                "repair_avg_price": str(repair.avg_price),
+                "realized_pnl": str(realized),
+                "new_binance_entry_price": str(binance_entry_price),
+            },
+        )
+        self.open_pair = pair.model_copy(
+            update={
+                "binance_entry_price": binance_entry_price,
+                "binance_order_id": repair.order_id,
+                "realized_pnl": pair.realized_pnl + realized,
+                "base_edge": new_edge if pair.add_count == 0 else pair.base_edge,
+                "last_add_edge": new_edge,
+            }
+        )
+        self.active_order = None
+        self.exit_repair_fill = None
+        self.exit_force_reason = None
+        self._close_trigger_cache = None
+        self._close_trigger_cache_ms = 0
+        self.state = StrategyState.PAIR_OPEN
 
     def _binance_exit_realized_pnl(self, order: OrderUpdate) -> Decimal:
         if not self.open_pair:
@@ -1495,6 +1609,7 @@ class StrategyEngine:
         self.active_order = None
         self.adding_to_pair = False
         self.exit_force_reason = None
+        self.exit_repair_fill = None
         self.pending_hedge_qty = Decimal("0")
         self.hedge_started_ms = 0
         self.state = StrategyState.PAUSED
@@ -1521,6 +1636,7 @@ class StrategyEngine:
         self.active_order = None
         self.adding_to_pair = False
         self.exit_force_reason = None
+        self.exit_repair_fill = None
         self.hedged_qty = Decimal("0")
         self.pending_hedge_qty = Decimal("0")
         self.hedge_started_ms = 0
@@ -1536,6 +1652,7 @@ class StrategyEngine:
         self.open_pair = None
         self.adding_to_pair = False
         self.exit_force_reason = None
+        self.exit_repair_fill = None
         self.pending_close_tickets = set()
         self.pending_close_commands = {}
         self.orphan_close_commands = {}
