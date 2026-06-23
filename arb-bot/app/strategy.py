@@ -1008,23 +1008,21 @@ class StrategyEngine:
                 return
         if not order or order.status != OrderStatus.FILLED:
             if order and order.status == OrderStatus.NEW and not self.exit_force_reason and not await self._exit_order_follow_still_profitable(order):
-                try:
-                    await self.binance.cancel_order(order.order_id)
-                except BinanceError as exc:
-                    if not _binance_order_missing(exc):
-                        raise
-                    self.storage.record_event("exit_cancel_not_visible", {"order_id": order.order_id, "error": str(exc)[:160]})
-                self.active_order = None
-                self.state = StrategyState.PAIR_OPEN
-                self.storage.record_event(
-                    "exit_order_canceled_unprofitable_follow",
-                    {
-                        "order_id": order.order_id,
-                        "reason": "平仓挂单等待期间按币安挂单价和当前 MT4 可平价测算会亏",
-                        "projected_spread": str(self._exit_order_projected_spread(order)),
-                        "threshold_spread": str(await self._exit_order_profit_threshold()),
-                    },
-                )
+                checked, cancel_or_query_missing = await self._cancel_or_refresh_unprofitable_exit_order(order)
+                if checked and checked.status == OrderStatus.FILLED:
+                    await self._handle_exit_cancel_race_fill(checked)
+                    return
+                if checked and checked.status in {OrderStatus.PARTIALLY_FILLED, OrderStatus.CANCELED, OrderStatus.EXPIRED} and checked.executed_qty > 0:
+                    order = await self._rollback_partial_exit_fill(checked)
+                    if order is None:
+                        return
+                    if order.status == OrderStatus.FILLED:
+                        await self._handle_exit_cancel_race_fill(order)
+                        return
+                if cancel_or_query_missing and (recovered := await self._filled_exit_from_flat_binance_position(order)):
+                    await self._handle_exit_cancel_race_fill(recovered)
+                    return
+                await self._mark_exit_order_canceled_unprofitable_follow(order)
             return
         self.active_order = order
         if not self.exit_force_reason and not await self._exit_fill_follow_ok(order):
@@ -1042,6 +1040,90 @@ class StrategyEngine:
             await self._place_exit_repair_order(order)
             return
         await self._queue_mt4_close_after_exit_order(order)
+
+    async def _mark_exit_order_canceled_unprofitable_follow(self, order: OrderUpdate) -> None:
+        self.active_order = None
+        self.state = StrategyState.PAIR_OPEN
+        self.storage.record_event(
+            "exit_order_canceled_unprofitable_follow",
+            {
+                "order_id": order.order_id,
+                "reason": "平仓挂单等待期间按币安挂单价和当前 MT4 可平价测算会亏",
+                "projected_spread": str(self._exit_order_projected_spread(order)),
+                "threshold_spread": str(await self._exit_order_profit_threshold()),
+            },
+        )
+
+    async def _cancel_or_refresh_unprofitable_exit_order(self, order: OrderUpdate) -> tuple[OrderUpdate | None, bool]:
+        cancel_or_query_missing = False
+        if order.status in TERMINAL_ORDER_STATUSES:
+            return order, False
+        try:
+            canceled = await self.binance.cancel_order(order.order_id)
+            if canceled:
+                return canceled, False
+            cancel_or_query_missing = True
+            self.storage.record_event("exit_cancel_returned_empty", {"order_id": order.order_id})
+        except BinanceError as exc:
+            if not _binance_order_missing(exc):
+                raise
+            cancel_or_query_missing = True
+            self.storage.record_event("exit_cancel_not_visible", {"order_id": order.order_id, "error": str(exc)[:160]})
+        try:
+            refreshed = await self.binance.get_order(order.order_id)
+            if refreshed:
+                return refreshed, cancel_or_query_missing
+        except BinanceError as exc:
+            if not _binance_order_missing(exc):
+                raise
+            cancel_or_query_missing = True
+            self.storage.record_event("exit_order_missing_after_cancel", {"order_id": order.order_id, "error": str(exc)[:160]})
+        return None, cancel_or_query_missing
+
+    async def _handle_exit_cancel_race_fill(self, order: OrderUpdate) -> None:
+        self.active_order = order
+        self.storage.record_event(
+            "exit_cancel_race_filled_following_mt4",
+            {
+                "order_id": order.order_id,
+                "executed_qty": str(order.executed_qty),
+                "avg_price": str(order.avg_price),
+                "reason": "平仓撤单时币安已成交，为避免 MT4 单腿，立即跟随平 MT4",
+            },
+        )
+        await self._queue_mt4_close_after_exit_order(order)
+
+    async def _filled_exit_from_flat_binance_position(self, order: OrderUpdate) -> OrderUpdate | None:
+        if not self.open_pair:
+            return None
+        try:
+            position_qty = await self.binance.position_quantity()
+        except Exception as exc:  # noqa: BLE001
+            self.storage.record_event(
+                "exit_cancel_race_position_check_failed",
+                {"order_id": order.order_id, "error": str(exc)[:160]},
+            )
+            return None
+        if position_qty != 0:
+            return None
+        qty = self.open_pair.quantity_oz
+        recovered = order.model_copy(
+            update={
+                "status": OrderStatus.FILLED,
+                "executed_qty": qty,
+                "avg_price": order.price,
+            }
+        )
+        self.storage.record_event(
+            "exit_cancel_race_recovered_from_flat_position",
+            {
+                "order_id": order.order_id,
+                "position_qty": str(position_qty),
+                "assumed_executed_qty": str(qty),
+                "assumed_avg_price": str(order.price),
+            },
+        )
+        return recovered
 
     async def _exit_fill_follow_ok(self, order: OrderUpdate) -> bool:
         actual_spread = self._exit_fill_spread(order)

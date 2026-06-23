@@ -795,6 +795,60 @@ async def test_live_exit_order_cancels_when_mt4_follow_would_lose(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_exit_cancel_unknown_after_fill_closes_mt4_to_avoid_single_leg(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        FillButUnknownOnCancelPaperClient,
+        settings_kwargs={"CLOSE_PROFIT_USD_PER_OZ": Decimal("0.8"), "MT4_SLIPPAGE_POINTS": 30},
+    )
+    client.maker_fee_rate = Decimal("0")
+    await open_live_pair(engine, client, mt4, ticket=123456, binance_fill_price=Decimal("2002"), mt4_fill_price=Decimal("2000"))
+
+    client.set_quote(Decimal("2000.0"), Decimal("2000.1"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999.4"),
+            ask=Decimal("1999.7"),
+            point=Decimal("0.01"),
+            positions=[
+                Mt4Position(ticket=123456, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+        )
+    )
+    await engine.step()
+    exit_order = engine.active_order
+    assert exit_order is not None
+    assert engine.state == StrategyState.QUOTING_BINANCE_EXIT
+
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1998.4"),
+            ask=Decimal("1998.7"),
+            point=Decimal("0.01"),
+            positions=[
+                Mt4Position(ticket=123456, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+        )
+    )
+    await engine.step()
+
+    close_command = mt4.next_command()
+    assert close_command["action"] == "CLOSE"
+    assert close_command["ticket"] == 123456
+    assert engine.state == StrategyState.CLOSING_MT4
+    assert client._orders[exit_order.order_id].status == OrderStatus.FILLED
+    entry_order_id = engine.open_pair.binance_order_id if engine.open_pair else None
+    repair_orders = [
+        order
+        for order in client._orders.values()
+        if order.is_maker is True and not order.reduce_only and order.side == Side.SELL and order.order_id != entry_order_id
+    ]
+    assert repair_orders == []
+
+
+@pytest.mark.asyncio
 async def test_bad_exit_fill_repairs_with_post_only_not_market(tmp_path):
     engine, client, mt4 = await make_engine(
         tmp_path,
@@ -1786,6 +1840,29 @@ class FillOnCancelPaperClient(PaperBinanceClient):
             )
             self._orders[order_id] = order
         return order
+
+
+class FillButUnknownOnCancelPaperClient(PaperBinanceClient):
+    async def cancel_order(self, order_id: str):
+        order = self._orders.get(order_id)
+        if order and order.status in {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED}:
+            self._orders[order_id] = order.model_copy(
+                update={
+                    "status": OrderStatus.FILLED,
+                    "executed_qty": order.orig_qty,
+                    "avg_price": order.price,
+                }
+            )
+        raise BinanceError('{"code":-2011,"msg":"Unknown order sent."}')
+
+    async def position_quantity(self) -> Decimal:
+        qty = Decimal("0")
+        for order in self._orders.values():
+            if order.status not in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}:
+                continue
+            signed = order.executed_qty if order.side == Side.BUY else -order.executed_qty
+            qty += signed
+        return qty
 
 
 class NotVisibleOncePaperClient(PaperBinanceClient):
