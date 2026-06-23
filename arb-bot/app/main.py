@@ -1317,8 +1317,13 @@ def _execution_plan(metrics: PositionMetrics | None = None) -> ExecutionPlanStat
         trigger_text = f"{trigger_spread:.4f} 美元" if trigger_spread is not None else "等待实盘入场价确认"
         break_even_text = f"{break_even:.4f} 美元" if break_even is not None else "等待确认"
         buffer_text = f"，再预留 MT4 跟随保护 {follow_buffer:.4f} 美元/盎司" if follow_buffer is not None and follow_buffer > 0 else ""
+        close_order_text = (
+            f"平仓条件满足后，币安才会挂 {_side_text(side)} 限价 {price}"
+            if not close_ready
+            else f"平仓条件已满足，币安准备挂 {_side_text(side)} 限价 {price}"
+        )
         return ExecutionPlanStatus(
-            summary=f"平仓逻辑：按实盘进场价差计算，保本价差 {break_even_text}，先扣 {close_profit} 美元/盎司利润空间{buffer_text}，当前触发价差 {trigger_text}；币安挂 {_side_text(side)} 限价 {price}；当前平仓价差 {spread if spread is not None else '-'}，{'已满足' if close_ready else '未满足'}。{add_summary}",
+            summary=f"平仓逻辑：按实盘进场价差计算，保本价差 {break_even_text}，先扣 {close_profit} 美元/盎司利润空间{buffer_text}，当前触发价差 {trigger_text}；{close_order_text}；当前平仓价差 {spread if spread is not None else '-'}，{'已满足' if close_ready else '未满足'}。{add_summary}",
             binance_order_side=side,
             binance_order_price=price,
             binance_order_qty=pair.quantity_oz,
