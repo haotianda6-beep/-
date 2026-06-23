@@ -124,6 +124,9 @@ async def test_partial_fill_hedges_only_filled_quantity(tmp_path):
     assert Decimal(str(command["lots"])) == Decimal("0.004")
     assert Decimal(str(command["max_price"])) == Decimal("2001.20")
     assert command["min_price"] is None
+    assert engine.active_order is not None
+    assert engine.active_order.status == OrderStatus.CANCELED
+    assert engine.active_order.executed_qty == Decimal("0.4")
     assert engine.state == StrategyState.HEDGING_MT4
 
 
@@ -184,6 +187,18 @@ async def test_entry_requires_confirm_time_before_order(tmp_path):
 
     assert engine.state == StrategyState.QUOTING_BINANCE_ENTRY
     assert engine.active_order is not None
+
+
+@pytest.mark.asyncio
+async def test_entry_post_only_reject_exception_requotes_without_error(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path, PostOnlyRejectOncePaperClient)
+    client.reject_next_post_only = True
+
+    await engine.step()
+
+    assert engine.state == StrategyState.IDLE
+    assert engine.active_order is None
+    assert engine.last_entry_cancel_ms > 0
 
 
 @pytest.mark.asyncio
@@ -486,6 +501,92 @@ async def test_exit_order_cancels_when_spread_widens_before_fill(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_partial_exit_completes_binance_with_market_before_mt4_close(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path)
+    await engine.step()
+    entry_order = engine.active_order
+    assert entry_order is not None
+    await client.simulate_fill(entry_order.order_id, Decimal("1"), Decimal("2002"))
+    await engine.step()
+    entry_command = mt4.next_command()
+    mt4.submit_report(
+        Mt4Report(
+            command_id=entry_command["command_id"],
+            status="ok",
+            action="BUY",
+            ticket=123456,
+            fill_price=Decimal("2000"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await engine.step()
+
+    client.set_quote(Decimal("2000.0"), Decimal("2000.1"))
+    mt4.update_tick(Mt4Tick(symbol="XAUUSD", bid=Decimal("2000.0"), ask=Decimal("2000.1")))
+    await engine.step()
+    exit_order = engine.active_order
+    assert exit_order is not None
+    await client.simulate_fill(exit_order.order_id, Decimal("0.4"), Decimal("2000"))
+
+    await engine.step()
+
+    market_closes = [
+        order
+        for order in client._orders.values()
+        if order.is_maker is False and order.reduce_only and order.side == Side.BUY
+    ]
+    assert market_closes
+    assert market_closes[-1].executed_qty == Decimal("0.6")
+    close_command = mt4.next_command()
+    assert close_command["action"] == "CLOSE"
+    assert close_command["ticket"] == 123456
+    assert Decimal(str(close_command["lots"])) == Decimal("0.01")
+    assert engine.state == StrategyState.CLOSING_MT4
+
+
+@pytest.mark.asyncio
+async def test_partial_exit_market_incomplete_pauses_before_mt4_close(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path, IncompleteMarketClosePaperClient)
+    await open_live_pair(engine, client, mt4, ticket=123456)
+
+    client.set_quote(Decimal("2000.0"), Decimal("2000.1"))
+    mt4.update_tick(Mt4Tick(symbol="XAUUSD", bid=Decimal("2000.0"), ask=Decimal("2000.1")))
+    await engine.step()
+    exit_order = engine.active_order
+    assert exit_order is not None
+    await client.simulate_fill(exit_order.order_id, Decimal("0.4"), Decimal("2000"))
+
+    await engine.step()
+
+    assert engine.state == StrategyState.PAUSED
+    assert engine.last_error == "币安剩余平仓市价单未完全成交，已暂停，不能继续平 MT4"
+    assert mt4.next_command() == {"command": "NONE"}
+
+
+@pytest.mark.asyncio
+async def test_exit_post_only_reject_exception_requotes_without_error(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path, PostOnlyRejectOncePaperClient)
+    await open_live_pair(engine, client, mt4, ticket=123456)
+    client.set_quote(Decimal("2000.0"), Decimal("2000.1"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("2000.0"),
+            ask=Decimal("2000.1"),
+            positions=[
+                Mt4Position(ticket=123456, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+        )
+    )
+    client.reject_next_post_only = True
+
+    await engine.step()
+
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.active_order is None
+
+
+@pytest.mark.asyncio
 async def test_pair_open_stale_quote_waits_without_hard_pause(tmp_path):
     engine, client, mt4 = await make_engine(tmp_path, PositionTrackingPaperClient)
     await open_live_pair(engine, client, mt4, ticket=111111)
@@ -667,6 +768,36 @@ async def test_add_position_waits_after_initial_open(tmp_path):
 
     assert engine.active_order is not None
     assert engine.adding_to_pair is True
+
+
+@pytest.mark.asyncio
+async def test_add_post_only_reject_exception_requotes_without_error(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        PostOnlyRejectOncePaperClient,
+        settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 2},
+    )
+    await open_live_pair(engine, client, mt4, ticket=111111)
+    age_open_pair_for_add(engine)
+    client.set_quote(Decimal("2002"), Decimal("2003"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("2000"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+            account_margin=Decimal("4.34"),
+        )
+    )
+    client.reject_next_post_only = True
+
+    await engine.step()
+
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.active_order is None
+    assert engine.last_entry_cancel_ms > 0
 
 
 @pytest.mark.asyncio
@@ -1194,6 +1325,39 @@ class NotVisibleOncePaperClient(PaperBinanceClient):
             self.missing_once = False
             raise BinanceError('{"code":-2013,"msg":"Order does not exist."}')
         return await super().get_order(order_id)
+
+
+class PostOnlyRejectOncePaperClient(PaperBinanceClient):
+    def __init__(self, settings):
+        super().__init__(settings)
+        self.reject_next_post_only = False
+
+    async def place_post_only_order(self, request):
+        if self.reject_next_post_only:
+            self.reject_next_post_only = False
+            raise BinanceError(
+                '{"code":-5022,"msg":"Due to the order could not be executed as maker, the Post Only order will be rejected."}'
+            )
+        return await super().place_post_only_order(request)
+
+    async def position_quantity(self) -> Decimal:
+        qty = Decimal("0")
+        for order in self._orders.values():
+            if order.status not in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}:
+                continue
+            signed = order.executed_qty if order.side == Side.BUY else -order.executed_qty
+            qty += signed
+        return qty
+
+
+class IncompleteMarketClosePaperClient(PaperBinanceClient):
+    async def place_market_order(self, request):
+        order = await super().place_market_order(request)
+        if request.reduce_only:
+            executed = request.quantity / Decimal("2")
+            order = order.model_copy(update={"executed_qty": executed, "status": OrderStatus.PARTIALLY_FILLED})
+            self._orders[order.order_id] = order
+        return order
 
 
 class PositionTrackingPaperClient(PaperBinanceClient):

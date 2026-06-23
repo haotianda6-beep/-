@@ -124,6 +124,11 @@ def _binance_order_missing(exc: BinanceError) -> bool:
     return "-2013" in text or "-2011" in text or "Order does not exist" in text or "Unknown order" in text
 
 
+def _binance_post_only_rejected(exc: BinanceError) -> bool:
+    text = str(exc)
+    return "-5022" in text or "Post Only" in text or "could not be executed as maker" in text
+
+
 MIN_ADD_AFTER_OPEN_MS = 30_000
 CLOSE_TRIGGER_CACHE_TTL_MS = 30_000
 FUNDING_INCOME_CACHE_TTL_MS = 60_000
@@ -264,15 +269,25 @@ class StrategyEngine:
         if not await self._live_entry_guard_ok():
             self._clear_entry_candidate()
             return
-        order = await self.binance.place_post_only_order(
-            OrderRequest(
-                symbol=self.settings.binance_symbol,
-                side=plan.binance_side,
-                quantity=plan.quantity_oz,
-                price=plan.limit_price,
-                post_only=True,
+        try:
+            order = await self.binance.place_post_only_order(
+                OrderRequest(
+                    symbol=self.settings.binance_symbol,
+                    side=plan.binance_side,
+                    quantity=plan.quantity_oz,
+                    price=plan.limit_price,
+                    post_only=True,
+                )
             )
-        )
+        except BinanceError as exc:
+            if not _binance_post_only_rejected(exc):
+                raise
+            self.last_entry_cancel_ms = utc_now_ms()
+            self.storage.record_event(
+                "entry_post_only_rejected",
+                {"side": plan.binance_side.value, "price": str(plan.limit_price), "error": str(exc)[:160]},
+            )
+            return
         self.storage.record_event("entry_order", order.model_dump(mode="json"))
         self._clear_entry_candidate()
         if order.status == OrderStatus.REJECTED:
@@ -313,6 +328,18 @@ class StrategyEngine:
                 if order.executed_qty <= self.hedged_qty + self.pending_hedge_qty:
                     self._clear_entry()
                     return
+        if order.status == OrderStatus.PARTIALLY_FILLED and order.executed_qty > self.hedged_qty + self.pending_hedge_qty:
+            order = await self._cancel_entry_order(order)
+            if order is None:
+                return
+            self.storage.record_event(
+                "entry_partial_fill_remainder_canceled",
+                {
+                    "order_id": order.order_id,
+                    "executed_qty": str(order.executed_qty),
+                    "status": order.status.value,
+                },
+            )
         if order.executed_qty > self.hedged_qty + self.pending_hedge_qty:
             await self._queue_mt4_hedge(order.executed_qty - self.hedged_qty - self.pending_hedge_qty, order.avg_price)
         if order.status == OrderStatus.CANCELED and order.executed_qty == self.hedged_qty:
@@ -739,15 +766,31 @@ class StrategyEngine:
             return False
         if not await self._live_entry_guard_ok(allow_existing_position=True):
             return True
-        order = await self.binance.place_post_only_order(
-            OrderRequest(
-                symbol=self.settings.binance_symbol,
-                side=plan.binance_side,
-                quantity=plan.quantity_oz,
-                price=plan.limit_price,
-                post_only=True,
+        try:
+            order = await self.binance.place_post_only_order(
+                OrderRequest(
+                    symbol=self.settings.binance_symbol,
+                    side=plan.binance_side,
+                    quantity=plan.quantity_oz,
+                    price=plan.limit_price,
+                    post_only=True,
+                )
             )
-        )
+        except BinanceError as exc:
+            if not _binance_post_only_rejected(exc):
+                raise
+            self.last_entry_cancel_ms = utc_now_ms()
+            self.storage.record_event(
+                "add_post_only_rejected",
+                {
+                    "side": plan.binance_side.value,
+                    "price": str(plan.limit_price),
+                    "trigger_edge": str(trigger_edge),
+                    "current_edge": str(plan.edge),
+                    "error": str(exc)[:160],
+                },
+            )
+            return True
         self.storage.record_event(
             "add_order",
             {
@@ -816,17 +859,34 @@ class StrategyEngine:
             side = Side.SELL
             price = round_up(binance_quote.ask, self.binance.filters.tick_size)
             position_side = "LONG"
-        order = await self.binance.place_post_only_order(
-            OrderRequest(
-                symbol=self.settings.binance_symbol,
-                side=side,
-                quantity=self.open_pair.quantity_oz,
-                price=price,
-                post_only=True,
-                reduce_only=True,
-                position_side=position_side,
+        try:
+            order = await self.binance.place_post_only_order(
+                OrderRequest(
+                    symbol=self.settings.binance_symbol,
+                    side=side,
+                    quantity=self.open_pair.quantity_oz,
+                    price=price,
+                    post_only=True,
+                    reduce_only=True,
+                    position_side=position_side,
+                )
             )
-        )
+        except BinanceError as exc:
+            if not _binance_post_only_rejected(exc):
+                raise
+            self.storage.record_event(
+                "exit_post_only_rejected",
+                {
+                    "side": side.value,
+                    "price": str(price),
+                    "force": force,
+                    "reason": reason,
+                    "current_spread": str(current_spread) if current_spread is not None else None,
+                    "trigger_spread": str(trigger_spread) if trigger_spread is not None else None,
+                    "error": str(exc)[:160],
+                },
+            )
+            return
         if order.status != OrderStatus.REJECTED:
             self.storage.record_event(
                 "exit_order",
@@ -868,6 +928,10 @@ class StrategyEngine:
                 return
         else:
             order = await self.binance.get_order(self.active_order.order_id)
+        if order and order.status in {OrderStatus.PARTIALLY_FILLED, OrderStatus.CANCELED, OrderStatus.EXPIRED} and order.executed_qty > 0:
+            order = await self._complete_partial_exit_order(order)
+            if order is None:
+                return
         if not order or order.status != OrderStatus.FILLED:
             if order and order.status == OrderStatus.NEW and not self.exit_force_reason and not await self._exit_spread_still_valid():
                 await self.binance.cancel_order(order.order_id)
@@ -879,6 +943,12 @@ class StrategyEngine:
                 )
             return
         self.active_order = order
+        await self._queue_mt4_close_after_exit_order(order)
+
+    async def _queue_mt4_close_after_exit_order(self, order: OrderUpdate) -> None:
+        if not self.open_pair:
+            self.state = StrategyState.PAIR_OPEN
+            return
         binance_quote = self.binance.latest_quote()
         mt4_quote = self.mt4.latest_quote()
         self.storage.record_event(
@@ -918,6 +988,68 @@ class StrategyEngine:
             },
         )
         self.state = StrategyState.CLOSING_MT4
+
+    async def _complete_partial_exit_order(self, order: OrderUpdate) -> OrderUpdate | None:
+        if not self.open_pair:
+            return None
+        checked = order
+        if order.status == OrderStatus.PARTIALLY_FILLED:
+            try:
+                canceled = await self.binance.cancel_order(order.order_id)
+                if canceled is not None:
+                    checked = canceled
+            except BinanceError as exc:
+                if not _binance_order_missing(exc):
+                    raise
+                self.storage.record_event("partial_exit_cancel_not_visible", {"order_id": order.order_id, "error": str(exc)[:160]})
+        if checked.status == OrderStatus.FILLED:
+            return checked
+        remaining_qty = max(Decimal("0"), self.open_pair.quantity_oz - checked.executed_qty)
+        if remaining_qty <= 0:
+            return checked.model_copy(update={"status": OrderStatus.FILLED})
+        position_side = "SHORT" if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else "LONG"
+        market = await self.binance.place_market_order(
+            OrderRequest(
+                symbol=self.settings.binance_symbol,
+                side=checked.side,
+                quantity=remaining_qty,
+                post_only=False,
+                reduce_only=True,
+                position_side=position_side,
+            )
+        )
+        if market.executed_qty < remaining_qty:
+            self.state = StrategyState.PAUSED
+            self.last_error = "币安剩余平仓市价单未完全成交，已暂停，不能继续平 MT4"
+            self.storage.record_event(
+                "partial_exit_market_incomplete",
+                {
+                    "order_id": checked.order_id,
+                    "remaining_qty": str(remaining_qty),
+                    "market_order_id": market.order_id,
+                    "market_status": market.status.value,
+                    "market_executed_qty": str(market.executed_qty),
+                },
+            )
+            return None
+        total_qty = checked.executed_qty + market.executed_qty
+        if total_qty > 0:
+            avg_price = ((checked.avg_price * checked.executed_qty) + (market.avg_price * market.executed_qty)) / total_qty
+        else:
+            avg_price = checked.avg_price
+        completed = checked.model_copy(update={"status": OrderStatus.FILLED, "executed_qty": total_qty, "avg_price": avg_price})
+        self.storage.record_event(
+            "partial_exit_completed_with_market",
+            {
+                "order_id": checked.order_id,
+                "executed_qty": str(checked.executed_qty),
+                "remaining_qty": str(remaining_qty),
+                "market_order_id": market.order_id,
+                "market_executed_qty": str(market.executed_qty),
+                "avg_price": str(avg_price),
+            },
+        )
+        return completed
 
     async def _cancel_or_refresh_expired_exit_order(self, order: OrderUpdate) -> OrderUpdate | None:
         if order.status in TERMINAL_ORDER_STATUSES:
@@ -1167,13 +1299,14 @@ class StrategyEngine:
         self.last_error = reason
         self.state = StrategyState.EMERGENCY_CLOSE_BINANCE
         close_order: OrderUpdate | None = None
-        if self.active_order and self.active_order.executed_qty > 0:
+        close_qty = self._active_unhedged_qty()
+        if self.active_order and close_qty > 0:
             side = Side.BUY if self.active_order.side == Side.SELL else Side.SELL
             close_order = await self.binance.place_market_order(
                 OrderRequest(
                     symbol=self.settings.binance_symbol,
                     side=side,
-                    quantity=self.active_order.executed_qty,
+                    quantity=close_qty,
                     post_only=False,
                     reduce_only=True,
                 )
@@ -1184,6 +1317,7 @@ class StrategyEngine:
                 "reason": reason,
                 "close_order_id": close_order.order_id if close_order else None,
                 "close_status": close_order.status.value if close_order else None,
+                "close_qty": str(close_qty),
             },
         )
         self.active_plan = None
@@ -1193,6 +1327,11 @@ class StrategyEngine:
         self.pending_hedge_qty = Decimal("0")
         self.hedge_started_ms = 0
         self.state = StrategyState.PAUSED
+
+    def _active_unhedged_qty(self) -> Decimal:
+        if not self.active_order:
+            return Decimal("0")
+        return max(Decimal("0"), self.active_order.executed_qty - self.hedged_qty)
 
     def _quotes_fresh(self, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> bool:
         for quote in (binance_quote, mt4_quote):
