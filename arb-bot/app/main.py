@@ -569,7 +569,8 @@ def _build_trade_history(
         _build_event_exit_links(event_rows or []),
     )
     aligned_items = _align_unmatched_trade_history_items(event_aligned_items, combined_binance_trades)
-    return _apply_funding_income(aligned_items, funding_rows or [])
+    funded_items = _apply_funding_income(aligned_items, funding_rows or [])
+    return _apply_trade_history_summaries(funded_items)
 
 
 def _build_event_exit_links(events: list[dict[str, Any]]) -> dict[frozenset[int], dict[str, Any]]:
@@ -717,6 +718,91 @@ def _apply_funding_income(items: list[TradeHistoryItem], funding_rows: list[dict
         net = item.net_pnl + funding if item.net_pnl is not None else None
         result[index] = item.model_copy(update={"binance_funding_income": funding, "net_pnl": net})
     return result
+
+
+def _apply_trade_history_summaries(items: list[TradeHistoryItem]) -> list[TradeHistoryItem]:
+    return [item.model_copy(update={"status": _trade_history_status_with_summary(item)}) for item in items]
+
+
+def _trade_history_status_with_summary(item: TradeHistoryItem) -> str:
+    base_status = item.status or "历史数据"
+    if "原因：" in base_status:
+        return base_status
+    summary = _trade_history_pnl_summary(item)
+    return f"{base_status}；{summary}" if summary else base_status
+
+
+def _trade_history_pnl_summary(item: TradeHistoryItem) -> str | None:
+    if item.net_pnl is None:
+        return _trade_history_incomplete_summary(item)
+    net = item.net_pnl
+    outcome = "盈利" if net > 0 else "亏损" if net < 0 else "持平"
+    components = _trade_history_components(item)
+    positives = [(name, value) for name, value in components if value > 0]
+    negatives = [(name, value) for name, value in components if value < 0]
+    reasons = positives if net >= 0 else negatives
+    if not reasons:
+        reasons = positives or negatives
+    reason_text = "，".join(f"{name}{_fmt_signed_decimal(value)}" for name, value in sorted(reasons, key=lambda part: abs(part[1]), reverse=True))
+    if not reason_text:
+        reason_text = "各项收支基本抵消"
+    offset_text = _trade_history_offset_text(net, positives, negatives)
+    notes = _trade_history_quality_notes(item)
+    details = f"原因：本单{outcome}{_fmt_signed_decimal(net)}，主要来自{reason_text}{offset_text}"
+    if notes:
+        details += f"；{notes}"
+    return details
+
+
+def _trade_history_incomplete_summary(item: TradeHistoryItem) -> str | None:
+    missing = []
+    if item.binance_realized_pnl is None:
+        missing.append("币安实际盈亏")
+    if item.mt4_profit is None:
+        missing.append("MT4实际盈亏")
+    if not missing:
+        return None
+    return f"原因：暂不能判断盈亏，缺少{'、'.join(missing)}"
+
+
+def _trade_history_components(item: TradeHistoryItem) -> list[tuple[str, Decimal]]:
+    mt4_total = (item.mt4_profit or Decimal("0")) + (item.mt4_swap or Decimal("0")) + (item.mt4_commission or Decimal("0"))
+    components = [
+        ("币安合约盈亏", item.binance_realized_pnl or Decimal("0")),
+        ("MT4盈亏", mt4_total),
+        ("币安资金费", item.binance_funding_income or Decimal("0")),
+    ]
+    if item.binance_commission is not None:
+        components.append(("币安手续费", -abs(item.binance_commission)))
+    return components
+
+
+def _trade_history_offset_text(
+    net: Decimal,
+    positives: list[tuple[str, Decimal]],
+    negatives: list[tuple[str, Decimal]],
+) -> str:
+    offsets = negatives if net >= 0 else positives
+    if not offsets:
+        return ""
+    offset_text = "，".join(f"{name}{_fmt_signed_decimal(value)}" for name, value in sorted(offsets, key=lambda part: abs(part[1]), reverse=True)[:2])
+    return f"，被{offset_text}抵消一部分"
+
+
+def _trade_history_quality_notes(item: TradeHistoryItem) -> str:
+    notes = []
+    if "数量不一致" in (item.status or ""):
+        notes.append("币安和 MT4 数量不一致，净利按能对齐到的真实成交计算")
+    if item.binance_entry_order_id is None:
+        notes.append("币安开仓成交未完全匹配")
+    if item.binance_exit_order_id is None:
+        notes.append("币安平仓成交未完全匹配")
+    return "；".join(notes)
+
+
+def _fmt_signed_decimal(value: Decimal) -> str:
+    sign = "+" if value >= 0 else "-"
+    return f"{sign}{_fmt_decimal(abs(value))}U"
 
 
 def _group_trade_history_items(items: list[TradeHistoryItem]) -> list[TradeHistoryItem]:

@@ -138,6 +138,9 @@ def test_trade_history_aligns_grouped_exit_with_real_net_pnl():
     assert items[0].binance_exit_order_id == "7445463165"
     assert items[0].net_pnl == Decimal("-2.39")
     assert "真实" in items[0].status
+    assert "原因：本单亏损-2.39U" in items[0].status
+    assert "MT4盈亏-78.03U" in items[0].status
+    assert "币安合约盈亏+75.64U" in items[0].status
 
 
 def test_trade_history_marks_quantity_mismatch_but_keeps_real_net_pnl():
@@ -204,3 +207,6 @@ def test_trade_history_uses_event_link_when_binance_exit_precedes_manual_mt4_clo
     assert items[0].binance_funding_income == Decimal("0.80985952")
     assert items[0].net_pnl == Decimal("28.97985952")
     assert "事件链" in items[0].status
+    assert "原因：本单盈利+28.97985952U" in items[0].status
+    assert "MT4盈亏+58.8U" in items[0].status
+    assert "币安合约盈亏-30.63U" in items[0].status
