@@ -43,6 +43,8 @@ CONFIG_FIELD_TO_ENV = {
     "loop_interval_ms": "LOOP_INTERVAL_MS",
     "paper_auto_fill": "PAPER_AUTO_FILL",
     "paper_fill_delay_ms": "PAPER_FILL_DELAY_MS",
+    "gold_v2_observation_only": "GOLD_V2_OBSERVATION_ONLY",
+    "gold_v2_history_start_ms": "GOLD_V2_HISTORY_START_MS",
 }
 SAFE_CONFIG_ENV_KEYS = set(CONFIG_FIELD_TO_ENV.values())
 MODE_ENV_KEYS = {"LIVE_TRADING", "PAPER_MODE"}

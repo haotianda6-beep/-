@@ -393,6 +393,7 @@ class RuntimeConfig(BaseModel):
 
 
 class RuntimeConfigUpdate(BaseModel):
+    gold_v2_observation_only: bool | None = None
     binance_leverage: int | None = None
     binance_entry_offset_usd: Decimal | None = None
     open_min_edge: Decimal | None = None

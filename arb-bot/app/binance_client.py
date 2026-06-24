@@ -547,11 +547,10 @@ class BinanceFuturesClient(BinanceBaseClient):
             params["newOrderRespType"] = "RESULT"
         if request.price is not None and order_type == "LIMIT":
             params["price"] = str(request.price)
-        if request.reduce_only:
-            if self._hedge_mode:
-                params["positionSide"] = request.position_side or ("SHORT" if request.side == Side.BUY else "LONG")
-            else:
-                params["reduceOnly"] = "true"
+        if self._hedge_mode:
+            params["positionSide"] = request.position_side or ("SHORT" if request.side == Side.SELL else "LONG")
+        elif request.reduce_only:
+            params["reduceOnly"] = "true"
         return params
 
     def _parse_order(self, raw: dict[str, Any], request: OrderRequest | None = None) -> OrderUpdate:

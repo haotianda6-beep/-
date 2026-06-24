@@ -54,11 +54,11 @@ def build_gold_v2_status(
     selected = _selected_entry_plan(short_plan, long_plan)
 
     return {
-        "mode": "只读观察",
-        "auto_trade_enabled": False,
-        "execution_enabled": False,
+        "mode": "V2 实盘执行" if not settings.gold_v2_observation_only else "只读观察",
+        "auto_trade_enabled": not settings.gold_v2_observation_only,
+        "execution_enabled": not settings.gold_v2_observation_only,
         "add_enabled": False,
-        "reason": "新版七步方案处于观察阶段，只计算机会和挂单位置，不会自动下单。",
+        "reason": "V2 执行器已解锁，会按币安全限价和 MT4 跟随执行。" if not settings.gold_v2_observation_only else "新版七步方案处于观察阶段，只计算机会和挂单位置，不会自动下单。",
         "lookback_minutes": 30,
         "threshold_rule": "最近30分钟价差最低到最高之间取70%位置，并且不能低于手动最小开仓价差。",
         "mt4_slippage_budget": slippage_budget,
@@ -72,7 +72,7 @@ def build_gold_v2_status(
         "partial_fill_policy": [
             "币安只允许挂单成交，禁止市价开仓和平仓。",
             "首版不启用补仓；补仓触发价会计算但不会执行。",
-            "部分成交先不让MT4跟随，继续用挂单补齐到目标数量；超时后暂停并提示人工确认。",
+            "部分成交先不让MT4跟随，继续等待原挂单补齐到目标数量；超时后暂停并提示人工确认。",
         ],
     }
 

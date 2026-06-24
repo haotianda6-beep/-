@@ -1,0 +1,120 @@
+from decimal import Decimal
+from types import SimpleNamespace
+
+import pytest
+
+from app.binance_client import PaperBinanceClient
+from app.config import Settings
+from app.models import Mt4Report, Mt4Tick, OrderStatus, Side, StrategyState
+from app.mt4_bridge import Mt4Bridge
+from app.storage import Storage
+from app.v2_executor import GoldV2Executor
+
+
+def settings(tmp_path, **kwargs) -> Settings:
+    values = {
+        "PAPER_MODE": True,
+        "LIVE_TRADING": False,
+        "GOLD_V2_OBSERVATION_ONLY": False,
+        "BINANCE_ENTRY_OFFSET_USD": Decimal("0.1"),
+        "TARGET_OZ": Decimal("1"),
+        "MT4_LOT_SIZE_OZ": Decimal("100"),
+        "MT4_MIN_LOT": Decimal("0.01"),
+        "MT4_LOT_STEP": Decimal("0.01"),
+        "PAPER_AUTO_FILL": True,
+        "PAPER_FILL_DELAY_MS": 0,
+        "MIN_ORDER_LIVE_MS": 0,
+        "MAX_ORDER_AGE_MS": 0,
+        "MAX_HEDGE_DELAY_MS": 1000,
+        "CLOSE_PROFIT_USD_PER_OZ": Decimal("0.5"),
+        **kwargs,
+    }
+    return Settings(_env_file=None, **values)
+
+
+def runtime():
+    return SimpleNamespace(state=StrategyState.IDLE, last_error=None, open_pair=None)
+
+
+def mt4_tick(mt4: Mt4Bridge, bid: str, ask: str) -> None:
+    mt4.update_tick(Mt4Tick(symbol="XAUUSD", bid=Decimal(bid), ask=Decimal(ask)))
+
+
+def short_plan(price: str = "101") -> dict:
+    return {
+        "selected_entry": {
+            "ready": True,
+            "direction": "BINANCE_SHORT_MT4_LONG",
+            "binance_side": "SELL",
+            "binance_price": price,
+            "quantity_oz": "1",
+            "mt4_follow_side": "BUY",
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_v2_entry_and_exit_use_binance_post_only_then_mt4_follow(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
+    store = Storage(cfg.sqlite_path)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(short_plan("101"))
+    assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+
+    client.set_quote(Decimal("101"), Decimal("101.2"))
+    await executor.step(short_plan("101"))
+    command = mt4.next_command()
+    assert command["action"] == "BUY"
+    assert command["lots"] == "0.01"
+
+    mt4.submit_report(Mt4Report(command_id=command["command_id"], status="ok", action="BUY", ticket=7, fill_price=Decimal("99"), lots=Decimal("0.01")))
+    await executor.step(short_plan("101"))
+    assert run.state == StrategyState.PAIR_OPEN
+    assert run.open_pair is not None
+    assert run.open_pair.base_edge == Decimal("2")
+
+    client.set_quote(Decimal("100"), Decimal("100.1"))
+    mt4_tick(mt4, "99", "99.3")
+    await executor.step(short_plan("101"))
+    assert run.state == StrategyState.QUOTING_BINANCE_EXIT
+    assert executor.active_order is not None
+    assert executor.active_order.reduce_only is True
+    assert executor.active_order.side == Side.BUY
+
+    client.set_quote(Decimal("99.8"), executor.active_order.price)
+    await executor.step(short_plan("101"))
+    close_command = mt4.next_command()
+    assert close_command["action"] == "CLOSE"
+    assert close_command["ticket"] == 7
+
+    mt4.submit_report(Mt4Report(command_id=close_command["command_id"], status="ok", action="CLOSE", ticket=7, fill_price=Decimal("99.2"), lots=Decimal("0.01")))
+    await executor.step(short_plan("101"))
+    assert run.state == StrategyState.IDLE
+    assert run.open_pair is None
+    assert all(order.is_maker for order in client._orders.values())
+
+
+@pytest.mark.asyncio
+async def test_v2_partial_entry_fill_does_not_queue_mt4(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", MAX_HEDGE_DELAY_MS=10_000)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(short_plan("101"))
+    assert executor.active_order is not None
+    await client.simulate_fill(executor.active_order.order_id, Decimal("0.4"), Decimal("101"))
+    await executor.step(short_plan("101"))
+
+    assert executor.active_order.status == OrderStatus.PARTIALLY_FILLED
+    assert mt4.next_command() == {"command": "NONE"}
+    assert run.state == StrategyState.QUOTING_BINANCE_ENTRY

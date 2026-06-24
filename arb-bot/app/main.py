@@ -53,6 +53,7 @@ from app.strategy import (
     round_down,
     round_up,
 )
+from app.v2_executor import GoldV2Executor
 from app.v2_planner import build_gold_v2_status
 
 
@@ -74,6 +75,7 @@ mt4_bridge = Mt4Bridge(settings)
 binance_client = PaperBinanceClient(settings) if settings.is_dry_run else BinanceFuturesClient(settings)
 risk = RiskManager(settings, storage)
 strategy = StrategyEngine(settings, binance_client, mt4_bridge, risk, storage)
+v2_executor = GoldV2Executor(settings, binance_client, mt4_bridge, storage, strategy)
 
 app = FastAPI(title="黄金价差执行器", version="0.1.0")
 _loop_task: asyncio.Task | None = None
@@ -110,6 +112,7 @@ async def startup() -> None:
     if settings.gold_v2_observation_only and settings.is_dry_run:
         if isinstance(binance_client, PaperBinanceClient):
             binance_client.clear_orders()
+        v2_executor.clear()
         strategy.clear_runtime_state()
         _persist_runtime_state()
     await _reconcile_live_startup_state()
@@ -122,6 +125,7 @@ async def startup() -> None:
 async def shutdown() -> None:
     if _loop_task:
         _loop_task.cancel()
+    await v2_executor.cancel_active_order("服务关闭")
     await _cancel_unfilled_active_order_on_shutdown()
     await _cancel_orphan_arb_orders("shutdown")
     await binance_client.stop()
@@ -539,6 +543,7 @@ async def clear_paper_state() -> dict:
         raise HTTPException(status_code=400, detail="实盘模式不允许清理运行持仓状态")
     if isinstance(binance_client, PaperBinanceClient):
         binance_client.clear_orders()
+    v2_executor.clear()
     strategy.clear_runtime_state()
     _persist_runtime_state()
     return {"status": "ok", "state": strategy.state}
@@ -549,8 +554,12 @@ async def start_live_mode() -> dict:
     _assert_live_preflight()
     if isinstance(binance_client, PaperBinanceClient):
         binance_client.clear_orders()
+    v2_executor.clear()
     strategy.clear_runtime_state()
     _persist_runtime_state()
+    if settings.gold_v2_history_start_ms <= 0:
+        settings.gold_v2_history_start_ms = utc_now_ms()
+        update_local_config_file({"gold_v2_history_start_ms": settings.gold_v2_history_start_ms})
     update_mode_file(live_trading=True, paper_mode=False)
     asyncio.create_task(_restart_after_response())
     return {"status": "restarting", "mode": "live", "message": "实盘模式已写入，服务正在重启"}
@@ -1293,17 +1302,24 @@ async def _prepare_live_stop() -> None:
         raise HTTPException(status_code=400, detail=f"币安仍有 {settings.binance_symbol} 持仓 {qty}，不能直接停止；请先确认并平仓")
     if strategy.open_pair is not None:
         raise HTTPException(status_code=400, detail="当前有组合持仓，不能直接停止实盘；请先完成平仓")
+    if v2_executor.active_order is not None:
+        await _prepare_stop_order(v2_executor.active_order, "V2 币安挂单")
+        v2_executor.clear()
     order = strategy.active_order
     if order is None:
         return
+    await _prepare_stop_order(order, "旧版币安挂单")
+    strategy.clear_runtime_state()
+    _persist_runtime_state()
+
+
+async def _prepare_stop_order(order, label: str) -> None:
     remote_order = await _fetch_stop_order(order.order_id)
     checked_order = remote_order or order
     if checked_order.executed_qty > 0 or checked_order.status in {OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED}:
-        raise HTTPException(status_code=400, detail="币安挂单已有成交数量，不能直接停止实盘；需要先完成 MT4 对冲或紧急平仓")
+        raise HTTPException(status_code=400, detail=f"{label}已有成交数量，不能直接停止实盘；需要先完成 MT4 对冲或人工确认")
     if remote_order is not None and remote_order.status not in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED}:
         await _cancel_stop_order(remote_order.order_id)
-    strategy.clear_runtime_state()
-    _persist_runtime_state()
 
 
 async def _assert_resume_safe() -> None:
@@ -1349,12 +1365,11 @@ async def _strategy_loop() -> None:
         try:
             if settings.gold_v2_observation_only:
                 strategy.last_error = None
-            elif _live_pair_operation_cooldown_until_ms > _now_ms():
-                remaining_ms = _live_pair_operation_cooldown_until_ms - _now_ms()
-                if strategy.open_pair is not None and strategy.state == StrategyState.PAIR_OPEN:
-                    strategy.last_error = f"币安接口临时限频冷却中，约 {max(1, remaining_ms // 1000)} 秒后重新对账"
-            elif not await _reconcile_open_pair_live_state():
-                await strategy.step()
+            else:
+                metrics = await _position_metrics()
+                await v2_executor.step(
+                    await _gold_v2_status(metrics, binance_client.latest_quote(), mt4_bridge.latest_quote())
+                )
         except Exception as exc:  # noqa: BLE001
             strategy.last_error = str(exc)[:240]
             logger.exception("strategy loop error")
@@ -1854,141 +1869,7 @@ def _estimate_binance_fees(
 
 
 def _execution_plan(metrics: PositionMetrics | None = None) -> ExecutionPlanStatus:
-    max_follow_seconds = Decimal(settings.max_hedge_delay_ms) / Decimal("1000")
-    order = strategy.active_order
-    plan = strategy.active_plan
-    if order:
-        follow_side = plan.mt4_hedge_side if plan else None
-        mt4_price_limit = plan.mt4_price_limit if plan else None
-        if strategy.state == StrategyState.REPAIRING_BINANCE_EXIT:
-            summary = f"币安平仓部分成交后正在用 Post Only 补回：{_side_text(order.side)} {order.orig_qty} XAU，价格 {order.price}，状态 {_order_status_text(order.status.value)}；补回成交前不会平 MT4，不走币安市价。"
-            follow_side = None
-            mt4_price_limit = None
-        elif order.reduce_only:
-            summary = f"币安当前平仓挂单：{_side_text(order.side)} {order.orig_qty} XAU，价格 {order.price}，状态 {_order_status_text(order.status.value)}；币安全部成交后 MT4 逐张市价平仓。"
-            follow_side = Side.SELL if strategy.open_pair and strategy.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.BUY
-            mt4_price_limit = None
-        else:
-            limit_text = f"，MT4 保护价 {_mt4_limit_text(follow_side, mt4_price_limit)}" if follow_side and mt4_price_limit is not None else ""
-            summary = f"币安当前挂单：{_side_text(order.side)} {order.orig_qty} XAU，价格 {order.price}，状态 {_order_status_text(order.status.value)}；成交后 MT4 立即市价对冲{limit_text}。"
-        return ExecutionPlanStatus(
-            summary=summary,
-            active_binance_order=True,
-            binance_order_status=order.status,
-            binance_order_side=order.side,
-            binance_order_price=order.price,
-            binance_order_qty=order.orig_qty,
-            binance_order_executed_qty=order.executed_qty,
-            mt4_follow_side=follow_side,
-            mt4_price_limit=mt4_price_limit,
-            max_follow_seconds=max_follow_seconds,
-        )
-
-    pair = strategy.open_pair
-    binance_quote = binance_client.latest_quote()
-    mt4_quote = mt4_bridge.latest_quote()
-    quote_block_reason = _quote_plan_block_reason(binance_quote, mt4_quote)
-    if strategy.state.value == "PAUSED":
-        if pair and _strategy_paused_for_quote_issue():
-            detail = f"（{_risk_reason_text(strategy.last_error or '')}）" if strategy.last_error else ""
-            return ExecutionPlanStatus(
-                summary=f"报价临时异常{detail}，暂时不挂单；报价恢复后会自动继续管理已有仓位的补仓和平仓，不会开独立新仓。",
-                max_follow_seconds=max_follow_seconds,
-            )
-        if pair and binance_quote and mt4_quote:
-            add_summary = _pair_add_summary(pair, binance_quote, mt4_quote, metrics)
-            swap_summary = _negative_swap_close_summary(pair)
-            return ExecutionPlanStatus(
-                summary=f"系统因风控硬暂停，不会自动补仓或平仓；当前仍有组合持仓。{swap_summary or add_summary}",
-                max_follow_seconds=max_follow_seconds,
-            )
-        return ExecutionPlanStatus(summary="系统因风控硬暂停，不会自动新挂单；恢复后才会继续按价差条件执行。", max_follow_seconds=max_follow_seconds)
-    if pair and binance_quote and mt4_quote:
-        if quote_block_reason:
-            return ExecutionPlanStatus(summary=f"当前有组合持仓，但{quote_block_reason}，暂不挂平仓单。", max_follow_seconds=max_follow_seconds)
-        swap_summary = _negative_swap_close_summary(pair)
-        if swap_summary and swap_summary.startswith("隔夜费亏损风控已触发") and pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
-            return ExecutionPlanStatus(
-                summary=f"{swap_summary} 币安将挂 买入 限价 {round_down(binance_quote.bid, binance_client.filters.tick_size)}，全部成交后 MT4 逐张平仓。",
-                binance_order_side=Side.BUY,
-                binance_order_price=round_down(binance_quote.bid, binance_client.filters.tick_size),
-                binance_order_qty=pair.quantity_oz,
-                mt4_follow_side=Side.SELL,
-                max_follow_seconds=max_follow_seconds,
-            )
-        if swap_summary and swap_summary.startswith("隔夜费亏损风控已触发") and pair.direction == PairDirection.BINANCE_LONG_MT4_SHORT:
-            return ExecutionPlanStatus(
-                summary=f"{swap_summary} 币安将挂 卖出 限价 {round_up(binance_quote.ask, binance_client.filters.tick_size)}，全部成交后 MT4 逐张平仓。",
-                binance_order_side=Side.SELL,
-                binance_order_price=round_up(binance_quote.ask, binance_client.filters.tick_size),
-                binance_order_qty=pair.quantity_oz,
-                mt4_follow_side=Side.BUY,
-                max_follow_seconds=max_follow_seconds,
-            )
-        add_summary = _pair_add_summary(pair, binance_quote, mt4_quote, metrics)
-        add_plan = _pair_add_plan(pair, binance_quote, mt4_quote, metrics)
-        if add_plan:
-            return ExecutionPlanStatus(
-                summary=f"补仓条件已满足：{add_summary}；币安将同向挂 {_side_text(add_plan.binance_side)} 限价 {add_plan.limit_price}，数量 {add_plan.quantity_oz} XAU；成交后 MT4 同向 {_side_text(add_plan.mt4_hedge_side)} 市价跟随，保护价 {_mt4_limit_text(add_plan.mt4_hedge_side, add_plan.mt4_price_limit)}。",
-                binance_order_side=add_plan.binance_side,
-                binance_order_price=add_plan.limit_price,
-                binance_order_qty=add_plan.quantity_oz,
-                mt4_follow_side=add_plan.mt4_hedge_side,
-                mt4_price_limit=add_plan.mt4_price_limit,
-                max_follow_seconds=max_follow_seconds,
-            )
-        spread = _current_exit_spread(pair, binance_quote, mt4_quote)
-        trigger_spread = metrics.dynamic_close_spread if metrics else None
-        break_even = metrics.profitable_spread_threshold if metrics else None
-        follow_buffer = metrics.exit_follow_buffer_usd_per_oz if metrics else None
-        close_profit = metrics.close_profit_usd_per_oz if metrics and metrics.close_profit_usd_per_oz is not None else settings.close_profit_usd_per_oz
-        close_ready = spread is not None and trigger_spread is not None and spread <= trigger_spread
-        if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
-            side = Side.BUY
-            price = round_down(binance_quote.bid, binance_client.filters.tick_size)
-        else:
-            side = Side.SELL
-            price = round_up(binance_quote.ask, binance_client.filters.tick_size)
-        trigger_text = f"{trigger_spread:.4f} 美元" if trigger_spread is not None else "等待实盘入场价确认"
-        break_even_text = f"{break_even:.4f} 美元" if break_even is not None else "等待确认"
-        buffer_text = f"，再预留 MT4 跟随保护 {follow_buffer:.4f} 美元/盎司" if follow_buffer is not None and follow_buffer > 0 else ""
-        close_order_text = (
-            f"平仓条件满足后，币安才会挂 {_side_text(side)} 限价 {price}"
-            if not close_ready
-            else f"平仓条件已满足，币安准备挂 {_side_text(side)} 限价 {price}"
-        )
-        return ExecutionPlanStatus(
-            summary=f"平仓逻辑：按实盘进场价差计算，保本价差 {break_even_text}，先扣 {close_profit} 美元/盎司利润空间{buffer_text}，当前触发价差 {trigger_text}；{close_order_text}；当前平仓价差 {spread if spread is not None else '-'}，{'已满足' if close_ready else '未满足'}。{add_summary}",
-            binance_order_side=side,
-            binance_order_price=price,
-            binance_order_qty=pair.quantity_oz,
-            mt4_follow_side=Side.SELL if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.BUY,
-            max_follow_seconds=max_follow_seconds,
-        )
-
-    if binance_quote and mt4_quote:
-        if quote_block_reason:
-            return ExecutionPlanStatus(summary=f"{quote_block_reason}，暂不挂开仓单。", max_follow_seconds=max_follow_seconds)
-        entry_plan = build_entry_plan(settings, binance_client.filters, binance_quote, mt4_quote)
-        if entry_plan:
-            confirm_left = max(0, settings.entry_confirm_ms - strategy.entry_candidate_age_ms())
-            confirm_text = "已通过稳定确认" if confirm_left == 0 else f"还需稳定 {confirm_left} 毫秒"
-            return ExecutionPlanStatus(
-                summary=f"开仓条件已满足：{confirm_text}；币安将挂 {_side_text(entry_plan.binance_side)} 限价 {entry_plan.limit_price}，数量 {entry_plan.quantity_oz} XAU；成交后 MT4 {_side_text(entry_plan.mt4_hedge_side)} 立即市价对冲，保护价 {_mt4_limit_text(entry_plan.mt4_hedge_side, entry_plan.mt4_price_limit)}。",
-                binance_order_side=entry_plan.binance_side,
-                binance_order_price=entry_plan.limit_price,
-                binance_order_qty=entry_plan.quantity_oz,
-                mt4_follow_side=entry_plan.mt4_hedge_side,
-                mt4_price_limit=entry_plan.mt4_price_limit,
-                max_follow_seconds=max_follow_seconds,
-            )
-        high_edge = binance_quote.ask - mt4_quote.ask
-        low_edge = mt4_quote.bid - binance_quote.bid
-        return ExecutionPlanStatus(
-            summary=f"等待开仓：币安高价差 {high_edge:.4f} 美元，币安低价差 {low_edge:.4f} 美元；任一方向达到 {settings.open_min_edge} 美元并稳定 {settings.entry_confirm_ms} 毫秒才挂单，挂单偏移 {settings.binance_entry_offset_usd} 美元，挂单后低于 {settings.cancel_min_edge} 美元才考虑撤单。",
-            max_follow_seconds=max_follow_seconds,
-        )
-    return ExecutionPlanStatus(summary="等待 Binance 和 MT4 报价齐全。", max_follow_seconds=max_follow_seconds)
+    return v2_executor.execution_plan_status()
 
 
 def _pair_add_plan(pair, binance_quote: MarketQuote, mt4_quote: MarketQuote, metrics: PositionMetrics | None = None):
