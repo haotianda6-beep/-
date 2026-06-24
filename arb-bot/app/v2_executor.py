@@ -197,7 +197,13 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             return
         if self.runtime.last_error == post_add_message:
             self.runtime.last_error = None
-        target = target_exit_spread(self.settings, pair, plan_status)
+        target = self._planned_exit_target(plan_status)
+        if target is None:
+            self.exit_target_spread = None
+            self.runtime.last_error = "等待真实均价、资金费和隔夜费数据后再计算平仓目标，不挂平仓单"
+            return
+        if self.runtime.last_error == "等待真实均价、资金费和隔夜费数据后再计算平仓目标，不挂平仓单":
+            self.runtime.last_error = None
         self.exit_target_spread = target
         if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             current = quote.ask - mt4_quote.bid
@@ -252,7 +258,10 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if not pair:
             await self.cancel_active_order("V2 组合记录消失")
             return
-        target = target_exit_spread(self.settings, pair, plan_status)
+        target = self._planned_exit_target(plan_status)
+        if target is None:
+            await self.cancel_active_order("V2 平仓目标数据未就绪，撤销未成交限价单")
+            return
         binance_quote = self.binance.latest_quote()
         mt4_quote = self.mt4.latest_quote()
         gap_reason = xau_quote_gap_reason(binance_quote, mt4_quote)
@@ -264,6 +273,12 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             return
         if utc_now_ms() - self.order_created_ms > max(self.settings.min_order_live_ms, self.settings.max_order_age_ms):
             await self.cancel_active_order("V2 平仓限价单超时重挂")
+
+    def _planned_exit_target(self, plan_status: dict[str, Any]) -> Decimal | None:
+        exit_plan = (plan_status or {}).get("exit_plan") or {}
+        if not exit_plan.get("enabled") or exit_plan.get("target_exit_spread") is None:
+            return None
+        return Decimal(str(exit_plan["target_exit_spread"]))
 
     def _queue_mt4_hedge(self, order: OrderUpdate) -> None:
         if not self.entry_hedge_side or not self.entry_direction:

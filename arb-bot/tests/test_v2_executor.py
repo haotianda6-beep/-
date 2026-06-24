@@ -69,6 +69,10 @@ def add_plan(price: str = "105") -> dict:
     }
 
 
+def exit_plan(target: str = "2") -> dict:
+    return {"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": target}}
+
+
 class MissingOrderBinanceClient(PaperBinanceClient):
     async def get_order(self, order_id: str) -> OrderUpdate | None:
         raise BinanceError('{"code":-2013,"msg":"Order does not exist."}')
@@ -102,23 +106,51 @@ async def test_v2_entry_and_exit_use_binance_post_only_then_mt4_follow(tmp_path)
 
     client.set_quote(Decimal("100"), Decimal("100.1"))
     mt4_tick(mt4, "99", "99.3")
-    await executor.step(short_plan("101"))
+    await executor.step(exit_plan("2"))
     assert run.state == StrategyState.QUOTING_BINANCE_EXIT
     assert executor.active_order is not None
     assert executor.active_order.reduce_only is True
     assert executor.active_order.side == Side.BUY
 
     client.set_quote(Decimal("99.8"), executor.active_order.price)
-    await executor.step(short_plan("101"))
+    await executor.step(exit_plan("2"))
     close_command = mt4.next_command()
     assert close_command["action"] == "CLOSE"
     assert close_command["ticket"] == 7
 
     mt4.submit_report(Mt4Report(command_id=close_command["command_id"], status="ok", action="CLOSE", ticket=7, fill_price=Decimal("99.2"), lots=Decimal("0.01")))
-    await executor.step(short_plan("101"))
+    await executor.step(exit_plan("2"))
     assert run.state == StrategyState.IDLE
     assert run.open_pair is None
     assert all(order.is_maker for order in client._orders.values())
+
+
+@pytest.mark.asyncio
+async def test_v2_does_not_place_exit_until_real_exit_plan_is_ready(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    client.set_quote(Decimal("100"), Decimal("100.1"))
+    mt4_tick(mt4, "99", "99.2")
+
+    await executor.step({"selected_entry": {"ready": False}})
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    assert "真实均价" in run.last_error
 
 
 @pytest.mark.asyncio
