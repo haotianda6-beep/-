@@ -61,5 +61,5 @@ export function takeProfitProgress(current: string | number, target: string | nu
   const currentNumber = Number(current);
   const targetNumber = Number(target);
   if (!Number.isFinite(currentNumber) || !Number.isFinite(targetNumber) || targetNumber <= 0) return NaN;
-  return Math.min(Math.max((currentNumber / targetNumber) * 100, 0), 999);
+  return Math.min(Math.max((currentNumber / targetNumber) * 100, 0), 100);
 }
