@@ -1628,7 +1628,7 @@ async def test_add_position_trigger_recalculates_legacy_pair_actual_spread(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_add_position_trigger_uses_binance_break_even_snapshot(tmp_path):
+async def test_add_position_trigger_uses_binance_entry_price_not_break_even(tmp_path):
     engine, client, mt4 = await make_engine(
         tmp_path,
         AddBreakEvenSnapshotPaperClient,
@@ -1675,9 +1675,9 @@ async def test_add_position_trigger_uses_binance_break_even_snapshot(tmp_path):
 
     await engine.step()
 
-    assert engine.state == StrategyState.QUOTING_BINANCE_ENTRY
-    assert engine.active_plan is not None
-    assert engine.active_plan.edge == Decimal("2.1")
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.active_plan is None
+    assert engine.active_order is None
 
 
 @pytest.mark.asyncio
@@ -1948,10 +1948,10 @@ async def test_maybe_exit_blocks_loss_even_if_old_cache_would_allow_order(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_close_trigger_uses_recorded_entry_without_binance_snapshot_poll(tmp_path):
+async def test_close_trigger_falls_back_to_recorded_entry_when_binance_snapshot_missing(tmp_path):
     engine, client, mt4 = await make_engine(
         tmp_path,
-        BreakEvenSnapshotPaperClient,
+        NoPositionSnapshotPaperClient,
         settings_kwargs={"CLOSE_PROFIT_USD_PER_OZ": Decimal("0.8"), "MT4_SLIPPAGE_POINTS": 0},
     )
     client.maker_fee_rate = Decimal("0")
@@ -1984,6 +1984,43 @@ async def test_close_trigger_uses_recorded_entry_without_binance_snapshot_poll(t
     trigger = await engine._close_trigger_spread()
 
     assert trigger == Decimal("1.2")
+
+
+@pytest.mark.asyncio
+async def test_close_trigger_uses_binance_entry_price_not_break_even(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        ActualEntrySnapshotPaperClient,
+        settings_kwargs={"CLOSE_PROFIT_USD_PER_OZ": Decimal("0.8"), "MT4_SLIPPAGE_POINTS": 0},
+    )
+    client.maker_fee_rate = Decimal("0")
+    engine.open_pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("4"),
+        binance_entry_price=Decimal("4082.245"),
+        mt4_entry_price=Decimal("4079.55"),
+        binance_order_id="entry-1",
+        mt4_tickets=[1, 2, 3, 4],
+    )
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("4075"),
+            ask=Decimal("4075.3"),
+            positions=[
+                Mt4Position(ticket=1, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4079.55")),
+                Mt4Position(ticket=2, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4079.55")),
+                Mt4Position(ticket=3, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4079.55")),
+                Mt4Position(ticket=4, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4079.55")),
+            ],
+        )
+    )
+
+    break_even = await engine._break_even_spread()
+    trigger = await engine._close_trigger_spread()
+
+    assert break_even == Decimal("-0.03")
+    assert trigger == Decimal("-0.83")
 
 
 @pytest.mark.asyncio
@@ -2240,9 +2277,19 @@ class PositionTrackingPaperClient(PaperBinanceClient):
         return qty
 
 
-class BreakEvenSnapshotPaperClient(PaperBinanceClient):
+class NoPositionSnapshotPaperClient(PaperBinanceClient):
     async def position_snapshot(self) -> BinancePositionSnapshot | None:
-        raise AssertionError("close trigger calculation must not poll Binance position snapshot")
+        return None
+
+
+class ActualEntrySnapshotPaperClient(PositionTrackingPaperClient):
+    async def position_snapshot(self) -> BinancePositionSnapshot | None:
+        return BinancePositionSnapshot(
+            symbol=self.settings.binance_symbol,
+            position_amt=Decimal("-4"),
+            entry_price=Decimal("4079.52"),
+            break_even_price=Decimal("4081.74"),
+        )
 
 
 class AddBreakEvenSnapshotPaperClient(PositionTrackingPaperClient):

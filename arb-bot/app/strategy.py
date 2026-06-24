@@ -968,8 +968,6 @@ class StrategyEngine:
             return Decimal("0")
         snapshot = await self._binance_position_snapshot_cached()
         if snapshot and self._snapshot_matches_open_pair(snapshot):
-            if snapshot.break_even_price is not None and snapshot.break_even_price > 0:
-                return snapshot.break_even_price
             if snapshot.entry_price is not None and snapshot.entry_price > 0:
                 return snapshot.entry_price
         return self.open_pair.binance_entry_price
@@ -1744,7 +1742,7 @@ class StrategyEngine:
     async def _break_even_spread(self) -> Decimal | None:
         if not self.open_pair or self.open_pair.quantity_oz <= 0:
             return None
-        binance_entry = self.open_pair.binance_entry_price
+        binance_entry = await self._current_binance_entry_price()
         mt4_entry = self._mt4_average_entry_price() or self.open_pair.mt4_entry_price
         if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             entry_spread = binance_entry - mt4_entry

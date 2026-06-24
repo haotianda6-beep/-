@@ -1504,14 +1504,14 @@ async def _position_metrics() -> PositionMetrics:
 
     qty = pair.quantity_oz
     binance_snapshot = await _binance_position_snapshot()
-    binance_entry_price, entry_fee_included = _effective_binance_entry_price(pair, binance_snapshot)
+    binance_entry_price = _effective_binance_entry_price(pair, binance_snapshot)
     mt4_entry_price, mt4_lots = _mt4_average_entry_price(pair)
     funding_estimate = _estimate_binance_funding(pair, qty, funding, binance_quote)
     mt4_swap_estimate = _estimate_mt4_swap(pair, qty, swap_info)
     accrued_funding = await _binance_accrued_funding(pair)
     accrued_swap = _mt4_accrued_swap(pair)
     gross = _estimate_close_gross(pair, binance_quote, mt4_quote, binance_entry_price, mt4_entry_price)
-    fees = _estimate_binance_fees(pair, binance_quote, binance_entry_price, include_entry_fee=not entry_fee_included)
+    fees = _estimate_binance_fees(pair, binance_quote, binance_entry_price, include_entry_fee=True)
     actual_entry_spread = _actual_entry_spread(pair, binance_entry_price, mt4_entry_price)
     current_exit_spread = _current_exit_spread(pair, binance_quote, mt4_quote)
     profitable_spread_threshold = _profitable_spread_threshold(pair, actual_entry_spread, accrued_funding, accrued_swap, fees)
@@ -1588,13 +1588,11 @@ async def _binance_accrued_funding(pair) -> Decimal | None:
         return None
 
 
-def _effective_binance_entry_price(pair, snapshot: BinancePositionSnapshot | None) -> tuple[Decimal, bool]:
+def _effective_binance_entry_price(pair, snapshot: BinancePositionSnapshot | None) -> Decimal:
     if snapshot and snapshot.position_amt != 0:
-        if snapshot.break_even_price is not None and snapshot.break_even_price > 0:
-            return snapshot.break_even_price, True
         if snapshot.entry_price is not None:
-            return snapshot.entry_price, False
-    return pair.binance_entry_price, False
+            return snapshot.entry_price
+    return pair.binance_entry_price
 
 
 def _mt4_average_entry_price(pair) -> tuple[Decimal | None, Decimal | None]:

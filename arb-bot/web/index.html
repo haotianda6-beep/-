@@ -1122,7 +1122,7 @@
         const binanceBreakEven = metrics.binance_position_break_even_price ?? null;
         const mt4Entry = metrics.mt4_position_entry_price ?? pair.mt4_entry_price;
         const lots = metrics.mt4_position_lots !== null && metrics.mt4_position_lots !== undefined ? `，MT4合计 ${fmt(metrics.mt4_position_lots)} 手` : "";
-        const spread = metrics.actual_entry_spread !== null && metrics.actual_entry_spread !== undefined ? `，有效开仓价差 ${fmt(metrics.actual_entry_spread)} 美元` : "";
+        const spread = metrics.actual_entry_spread !== null && metrics.actual_entry_spread !== undefined ? `，真实均价差 ${fmt(metrics.actual_entry_spread)} 美元` : "";
         const rawSpread = binanceEntry !== null && binanceEntry !== undefined && mt4Entry !== null && mt4Entry !== undefined
           ? (pair.direction === "BINANCE_SHORT_MT4_LONG" ? Number(binanceEntry) - Number(mt4Entry) : Number(mt4Entry) - Number(binanceEntry))
           : null;
@@ -1149,7 +1149,7 @@
         const baseLabel = count > 0 ? "上次触发阶梯" : "首仓基准";
         const actualAddEdge = Number(pair.last_add_edge);
         const actualAddText = count > 0 && Number.isFinite(actualAddEdge) ? `，上次实得价差 ${fmt(actualAddEdge)} 美元` : "";
-        const actualEntryText = count > 0 && Number.isFinite(actualEntry) ? `，组合有效开仓价差 ${fmt(actualEntry)} 美元` : "";
+        const actualEntryText = count > 0 && Number.isFinite(actualEntry) ? `，组合真实均价差 ${fmt(actualEntry)} 美元` : "";
         let current = null;
         if (binanceQuote && mt4Quote) {
           current = pair.direction === "BINANCE_SHORT_MT4_LONG"
