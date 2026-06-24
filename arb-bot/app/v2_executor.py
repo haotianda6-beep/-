@@ -34,6 +34,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.adding_to_pair = False
         self.active_add_base_edge: Decimal | None = None
         self.active_add_trigger_edge: Decimal | None = None
+        self.post_add_exit_block_until_ms = 0
 
     async def step(self, plan_status: dict[str, Any]) -> None:
         if self._process_mt4_reports():
@@ -68,6 +69,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.adding_to_pair = False
         self.active_add_base_edge = None
         self.active_add_trigger_edge = None
+        self.post_add_exit_block_until_ms = 0
 
     async def cancel_active_order(self, reason: str) -> None:
         if not self.active_order:
@@ -159,6 +161,9 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         quote = self.binance.latest_quote()
         mt4_quote = self.mt4.latest_quote()
         if not pair or not quote or not mt4_quote:
+            return
+        if utc_now_ms() < self.post_add_exit_block_until_ms:
+            self.runtime.last_error = "补仓刚完成，等待币安仓位快照稳定后再允许平仓挂单"
             return
         target = target_exit_spread(self.settings, pair, plan_status)
         self.exit_target_spread = target

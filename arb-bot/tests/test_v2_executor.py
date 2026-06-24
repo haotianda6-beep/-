@@ -172,3 +172,9 @@ async def test_v2_add_position_merges_pair_after_binance_fill_and_mt4_follow(tmp
     assert run.open_pair.add_count == 1
     assert run.open_pair.last_add_trigger_edge == Decimal("3")
     assert run.open_pair.mt4_tickets == [7, 8]
+
+    client.set_quote(Decimal("101"), Decimal("101.2"))
+    mt4_tick(mt4, "101", "101.2")
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "10"}})
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None

@@ -79,6 +79,7 @@ class V2AddMixin:
             "add_count": pair.add_count + 1,
         })
         self.storage.record_event("v2_pair_added", self.runtime.open_pair.model_dump(mode="json"))
+        self.post_add_exit_block_until_ms = utc_now_ms() + max(5000, self.settings.max_hedge_delay_ms)
         self.active_order = None
         self.hedge_command_id = None
         self.adding_to_pair = False
