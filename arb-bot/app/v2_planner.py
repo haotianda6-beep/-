@@ -263,7 +263,10 @@ def _negative_swap_exit_plan(settings: Settings, pair: OpenPair, metrics: Positi
         }
     safe_target = None
     if metrics.profitable_spread_threshold is not None:
-        safe_target = metrics.profitable_spread_threshold - (metrics.exit_follow_buffer_usd_per_oz or Decimal("0"))
+        safe_target = max(
+            Decimal("0"),
+            metrics.profitable_spread_threshold - (metrics.exit_follow_buffer_usd_per_oz or Decimal("0")),
+        )
     return {
         "active": safe_target is not None,
         "reason": f"隔夜费亏损风控进入处理窗口：预估 {estimate}，扣后回归净利 {projected_net}，距离结算约 {minutes_left} 分钟；只在不亏保护价差内平仓。",

@@ -167,7 +167,7 @@ def test_v2_negative_swap_window_relaxes_exit_to_safe_target(tmp_path):
         binance_order_id="entry",
     )
     metrics = PositionMetrics(
-        actual_entry_spread=Decimal("1.8"),
+        actual_entry_spread=Decimal("1.0"),
         current_exit_spread=Decimal("1.55"),
         profitable_spread_threshold=Decimal("1.8"),
         dynamic_close_spread=Decimal("1.0"),
@@ -194,3 +194,43 @@ def test_v2_negative_swap_window_relaxes_exit_to_safe_target(tmp_path):
     assert exit_plan["negative_swap"]["active"] is True
     assert exit_plan["normal_target_exit_spread"] == Decimal("1.0")
     assert exit_plan["target_exit_spread"] == Decimal("1.6")
+
+
+def test_v2_negative_swap_safe_target_does_not_go_negative(tmp_path):
+    cfg = settings(
+        tmp_path,
+        CLOSE_PROFIT_USD_PER_OZ=Decimal("0.60"),
+        NEGATIVE_SWAP_CLOSE_BEFORE_MINUTES=30,
+    )
+    store = Storage(cfg.sqlite_path)
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("4002"),
+        mt4_entry_price=Decimal("4000.2"),
+        binance_order_id="entry",
+    )
+    metrics = PositionMetrics(
+        actual_entry_spread=Decimal("1.0"),
+        current_exit_spread=Decimal("1.55"),
+        profitable_spread_threshold=Decimal("1.0"),
+        dynamic_close_spread=Decimal("0"),
+        exit_follow_buffer_usd_per_oz=Decimal("2.0"),
+        mt4_swap_estimate=Decimal("-1.0"),
+        mt4_next_rollover_time_ms=utc_now_ms() + 5 * 60_000,
+    )
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4001"), ask=Decimal("4001.1")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.5"), ask=Decimal("3999.8")),
+        binance_bars=[],
+        open_pair=pair,
+        metrics=metrics,
+    )
+
+    exit_plan = status["exit_plan"]
+    assert exit_plan["negative_swap"]["active"] is True
+    assert exit_plan["target_exit_spread"] == Decimal("0")
