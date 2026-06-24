@@ -94,6 +94,7 @@ _live_pair_operation_cooldown_until_ms = 0
 _gold_v2_binance_bars_cache: list[HistoryBar] = []
 _gold_v2_binance_bars_cache_ms = 0
 _gold_v2_binance_bars_failure_ms = 0
+_mt4_tick_bar_last_saved_ms = 0
 GOLD_V2_BAR_CACHE_TTL_MS = 60_000
 GOLD_V2_BAR_FAILURE_RETRY_MS = 30_000
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
@@ -425,6 +426,30 @@ async def _gold_v2_recent_binance_bars() -> list[HistoryBar]:
     return _gold_v2_binance_bars_cache
 
 
+def _record_mt4_tick_bar(quote: MarketQuote) -> None:
+    global _mt4_tick_bar_last_saved_ms
+    now = _now_ms()
+    if now - _mt4_tick_bar_last_saved_ms < 1000:
+        return
+    _mt4_tick_bar_last_saved_ms = now
+    open_time_ms = quote.timestamp_ms - (quote.timestamp_ms % 60_000)
+    price = quote.bid
+    storage.upsert_bars(
+        "mt4",
+        quote.symbol,
+        "1m",
+        [
+            HistoryBar(
+                open_time_ms=open_time_ms,
+                open=price,
+                high=price,
+                low=price,
+                close=price,
+            )
+        ],
+    )
+
+
 @app.put("/config", response_model=RuntimeConfig)
 async def update_config(payload: RuntimeConfigUpdate) -> RuntimeConfig:
     updates = payload.model_dump(exclude_unset=True, exclude_none=True)
@@ -439,6 +464,7 @@ async def mt4_tick(payload: Mt4Tick, x_mt4_token: str | None = Header(default=No
     if not mt4_bridge.token_ok(x_mt4_token or payload.token):
         raise HTTPException(status_code=403, detail="invalid MT4 token")
     quote = mt4_bridge.update_tick(payload)
+    _record_mt4_tick_bar(quote)
     return {"status": "ok", "symbol": quote.symbol, "timestamp_ms": quote.timestamp_ms}
 
 

@@ -6,10 +6,17 @@
     <title>黄金价差执行器</title>
     <style>
       :root {
-        color-scheme: light;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: #eef3f8;
-        color: #162033;
+        color-scheme: dark;
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        background: #11100f;
+        color: #ece7dc;
       }
 
       * {
@@ -19,7 +26,13 @@
       body {
         margin: 0;
         min-height: 100vh;
-        background: #eef3f8;
+        background:
+          linear-gradient(
+            180deg,
+            rgba(214, 168, 79, 0.08),
+            rgba(17, 16, 15, 0) 220px
+          ),
+          #11100f;
       }
 
       main {
@@ -51,16 +64,16 @@
 
       .sub {
         margin: 5px 0 0;
-        color: #5c6b82;
+        color: #a8a095;
         font-size: 13px;
       }
 
       .toolbar,
       .panel {
-        background: #ffffff;
-        border: 1px solid #d8e1ec;
+        background: #1b1a18;
+        border: 1px solid #34312b;
         border-radius: 8px;
-        box-shadow: 0 1px 2px rgba(24, 39, 75, 0.04);
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
       }
 
       .toolbar {
@@ -114,7 +127,7 @@
       }
 
       .label {
-        color: #65748b;
+        color: #a8a095;
         font-size: 12px;
         line-height: 1.3;
       }
@@ -123,13 +136,13 @@
         margin-top: 8px;
         font-size: 18px;
         font-weight: 760;
-        color: #111827;
+        color: #fff8e8;
         word-break: break-word;
       }
 
       .small {
         margin-top: 5px;
-        color: #64748b;
+        color: #9d968b;
         font-size: 12px;
       }
 
@@ -142,8 +155,8 @@
         border-radius: 999px;
         font-size: 12px;
         font-weight: 700;
-        background: #e7edf5;
-        color: #344256;
+        background: #2a2823;
+        color: #d6cabb;
       }
 
       .status::before {
@@ -151,34 +164,34 @@
         width: 7px;
         height: 7px;
         border-radius: 50%;
-        background: #8a98aa;
+        background: #8a8277;
       }
 
       .status.ok {
-        background: #e8f7ef;
-        color: #067647;
+        background: rgba(57, 199, 127, 0.15);
+        color: #6ee7a8;
       }
 
       .status.ok::before {
-        background: #10b981;
+        background: #39c77f;
       }
 
       .status.warn {
-        background: #fff3d6;
-        color: #9a5b00;
+        background: rgba(214, 168, 79, 0.17);
+        color: #f6cf75;
       }
 
       .status.warn::before {
-        background: #f59e0b;
+        background: #d6a84f;
       }
 
       .status.bad {
-        background: #fdebea;
-        color: #b42318;
+        background: rgba(248, 113, 113, 0.15);
+        color: #fca5a5;
       }
 
       .status.bad::before {
-        background: #ef4444;
+        background: #f87171;
       }
 
       table {
@@ -190,26 +203,26 @@
       th,
       td {
         padding: 7px 8px;
-        border-bottom: 1px solid #e5edf5;
+        border-bottom: 1px solid #2f2c27;
         text-align: left;
         white-space: nowrap;
       }
 
       th {
-        color: #607086;
+        color: #b9ad9f;
         font-size: 12px;
         font-weight: 700;
-        background: #f5f8fb;
+        background: #24221f;
       }
 
       input {
         width: 100%;
         height: 38px;
-        border: 1px solid #c8d5e3;
+        border: 1px solid #4a443c;
         border-radius: 6px;
         padding: 0 10px;
-        color: #152033;
-        background: #ffffff;
+        color: #f7efe2;
+        background: #11100f;
         font-size: 14px;
       }
 
@@ -218,23 +231,26 @@
         border: 0;
         border-radius: 6px;
         padding: 0 12px;
-        background: #1f66d1;
-        color: #ffffff;
+        background: #d6a84f;
+        color: #181511;
         font-size: 13px;
         font-weight: 750;
         cursor: pointer;
       }
 
       button.secondary {
-        background: #344256;
+        background: #3a3630;
+        color: #f1e8da;
       }
 
       button.safe {
-        background: #13795b;
+        background: #1f8f61;
+        color: #f5fff9;
       }
 
       button.danger {
-        background: #b42318;
+        background: #b9413f;
+        color: #fff5f5;
       }
 
       button:disabled {
@@ -243,7 +259,7 @@
       }
 
       .download-link {
-        color: #1f66d1;
+        color: #f1c96d;
         font-weight: 750;
         text-decoration: none;
       }
@@ -260,7 +276,7 @@
       }
 
       .input-row small {
-        color: #65748b;
+        color: #a8a095;
         white-space: nowrap;
       }
 
@@ -299,7 +315,7 @@
         gap: 10px;
         align-items: center;
         min-height: 28px;
-        border-bottom: 1px solid #e8eef6;
+        border-bottom: 1px solid #302d28;
         padding-bottom: 7px;
       }
 
@@ -309,13 +325,13 @@
       }
 
       .compact-row strong {
-        color: #111827;
+        color: #f6eddc;
         font-size: 13px;
       }
 
       .compact-row span {
         min-width: 0;
-        color: #637187;
+        color: #b9ad9f;
         font-size: 12px;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -334,9 +350,14 @@
         overflow: auto;
         padding: 10px;
         border-radius: 6px;
-        background: #101827;
-        color: #dbeafe;
-        font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        background: #090807;
+        color: #f2dfb8;
+        font:
+          12px/1.55 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
       }
 
       .stack {
@@ -667,7 +688,9 @@
 
           <div class="panel">
             <h2>做单历史</h2>
-            <div class="small" id="tradeHistoryStatus">等待 MT4 上传账户历史</div>
+            <div class="small" id="tradeHistoryStatus">
+              等待 MT4 上传账户历史
+            </div>
             <div class="table-scroll mt">
               <table>
                 <thead>
@@ -685,12 +708,16 @@
                   </tr>
                 </thead>
                 <tbody id="tradeHistoryBody">
-                  <tr><td colspan="10">等待数据</td></tr>
+                  <tr>
+                    <td colspan="10">等待数据</td>
+                  </tr>
                 </tbody>
               </table>
             </div>
             <div class="actions">
-              <button class="secondary" id="tradeHistoryBtn">刷新做单历史</button>
+              <button class="secondary" id="tradeHistoryBtn">
+                刷新做单历史
+              </button>
             </div>
           </div>
 
@@ -710,19 +737,43 @@
               <tbody>
                 <tr>
                   <th>MT4 脚本</th>
-                  <td><a class="download-link" href="ea/ArbBridgeEA.mq4" download>下载完整脚本</a></td>
+                  <td>
+                    <a class="download-link" href="ea/ArbBridgeEA.mq4" download
+                      >下载完整脚本</a
+                    >
+                  </td>
                 </tr>
                 <tr>
                   <th>币安杠杆</th>
-                  <td><div class="input-row"><input id="cfgBinanceLeverage" inputmode="numeric" /><small>倍</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input
+                        id="cfgBinanceLeverage"
+                        inputmode="numeric"
+                      /><small>倍</small>
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>币安下单数量</th>
-                  <td><div class="input-row"><input id="cfgTargetOz" inputmode="decimal" /><small>XAU</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgTargetOz" inputmode="decimal" /><small
+                        >XAU</small
+                      >
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>币安挂单偏移</th>
-                  <td><div class="input-row"><input id="cfgBinanceEntryOffset" inputmode="decimal" /><small>美元</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input
+                        id="cfgBinanceEntryOffset"
+                        inputmode="decimal"
+                      /><small>美元</small>
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>MT4 对冲数量</th>
@@ -730,103 +781,262 @@
                 </tr>
                 <tr>
                   <th>开仓最小价差</th>
-                  <td><div class="input-row"><input id="cfgOpenMinEdge" inputmode="decimal" /><small>美元</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgOpenMinEdge" inputmode="decimal" /><small
+                        >美元</small
+                      >
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>开仓确认时间</th>
-                  <td><div class="input-row"><input id="cfgEntryConfirmMs" inputmode="numeric" /><small>毫秒</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgEntryConfirmMs" inputmode="numeric" /><small
+                        >毫秒</small
+                      >
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>撤单价差下限</th>
-                  <td><div class="input-row"><input id="cfgCancelMinEdge" inputmode="decimal" /><small>美元</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgCancelMinEdge" inputmode="decimal" /><small
+                        >美元</small
+                      >
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>挂单最短保留</th>
-                  <td><div class="input-row"><input id="cfgMinOrderLiveMs" inputmode="numeric" /><small>毫秒</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgMinOrderLiveMs" inputmode="numeric" /><small
+                        >毫秒</small
+                      >
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>撤后冷却</th>
-                  <td><div class="input-row"><input id="cfgRequoteCooldownMs" inputmode="numeric" /><small>毫秒</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input
+                        id="cfgRequoteCooldownMs"
+                        inputmode="numeric"
+                      /><small>毫秒</small>
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>平仓后再开冷却</th>
-                  <td><div class="input-row"><input id="cfgPostExitReentryCooldownMs" inputmode="numeric" /><small>毫秒</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input
+                        id="cfgPostExitReentryCooldownMs"
+                        inputmode="numeric"
+                      /><small>毫秒</small>
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>补仓增加价差</th>
-                  <td><div class="input-row"><input id="cfgAddEdgeGrowthUsd" inputmode="decimal" /><small>美元</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input
+                        id="cfgAddEdgeGrowthUsd"
+                        inputmode="decimal"
+                      /><small>美元</small>
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>最大补仓次数</th>
-                  <td><div class="input-row"><input id="cfgMaxAddCount" inputmode="numeric" /><small>次</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgMaxAddCount" inputmode="numeric" /><small
+                        >次</small
+                      >
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>亏隔夜费提前平仓</th>
-                  <td><div class="input-row"><input id="cfgNegativeSwapCloseBefore" inputmode="numeric" /><small>分钟</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input
+                        id="cfgNegativeSwapCloseBefore"
+                        inputmode="numeric"
+                      /><small>分钟</small>
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>隔夜费参考价差</th>
-                  <td><div class="input-row"><input id="cfgCloseMaxSpread" inputmode="decimal" /><small>美元</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgCloseMaxSpread" inputmode="decimal" /><small
+                        >美元</small
+                      >
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>动态平仓利润空间</th>
-                  <td><div class="input-row"><input id="cfgCloseProfitUsdPerOz" inputmode="decimal" /><small>美元/盎司</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input
+                        id="cfgCloseProfitUsdPerOz"
+                        inputmode="decimal"
+                      /><small>美元/盎司</small>
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>持仓降目标时间</th>
-                  <td><div class="input-row"><input id="cfgMaxPairAgeMinutes" inputmode="numeric" /><small>分钟</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input
+                        id="cfgMaxPairAgeMinutes"
+                        inputmode="numeric"
+                      /><small>分钟</small>
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>超时小赚空间</th>
-                  <td><div class="input-row"><input id="cfgAgedCloseProfitUsdPerOz" inputmode="decimal" /><small>美元/盎司</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input
+                        id="cfgAgedCloseProfitUsdPerOz"
+                        inputmode="decimal"
+                      /><small>美元/盎司</small>
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>最小锁定价差</th>
-                  <td><div class="input-row"><input id="cfgMinLockedEdge" inputmode="decimal" /><small>美元</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgMinLockedEdge" inputmode="decimal" /><small
+                        >美元</small
+                      >
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>MT4 合约规格</th>
-                  <td><div class="input-row"><input id="cfgMt4LotSize" inputmode="decimal" /><small>XAU/手</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgMt4LotSize" inputmode="decimal" /><small
+                        >XAU/手</small
+                      >
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>MT4 最小手数</th>
-                  <td><div class="input-row"><input id="cfgMt4MinLot" inputmode="decimal" /><small>手</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgMt4MinLot" inputmode="decimal" /><small
+                        >手</small
+                      >
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>MT4 手数步进</th>
-                  <td><div class="input-row"><input id="cfgMt4LotStep" inputmode="decimal" /><small>手</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgMt4LotStep" inputmode="decimal" /><small
+                        >手</small
+                      >
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>挂单最长等待</th>
-                  <td><div class="input-row"><input id="cfgMaxOrderAge" inputmode="numeric" /><small>毫秒</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgMaxOrderAge" inputmode="numeric" /><small
+                        >毫秒</small
+                      >
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>报价最大延迟</th>
-                  <td><div class="input-row"><input id="cfgMaxQuoteAge" inputmode="numeric" /><small>毫秒</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgMaxQuoteAge" inputmode="numeric" /><small
+                        >毫秒</small
+                      >
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>最大单腿等待</th>
-                  <td><div class="input-row"><input id="cfgMaxHedgeDelay" inputmode="numeric" /><small>毫秒</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgMaxHedgeDelay" inputmode="numeric" /><small
+                        >毫秒</small
+                      >
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>单腿最大亏损</th>
-                  <td><div class="input-row"><input id="cfgMaxUnhedgedLoss" inputmode="decimal" /><small>美元/盎司</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input
+                        id="cfgMaxUnhedgedLoss"
+                        inputmode="decimal"
+                      /><small>美元/盎司</small>
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>每日亏损上限</th>
-                  <td><div class="input-row"><input id="cfgDailyLossLimit" inputmode="decimal" /><small>美元稳定币</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgDailyLossLimit" inputmode="decimal" /><small
+                        >美元稳定币</small
+                      >
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>MT4 允许滑点</th>
-                  <td><div class="input-row"><input id="cfgMt4Slippage" inputmode="numeric" /><small>点</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgMt4Slippage" inputmode="numeric" /><small
+                        >点</small
+                      >
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>MT4 平仓保护缓冲</th>
-                  <td><div class="input-row"><input id="cfgMt4CloseExtraBuffer" inputmode="decimal" /><small>美元/盎司</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input
+                        id="cfgMt4CloseExtraBuffer"
+                        inputmode="decimal"
+                      /><small>美元/盎司</small>
+                    </div>
+                  </td>
                 </tr>
                 <tr>
                   <th>循环间隔</th>
-                  <td><div class="input-row"><input id="cfgLoopInterval" inputmode="numeric" /><small>毫秒</small></div></td>
+                  <td>
+                    <div class="input-row">
+                      <input id="cfgLoopInterval" inputmode="numeric" /><small
+                        >毫秒</small
+                      >
+                    </div>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -857,14 +1067,26 @@
         ["cfgCancelMinEdge", "cancel_min_edge", "number"],
         ["cfgMinOrderLiveMs", "min_order_live_ms", "number"],
         ["cfgRequoteCooldownMs", "requote_cooldown_ms", "number"],
-        ["cfgPostExitReentryCooldownMs", "post_exit_reentry_cooldown_ms", "number"],
+        [
+          "cfgPostExitReentryCooldownMs",
+          "post_exit_reentry_cooldown_ms",
+          "number",
+        ],
         ["cfgAddEdgeGrowthUsd", "add_edge_growth_usd", "number"],
         ["cfgMaxAddCount", "max_add_count", "number"],
-        ["cfgNegativeSwapCloseBefore", "negative_swap_close_before_minutes", "number"],
+        [
+          "cfgNegativeSwapCloseBefore",
+          "negative_swap_close_before_minutes",
+          "number",
+        ],
         ["cfgCloseMaxSpread", "close_max_spread", "number"],
         ["cfgCloseProfitUsdPerOz", "close_profit_usd_per_oz", "number"],
         ["cfgMaxPairAgeMinutes", "max_pair_age_minutes", "number"],
-        ["cfgAgedCloseProfitUsdPerOz", "aged_close_profit_usd_per_oz", "number"],
+        [
+          "cfgAgedCloseProfitUsdPerOz",
+          "aged_close_profit_usd_per_oz",
+          "number",
+        ],
         ["cfgMinLockedEdge", "min_locked_edge", "number"],
         ["cfgMt4LotSize", "mt4_lot_size_oz", "number"],
         ["cfgMt4MinLot", "mt4_min_lot", "number"],
@@ -896,7 +1118,8 @@
               body = { detail: text.slice(0, 160) || response.statusText };
             }
           }
-          if (!response.ok) throw new Error(body.detail || `${response.status}`);
+          if (!response.ok)
+            throw new Error(body.detail || `${response.status}`);
           return body;
         });
       }
@@ -912,7 +1135,10 @@
         if (value === null || value === undefined || value === "") return "-";
         const n = Number(value);
         if (!Number.isFinite(n)) return String(value);
-        const text = Math.abs(n).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+        const text = Math.abs(n).toLocaleString("zh-CN", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 4,
+        });
         return `${n >= 0 ? "+" : "-"}${text} 美元稳定币`;
       }
 
@@ -920,7 +1146,10 @@
         if (value === null || value === undefined || value === "") return "-";
         const n = Number(value);
         if (!Number.isFinite(n)) return String(value);
-        const text = Math.abs(n).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+        const text = Math.abs(n).toLocaleString("zh-CN", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 4,
+        });
         return `${n >= 0 ? "+" : "-"}${text} 美元`;
       }
 
@@ -937,7 +1166,10 @@
         const n = Number(value);
         const unit = currencyText(currency);
         if (!Number.isFinite(n)) return `${value} ${unit}`;
-        const text = Math.abs(n).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+        const text = Math.abs(n).toLocaleString("zh-CN", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 4,
+        });
         return `${n >= 0 ? "+" : "-"}${text} ${unit}`;
       }
 
@@ -987,7 +1219,10 @@
 
       function appendLog(message) {
         const line = `[${new Date().toLocaleTimeString("zh-CN")}] ${message}`;
-        $("log").textContent = `${line}\n${$("log").textContent}`.slice(0, 4000);
+        $("log").textContent = `${line}\n${$("log").textContent}`.slice(
+          0,
+          4000,
+        );
       }
 
       function setParamsVisible(visible) {
@@ -1011,37 +1246,71 @@
           setStatus($("backend"), "后端已连接", "ok");
         } catch (error) {
           const message = translateError(error.message);
-          setStatus($("backend"), liveModeRestarting ? "服务重启中" : "后端异常", liveModeRestarting ? "warn" : "bad");
+          setStatus(
+            $("backend"),
+            liveModeRestarting ? "服务重启中" : "后端异常",
+            liveModeRestarting ? "warn" : "bad",
+          );
           if (!backendWasDown) appendLog(`状态读取失败：${message}`);
           backendWasDown = true;
         }
       }
 
       function render(data) {
-        const modeText = data.paper_mode || !data.live_trading ? "模拟模式" : "实盘模式";
+        const modeText =
+          data.paper_mode || !data.live_trading ? "模拟模式" : "实盘模式";
         const observationOnly = Boolean(data.config?.gold_v2_observation_only);
-        setStatus($("mode"), modeText, modeText === "实盘模式" ? "bad" : "warn");
-        setStatus($("mt4"), data.mt4_connected ? "MT4 已连接" : "MT4 未连接", data.mt4_connected ? "ok" : "bad");
+        setStatus(
+          $("mode"),
+          modeText,
+          modeText === "实盘模式" ? "bad" : "warn",
+        );
+        setStatus(
+          $("mt4"),
+          data.mt4_connected ? "MT4 已连接" : "MT4 未连接",
+          data.mt4_connected ? "ok" : "bad",
+        );
         $("startLiveBtn").disabled = modeText === "实盘模式" || observationOnly;
-        $("startLiveBtn").title = observationOnly ? "新版观察阶段锁定只读，暂不允许启动实盘" : "";
+        $("startLiveBtn").title = observationOnly
+          ? "新版观察阶段锁定只读，暂不允许启动实盘"
+          : "";
         $("stopLiveBtn").disabled = modeText !== "实盘模式";
         $("clearPaperBtn").disabled = modeText === "实盘模式";
         $("resumeBtn").disabled = data.state !== "PAUSED";
-        $("subtitle").textContent = `交易品种：币安 ${data.binance_symbol} / MT4 ${data.mt4_symbol}`;
+        $("subtitle").textContent =
+          `交易品种：币安 ${data.binance_symbol} / MT4 ${data.mt4_symbol}`;
         $("state").textContent = translateState(data.state);
-        $("lastError").textContent = data.last_error ? translateError(data.last_error) : "无异常";
-        $("makerFee").textContent = data.maker_fee_rate ? `${fmt(Number(data.maker_fee_rate) * 100)}%` : "-";
-        $("pairInfo").textContent = `币安 ${data.binance_symbol} / MT4 ${data.mt4_symbol}`;
+        $("lastError").textContent = data.last_error
+          ? translateError(data.last_error)
+          : "无异常";
+        $("makerFee").textContent = data.maker_fee_rate
+          ? `${fmt(Number(data.maker_fee_rate) * 100)}%`
+          : "-";
+        $("pairInfo").textContent =
+          `币安 ${data.binance_symbol} / MT4 ${data.mt4_symbol}`;
 
         const b = data.binance_quote;
         const m = data.mt4_quote;
-        $("binanceQuote").textContent = b ? `${fmt(b.bid)} / ${fmt(b.ask)}` : "-";
+        $("binanceQuote").textContent = b
+          ? `${fmt(b.bid)} / ${fmt(b.ask)}`
+          : "-";
         $("mt4Quote").textContent = m ? `${fmt(m.bid)} / ${fmt(m.ask)}` : "-";
-        $("binanceMeta").textContent = b ? `延迟 ${age(b.timestamp_ms)}` : "等待报价";
-        $("mt4Meta").textContent = m ? `延迟 ${age(m.timestamp_ms)}` : "等待报价";
-        $("binanceLine").textContent = b ? `买 ${fmt(b.bid)} / 卖 ${fmt(b.ask)} / ${age(b.timestamp_ms)}` : "等待报价";
-        $("mt4Line").textContent = m ? `买 ${fmt(m.bid)} / 卖 ${fmt(m.ask)} / ${age(m.timestamp_ms)}` : "等待报价";
-        $("spreadLine").textContent = b && m ? `开仓差 ${fmt(Number(b.ask) - Number(m.ask))} 美元；反向差 ${fmt(Number(m.bid) - Number(b.bid))} 美元` : "-";
+        $("binanceMeta").textContent = b
+          ? `延迟 ${age(b.timestamp_ms)}`
+          : "等待报价";
+        $("mt4Meta").textContent = m
+          ? `延迟 ${age(m.timestamp_ms)}`
+          : "等待报价";
+        $("binanceLine").textContent = b
+          ? `买 ${fmt(b.bid)} / 卖 ${fmt(b.ask)} / ${age(b.timestamp_ms)}`
+          : "等待报价";
+        $("mt4Line").textContent = m
+          ? `买 ${fmt(m.bid)} / 卖 ${fmt(m.ask)} / ${age(m.timestamp_ms)}`
+          : "等待报价";
+        $("spreadLine").textContent =
+          b && m
+            ? `开仓差 ${fmt(Number(b.ask) - Number(m.ask))} 美元；反向差 ${fmt(Number(m.bid) - Number(b.bid))} 美元`
+            : "-";
         renderAccounts(data);
         renderV2Plan(data.gold_v2);
         renderLimitOrder(data);
@@ -1049,16 +1318,22 @@
 
         const pair = data.open_pair;
         const metrics = data.position_metrics || {};
-        $("pairDirection").textContent = pair ? translateDirection(pair.direction) : "-";
+        $("pairDirection").textContent = pair
+          ? translateDirection(pair.direction)
+          : "-";
         $("pairQty").textContent = pair ? `${fmt(pair.quantity_oz)} XAU` : "-";
-        $("pairAddLine").textContent = pair ? renderPairAddLine(pair, data.config, b, m, metrics) : "-";
+        $("pairAddLine").textContent = pair
+          ? renderPairAddLine(pair, data.config, b, m, metrics)
+          : "-";
         $("pairEntryLine").textContent = renderPairEntry(pair, metrics);
         $("binanceFundingLine").textContent = renderFunding(metrics, pair);
         $("mt4SwapLine").textContent = renderMt4Swap(metrics, pair);
         $("netEstimateLine").textContent = renderNetEstimate(metrics);
         $("profitSpreadLine").textContent = renderProfitSpread(pair, metrics);
         $("executionPlan").textContent = data.execution_plan?.summary || "-";
-        $("followLimit").textContent = data.execution_plan ? `币安成交后 MT4 需要在 ${fmt(data.execution_plan.max_follow_seconds)} 秒内回报；EA 当前建议轮询 0.05 秒。` : "-";
+        $("followLimit").textContent = data.execution_plan
+          ? `币安成交后 MT4 需要在 ${fmt(data.execution_plan.max_follow_seconds)} 秒内回报；EA 当前建议轮询 0.05 秒。`
+          : "-";
         renderConfig(data.config);
       }
 
@@ -1072,11 +1347,16 @@
           $("v2RiskLine").textContent = "-";
           return;
         }
-        $("v2ModeLine").textContent = `${plan.mode || "只读观察"}，${plan.reason || "不会自动下单"}`;
+        $("v2ModeLine").textContent =
+          `${plan.mode || "只读观察"}，${plan.reason || "不会自动下单"}`;
         const shortThreshold = plan.short_entry?.threshold;
         const longThreshold = plan.long_entry?.threshold;
-        const points = Math.max(Number(plan.short_range?.points || 0), Number(plan.long_range?.points || 0));
-        $("v2ThresholdLine").textContent = `币安高 ${fmt(shortThreshold)} 美元；币安低 ${fmt(longThreshold)} 美元；样本 ${fmt(points)} 根`;
+        const points = Math.max(
+          Number(plan.short_range?.points || 0),
+          Number(plan.long_range?.points || 0),
+        );
+        $("v2ThresholdLine").textContent =
+          `币安高 ${fmt(shortThreshold)} 美元；币安低 ${fmt(longThreshold)} 美元；样本 ${fmt(points)} 根`;
 
         const selected = plan.selected_entry;
         if (!selected) {
@@ -1084,74 +1364,123 @@
           $("v2OrderLine").textContent = "-";
         } else {
           const readyText = selected.ready ? "达到观察阈值" : "未达到观察阈值";
-          $("v2SelectedLine").textContent = `${selected.direction_text || "-"}，当前 ${fmt(selected.current_edge)} 美元，${readyText}`;
-          $("v2OrderLine").textContent = `${translateAction(selected.binance_side)} ${fmt(selected.quantity_oz)} XAU，建议挂 ${fmt(selected.binance_price)}，预留价差 ${fmt(selected.expected_locked_edge)} 美元`;
+          $("v2SelectedLine").textContent =
+            `${selected.direction_text || "-"}，当前 ${fmt(selected.current_edge)} 美元，${readyText}`;
+          $("v2OrderLine").textContent =
+            `${translateAction(selected.binance_side)} ${fmt(selected.quantity_oz)} XAU，建议挂 ${fmt(selected.binance_price)}，预留价差 ${fmt(selected.expected_locked_edge)} 美元`;
         }
 
         const add = plan.add_plan || {};
-        if (add.next_trigger_edge !== undefined && add.next_trigger_edge !== null) {
-          $("v2AddPlanLine").textContent = `已写入但未启动；第 ${fmt(add.next_add_number)} 次触发价差 ${fmt(add.next_trigger_edge)} 美元`;
+        if (
+          add.next_trigger_edge !== undefined &&
+          add.next_trigger_edge !== null
+        ) {
+          $("v2AddPlanLine").textContent =
+            `已写入但未启动；第 ${fmt(add.next_add_number)} 次触发价差 ${fmt(add.next_trigger_edge)} 美元`;
         } else {
           $("v2AddPlanLine").textContent = add.reason || "补仓未启动";
         }
         const policy = (plan.partial_fill_policy || []).slice(0, 2).join("；");
-        $("v2RiskLine").textContent = `${policy || "禁止币安市价单"}；MT4滑点预算 ${fmt(plan.mt4_slippage_budget)} 美元`;
+        $("v2RiskLine").textContent =
+          `${policy || "禁止币安市价单"}；MT4滑点预算 ${fmt(plan.mt4_slippage_budget)} 美元`;
       }
 
       function renderLimitOrder(data) {
         const plan = data.execution_plan || {};
         const quote = data.binance_quote;
         const hasOrder = Boolean(plan.active_binance_order);
-        const hasPlannedPrice = plan.binance_order_price !== null && plan.binance_order_price !== undefined;
+        const hasPlannedPrice =
+          plan.binance_order_price !== null &&
+          plan.binance_order_price !== undefined;
         if (!hasOrder && !hasPlannedPrice) {
           $("limitOrderState").textContent = "当前未挂单";
           $("limitOrderSideQty").textContent = "-";
           $("limitOrderPrice").textContent = "-";
           $("limitOrderDistance").textContent = "-";
           $("limitOrderMt4Follow").textContent = "-";
-          $("limitOrderSummary").textContent = plan.summary || "等待价差达到开仓条件";
+          $("limitOrderSummary").textContent =
+            plan.summary || "等待价差达到开仓条件";
           return;
         }
 
-        const status = hasOrder ? translateOrderStatus(plan.binance_order_status) : "计划价格，未挂出";
+        const status = hasOrder
+          ? translateOrderStatus(plan.binance_order_status)
+          : "计划价格，未挂出";
         const postOnly = hasOrder ? "Post Only 已挂出" : "条件满足时才会挂出";
         $("limitOrderState").textContent = `${status}，${postOnly}`;
-        $("limitOrderSideQty").textContent = `${translateAction(plan.binance_order_side)} ${fmt(plan.binance_order_qty)} XAU，已成交 ${fmt(plan.binance_order_executed_qty || 0)} XAU`;
-        $("limitOrderPrice").textContent = `${fmt(plan.binance_order_price)} 美元`;
+        $("limitOrderSideQty").textContent =
+          `${translateAction(plan.binance_order_side)} ${fmt(plan.binance_order_qty)} XAU，已成交 ${fmt(plan.binance_order_executed_qty || 0)} XAU`;
+        $("limitOrderPrice").textContent =
+          `${fmt(plan.binance_order_price)} 美元`;
         $("limitOrderDistance").textContent = orderDistanceText(plan, quote);
-        const mt4Limit = plan.mt4_price_limit !== null && plan.mt4_price_limit !== undefined
-          ? `，保护价 ${fmt(plan.mt4_price_limit)}`
-          : "";
-        $("limitOrderMt4Follow").textContent = plan.mt4_follow_side ? `${translateAction(plan.mt4_follow_side)}，立即市价跟随${mt4Limit}，${fmt(plan.max_follow_seconds)} 秒内回报` : "-";
+        const mt4Limit =
+          plan.mt4_price_limit !== null && plan.mt4_price_limit !== undefined
+            ? `，保护价 ${fmt(plan.mt4_price_limit)}`
+            : "";
+        $("limitOrderMt4Follow").textContent = plan.mt4_follow_side
+          ? `${translateAction(plan.mt4_follow_side)}，立即市价跟随${mt4Limit}，${fmt(plan.max_follow_seconds)} 秒内回报`
+          : "-";
         $("limitOrderSummary").textContent = plan.summary || "-";
       }
 
       function orderDistanceText(plan, quote) {
-        if (!quote || plan.binance_order_price === null || plan.binance_order_price === undefined || !plan.binance_order_side) return "等待币安报价";
+        if (
+          !quote ||
+          plan.binance_order_price === null ||
+          plan.binance_order_price === undefined ||
+          !plan.binance_order_side
+        )
+          return "等待币安报价";
         const price = Number(plan.binance_order_price);
         if (!Number.isFinite(price)) return "-";
         if (plan.binance_order_side === "SELL") {
           const distance = price - Number(quote.ask);
-          return distance > 0 ? `还差 ${fmt(distance)} 美元上涨到挂单价` : "已触达挂单价，等待交易所成交回报";
+          return distance > 0
+            ? `还差 ${fmt(distance)} 美元上涨到挂单价`
+            : "已触达挂单价，等待交易所成交回报";
         }
         const distance = Number(quote.bid) - price;
-        return distance > 0 ? `还差 ${fmt(distance)} 美元下跌到挂单价` : "已触达挂单价，等待交易所成交回报";
+        return distance > 0
+          ? `还差 ${fmt(distance)} 美元下跌到挂单价`
+          : "已触达挂单价，等待交易所成交回报";
       }
 
       function renderAccounts(data) {
         const binance = data.binance_account;
         const mt4 = data.mt4_account;
-        $("binanceWalletBalance").textContent = binance ? accountMoney(binance.balance, binance.currency) : "等待币安账户数据";
-        $("binanceEquity").textContent = binance ? accountMoney(binance.equity, binance.currency) : "-";
-        $("binanceAvailable").textContent = binance ? accountMoney(binance.available, binance.currency) : "-";
-        $("binanceMargin").textContent = binance ? accountMoney(binance.used_margin, binance.currency) : "-";
-        $("binanceUnrealized").textContent = binance ? accountSigned(binance.unrealized_pnl, binance.currency) : "-";
-        $("mt4AccountBalance").textContent = mt4 ? accountMoney(mt4.balance, mt4.currency) : "等待新版 EA 上报";
-        $("mt4Equity").textContent = mt4 ? accountMoney(mt4.equity, mt4.currency) : "-";
-        $("mt4Available").textContent = mt4 ? accountMoney(mt4.available, mt4.currency) : "-";
-        $("mt4Margin").textContent = mt4 ? accountMoney(mt4.used_margin, mt4.currency) : "-";
-        $("mt4Unrealized").textContent = mt4 ? accountSigned(mt4.unrealized_pnl, mt4.currency) : "-";
-        $("mt4AccountPositionsLine").textContent = renderMt4Positions(data.mt4_positions || []);
+        $("binanceWalletBalance").textContent = binance
+          ? accountMoney(binance.balance, binance.currency)
+          : "等待币安账户数据";
+        $("binanceEquity").textContent = binance
+          ? accountMoney(binance.equity, binance.currency)
+          : "-";
+        $("binanceAvailable").textContent = binance
+          ? accountMoney(binance.available, binance.currency)
+          : "-";
+        $("binanceMargin").textContent = binance
+          ? accountMoney(binance.used_margin, binance.currency)
+          : "-";
+        $("binanceUnrealized").textContent = binance
+          ? accountSigned(binance.unrealized_pnl, binance.currency)
+          : "-";
+        $("mt4AccountBalance").textContent = mt4
+          ? accountMoney(mt4.balance, mt4.currency)
+          : "等待新版 EA 上报";
+        $("mt4Equity").textContent = mt4
+          ? accountMoney(mt4.equity, mt4.currency)
+          : "-";
+        $("mt4Available").textContent = mt4
+          ? accountMoney(mt4.available, mt4.currency)
+          : "-";
+        $("mt4Margin").textContent = mt4
+          ? accountMoney(mt4.used_margin, mt4.currency)
+          : "-";
+        $("mt4Unrealized").textContent = mt4
+          ? accountSigned(mt4.unrealized_pnl, mt4.currency)
+          : "-";
+        $("mt4AccountPositionsLine").textContent = renderMt4Positions(
+          data.mt4_positions || [],
+        );
       }
 
       function renderPositions(data) {
@@ -1159,27 +1488,52 @@
         const binanceQty = data.binance_position_qty;
         const metrics = data.position_metrics || {};
         const mt4Positions = data.mt4_positions || [];
-        $("binancePositionLine").textContent = renderBinancePosition(binanceQty, metrics);
+        $("binancePositionLine").textContent = renderBinancePosition(
+          binanceQty,
+          metrics,
+        );
         $("mt4PositionsLine").textContent = renderMt4Positions(mt4Positions);
-        $("orphanPositionLine").textContent = renderOrphanPositionWarning(pair, binanceQty, mt4Positions);
+        $("orphanPositionLine").textContent = renderOrphanPositionWarning(
+          pair,
+          binanceQty,
+          mt4Positions,
+        );
       }
 
       function renderBinancePosition(qtyValue, metrics = {}) {
-        if (qtyValue === null || qtyValue === undefined) return "等待币安仓位数据";
+        if (qtyValue === null || qtyValue === undefined)
+          return "等待币安仓位数据";
         const qty = Number(qtyValue);
         if (!Number.isFinite(qty)) return `${qtyValue} XAU`;
         if (Math.abs(qty) < 0.0000001) return "无持仓";
-        const parts = [`${qty > 0 ? "多仓" : "空仓"} ${fmt(Math.abs(qty))} XAU`];
-        if (metrics.binance_position_entry_price !== null && metrics.binance_position_entry_price !== undefined) {
+        const parts = [
+          `${qty > 0 ? "多仓" : "空仓"} ${fmt(Math.abs(qty))} XAU`,
+        ];
+        if (
+          metrics.binance_position_entry_price !== null &&
+          metrics.binance_position_entry_price !== undefined
+        ) {
           parts.push(`真实均价 ${fmt(metrics.binance_position_entry_price)}`);
         }
-        if (metrics.binance_position_break_even_price !== null && metrics.binance_position_break_even_price !== undefined && Number(metrics.binance_position_break_even_price) > 0) {
-          parts.push(`币安不亏价 ${fmt(metrics.binance_position_break_even_price)}`);
+        if (
+          metrics.binance_position_break_even_price !== null &&
+          metrics.binance_position_break_even_price !== undefined &&
+          Number(metrics.binance_position_break_even_price) > 0
+        ) {
+          parts.push(
+            `币安不亏价 ${fmt(metrics.binance_position_break_even_price)}`,
+          );
         }
-        if (metrics.binance_position_mark_price !== null && metrics.binance_position_mark_price !== undefined) {
+        if (
+          metrics.binance_position_mark_price !== null &&
+          metrics.binance_position_mark_price !== undefined
+        ) {
           parts.push(`标记价 ${fmt(metrics.binance_position_mark_price)}`);
         }
-        if (metrics.binance_unrealized_pnl !== null && metrics.binance_unrealized_pnl !== undefined) {
+        if (
+          metrics.binance_unrealized_pnl !== null &&
+          metrics.binance_unrealized_pnl !== undefined
+        ) {
           parts.push(`币安浮盈 ${signedMoney(metrics.binance_unrealized_pnl)}`);
         }
         return parts.join("，");
@@ -1187,108 +1541,225 @@
 
       function renderPairEntry(pair, metrics) {
         if (!pair) return "-";
-        const binanceEntry = metrics.binance_position_entry_price ?? pair.binance_entry_price;
-        const binanceBreakEven = metrics.binance_position_break_even_price ?? null;
-        const mt4Entry = metrics.mt4_position_entry_price ?? pair.mt4_entry_price;
-        const lots = metrics.mt4_position_lots !== null && metrics.mt4_position_lots !== undefined ? `，MT4合计 ${fmt(metrics.mt4_position_lots)} 手` : "";
-        const spread = metrics.actual_entry_spread !== null && metrics.actual_entry_spread !== undefined ? `，真实均价差 ${fmt(metrics.actual_entry_spread)} 美元` : "";
-        const rawSpread = binanceEntry !== null && binanceEntry !== undefined && mt4Entry !== null && mt4Entry !== undefined
-          ? (pair.direction === "BINANCE_SHORT_MT4_LONG" ? Number(binanceEntry) - Number(mt4Entry) : Number(mt4Entry) - Number(binanceEntry))
-          : null;
-        const rawText = Number.isFinite(rawSpread) ? `，裸均价差 ${fmt(rawSpread)} 美元` : "";
-        const breakEvenText = binanceBreakEven !== null && binanceBreakEven !== undefined && Number(binanceBreakEven) > 0 ? `，币安不亏价 ${fmt(binanceBreakEven)}` : "";
+        const binanceEntry =
+          metrics.binance_position_entry_price ?? pair.binance_entry_price;
+        const binanceBreakEven =
+          metrics.binance_position_break_even_price ?? null;
+        const mt4Entry =
+          metrics.mt4_position_entry_price ?? pair.mt4_entry_price;
+        const lots =
+          metrics.mt4_position_lots !== null &&
+          metrics.mt4_position_lots !== undefined
+            ? `，MT4合计 ${fmt(metrics.mt4_position_lots)} 手`
+            : "";
+        const spread =
+          metrics.actual_entry_spread !== null &&
+          metrics.actual_entry_spread !== undefined
+            ? `，真实均价差 ${fmt(metrics.actual_entry_spread)} 美元`
+            : "";
+        const rawSpread =
+          binanceEntry !== null &&
+          binanceEntry !== undefined &&
+          mt4Entry !== null &&
+          mt4Entry !== undefined
+            ? pair.direction === "BINANCE_SHORT_MT4_LONG"
+              ? Number(binanceEntry) - Number(mt4Entry)
+              : Number(mt4Entry) - Number(binanceEntry)
+            : null;
+        const rawText = Number.isFinite(rawSpread)
+          ? `，裸均价差 ${fmt(rawSpread)} 美元`
+          : "";
+        const breakEvenText =
+          binanceBreakEven !== null &&
+          binanceBreakEven !== undefined &&
+          Number(binanceBreakEven) > 0
+            ? `，币安不亏价 ${fmt(binanceBreakEven)}`
+            : "";
         return `币安实仓 ${fmt(binanceEntry)}${breakEvenText} / MT4均价 ${fmt(mt4Entry)}${lots}${rawText}${spread}`;
       }
 
-      function renderPairAddLine(pair, config, binanceQuote, mt4Quote, metrics = {}) {
+      function renderPairAddLine(
+        pair,
+        config,
+        binanceQuote,
+        mt4Quote,
+        metrics = {},
+      ) {
         if (!pair || !config) return "-";
         const count = Number(pair.add_count || 0);
         const maxCount = Number(config.max_add_count || 0);
         if (maxCount <= 0) return "补仓已关闭";
         const actualEntry = Number(metrics.actual_entry_spread);
         const storedBase = Number(pair.base_edge);
-        const rawBase = count === 0 && Number.isFinite(actualEntry)
-          ? actualEntry
-          : (pair.last_add_trigger_edge ?? pair.last_add_edge ?? pair.base_edge);
-        if (rawBase === null || rawBase === undefined || rawBase === "") return `已补 ${count}/${maxCount} 次，等待补仓基准`;
+        const rawBase =
+          count === 0 && Number.isFinite(actualEntry)
+            ? actualEntry
+            : (pair.last_add_trigger_edge ??
+              pair.last_add_edge ??
+              pair.base_edge);
+        if (rawBase === null || rawBase === undefined || rawBase === "")
+          return `已补 ${count}/${maxCount} 次，等待补仓基准`;
         const baseEdge = Number(rawBase);
-        if (!Number.isFinite(baseEdge)) return `已补 ${count}/${maxCount} 次，等待补仓基准`;
+        if (!Number.isFinite(baseEdge))
+          return `已补 ${count}/${maxCount} 次，等待补仓基准`;
         const addGrowth = Number(config.add_edge_growth_usd || 0);
         const trigger = baseEdge + addGrowth;
         const baseLabel = count > 0 ? "上次触发阶梯" : "首仓基准";
         const actualAddEdge = Number(pair.last_add_edge);
-        const actualAddText = count > 0 && Number.isFinite(actualAddEdge) ? `，上次实得价差 ${fmt(actualAddEdge)} 美元` : "";
-        const actualEntryText = count > 0 && Number.isFinite(actualEntry) ? `，组合真实均价差 ${fmt(actualEntry)} 美元` : "";
+        const actualAddText =
+          count > 0 && Number.isFinite(actualAddEdge)
+            ? `，上次实得价差 ${fmt(actualAddEdge)} 美元`
+            : "";
+        const actualEntryText =
+          count > 0 && Number.isFinite(actualEntry)
+            ? `，组合真实均价差 ${fmt(actualEntry)} 美元`
+            : "";
         let current = null;
         if (binanceQuote && mt4Quote) {
-          current = pair.direction === "BINANCE_SHORT_MT4_LONG"
-            ? Number(binanceQuote.ask) - Number(mt4Quote.ask)
-            : Number(mt4Quote.bid) - Number(binanceQuote.bid);
+          current =
+            pair.direction === "BINANCE_SHORT_MT4_LONG"
+              ? Number(binanceQuote.ask) - Number(mt4Quote.ask)
+              : Number(mt4Quote.bid) - Number(binanceQuote.bid);
         }
-        const currentText = Number.isFinite(current) ? `，当前同向价差 ${fmt(current)} 美元` : "";
+        const currentText = Number.isFinite(current)
+          ? `，当前同向价差 ${fmt(current)} 美元`
+          : "";
         return `已补 ${count}/${maxCount} 次，下次补仓基差 ${fmt(trigger)} 美元（${baseLabel} ${fmt(baseEdge)} + 增加 ${fmt(addGrowth)}）${actualAddText}${actualEntryText}${currentText}`;
       }
 
       function renderMt4Positions(positions) {
         if (!positions.length) return "无持仓";
-        return positions.map((position) => {
-          const ticket = position.ticket ? `单号 ${position.ticket}，` : "";
-          return `${ticket}${translateAction(position.side)} ${fmt(position.lots)} 手，开仓 ${fmt(position.open_price)}，浮盈 ${signedUsd(position.profit)}，隔夜费 ${signedUsd(position.swap)}`;
-        }).join("；");
+        return positions
+          .map((position) => {
+            const ticket = position.ticket ? `单号 ${position.ticket}，` : "";
+            return `${ticket}${translateAction(position.side)} ${fmt(position.lots)} 手，开仓 ${fmt(position.open_price)}，浮盈 ${signedUsd(position.profit)}，隔夜费 ${signedUsd(position.swap)}`;
+          })
+          .join("；");
       }
 
-      function renderOrphanPositionWarning(pair, binanceQtyValue, mt4Positions) {
+      function renderOrphanPositionWarning(
+        pair,
+        binanceQtyValue,
+        mt4Positions,
+      ) {
         const binanceQty = Number(binanceQtyValue || 0);
-        const hasBinance = Number.isFinite(binanceQty) && Math.abs(binanceQty) >= 0.0000001;
+        const hasBinance =
+          Number.isFinite(binanceQty) && Math.abs(binanceQty) >= 0.0000001;
         const hasMt4 = mt4Positions.length > 0;
-        if (!pair && hasBinance && hasMt4) return "策略没有组合记录，但币安和 MT4 都有实仓，请人工核对是否同一组持仓。";
-        if (!pair && hasBinance) return "检测到币安单腿持仓，系统不会继续自动开仓，请先人工确认。";
-        if (!pair && hasMt4) return "检测到 MT4 单腿持仓，币安侧当前没有组合记录，请先人工确认。";
-        if (pair && !hasMt4) return "策略有组合记录，但没有收到 MT4 对应持仓，需确认 EA 上报是否正常。";
-        if (pair && !hasBinance) return "策略有组合记录，但币安当前仓位为 0，需确认币安是否已被平掉。";
+        if (!pair && hasBinance && hasMt4)
+          return "策略没有组合记录，但币安和 MT4 都有实仓，请人工核对是否同一组持仓。";
+        if (!pair && hasBinance)
+          return "检测到币安单腿持仓，系统不会继续自动开仓，请先人工确认。";
+        if (!pair && hasMt4)
+          return "检测到 MT4 单腿持仓，币安侧当前没有组合记录，请先人工确认。";
+        if (pair && !hasMt4)
+          return "策略有组合记录，但没有收到 MT4 对应持仓，需确认 EA 上报是否正常。";
+        if (pair && !hasBinance)
+          return "策略有组合记录，但币安当前仓位为 0，需确认币安是否已被平掉。";
         return "无单腿风险";
       }
 
       function renderFunding(metrics, pair) {
-        if (!metrics || metrics.binance_funding_rate === null || metrics.binance_funding_rate === undefined) return "-";
-        const accrued = metrics.binance_accrued_funding !== null && metrics.binance_accrued_funding !== undefined ? `，已结算 ${signedMoney(metrics.binance_accrued_funding)}` : "，已结算等待币安返回";
-        const amount = pair ? `，本仓下次预估 ${signedMoney(metrics.binance_funding_estimate)}` : "，当前无持仓不估算金额";
+        if (
+          !metrics ||
+          metrics.binance_funding_rate === null ||
+          metrics.binance_funding_rate === undefined
+        )
+          return "-";
+        const accrued =
+          metrics.binance_accrued_funding !== null &&
+          metrics.binance_accrued_funding !== undefined
+            ? `，已结算 ${signedMoney(metrics.binance_accrued_funding)}`
+            : "，已结算等待币安返回";
+        const amount = pair
+          ? `，本仓下次预估 ${signedMoney(metrics.binance_funding_estimate)}`
+          : "，当前无持仓不估算金额";
         return `费率 ${pct(metrics.binance_funding_rate)}，倒计时 ${countdown(metrics.binance_next_funding_time_ms)}${accrued}${amount}`;
       }
 
       function renderNetEstimate(metrics) {
-        if (!metrics || metrics.estimated_close_net === null || metrics.estimated_close_net === undefined) return "-";
-        const funding = metrics.binance_accrued_funding !== null && metrics.binance_accrued_funding !== undefined ? `，币安已结算资金费 ${signedMoney(metrics.binance_accrued_funding)}` : "";
+        if (
+          !metrics ||
+          metrics.estimated_close_net === null ||
+          metrics.estimated_close_net === undefined
+        )
+          return "-";
+        const funding =
+          metrics.binance_accrued_funding !== null &&
+          metrics.binance_accrued_funding !== undefined
+            ? `，币安已结算资金费 ${signedMoney(metrics.binance_accrued_funding)}`
+            : "";
         return `${signedUsd(metrics.estimated_close_net)}，毛利 ${signedUsd(metrics.estimated_close_gross)}，预估手续费 ${signedUsd(-Number(metrics.estimated_fees || 0))}${funding}`;
       }
 
       function renderProfitSpread(pair, metrics) {
         if (!pair) return "-";
-        if (!metrics || metrics.profitable_spread_threshold === null || metrics.profitable_spread_threshold === undefined) {
+        if (
+          !metrics ||
+          metrics.profitable_spread_threshold === null ||
+          metrics.profitable_spread_threshold === undefined
+        ) {
           return "等待币安真实均价、MT4均价和手续费数据";
         }
-        const current = metrics.current_exit_spread !== null && metrics.current_exit_spread !== undefined ? `当前平仓价差 ${fmt(metrics.current_exit_spread)} 美元，` : "";
-        const trigger = metrics.dynamic_close_spread !== null && metrics.dynamic_close_spread !== undefined ? `；自动平仓触发 ${fmt(metrics.dynamic_close_spread)} 美元以内` : "";
-        const profit = metrics.close_profit_usd_per_oz !== null && metrics.close_profit_usd_per_oz !== undefined ? `，额外利润空间 ${fmt(metrics.close_profit_usd_per_oz)} 美元/盎司` : "";
-        const follow = metrics.exit_follow_buffer_usd_per_oz !== null && metrics.exit_follow_buffer_usd_per_oz !== undefined && Number(metrics.exit_follow_buffer_usd_per_oz) > 0 ? `，MT4跟随保护 ${fmt(metrics.exit_follow_buffer_usd_per_oz)} 美元/盎司` : "";
+        const current =
+          metrics.current_exit_spread !== null &&
+          metrics.current_exit_spread !== undefined
+            ? `当前平仓价差 ${fmt(metrics.current_exit_spread)} 美元，`
+            : "";
+        const trigger =
+          metrics.dynamic_close_spread !== null &&
+          metrics.dynamic_close_spread !== undefined
+            ? `；自动平仓触发 ${fmt(metrics.dynamic_close_spread)} 美元以内`
+            : "";
+        const profit =
+          metrics.close_profit_usd_per_oz !== null &&
+          metrics.close_profit_usd_per_oz !== undefined
+            ? `，额外利润空间 ${fmt(metrics.close_profit_usd_per_oz)} 美元/盎司`
+            : "";
+        const follow =
+          metrics.exit_follow_buffer_usd_per_oz !== null &&
+          metrics.exit_follow_buffer_usd_per_oz !== undefined &&
+          Number(metrics.exit_follow_buffer_usd_per_oz) > 0
+            ? `，MT4跟随保护 ${fmt(metrics.exit_follow_buffer_usd_per_oz)} 美元/盎司`
+            : "";
         return `${current}保本价差 ${fmt(metrics.profitable_spread_threshold)} 美元${profit}${follow}${trigger}`;
       }
 
       function renderMt4Swap(metrics, pair) {
         if (!metrics) return "-";
         const parts = [];
-        if (metrics.mt4_swap_long_per_lot !== null && metrics.mt4_swap_long_per_lot !== undefined) {
+        if (
+          metrics.mt4_swap_long_per_lot !== null &&
+          metrics.mt4_swap_long_per_lot !== undefined
+        ) {
           parts.push(`多单 ${signedUsd(metrics.mt4_swap_long_per_lot)}/手`);
         }
-        if (metrics.mt4_swap_short_per_lot !== null && metrics.mt4_swap_short_per_lot !== undefined) {
+        if (
+          metrics.mt4_swap_short_per_lot !== null &&
+          metrics.mt4_swap_short_per_lot !== undefined
+        ) {
           parts.push(`空单 ${signedUsd(metrics.mt4_swap_short_per_lot)}/手`);
         }
-        if (metrics.mt4_swap_type !== null && metrics.mt4_swap_type !== undefined) {
+        if (
+          metrics.mt4_swap_type !== null &&
+          metrics.mt4_swap_type !== undefined
+        ) {
           parts.push(`类型 ${mt4SwapTypeText(metrics.mt4_swap_type)}`);
         }
-        const next = metrics.mt4_next_rollover_time_ms ? `倒计时 ${countdown(metrics.mt4_next_rollover_time_ms)}` : "等待新版 EA 上报过夜时间";
-        const estimate = pair && metrics.mt4_swap_estimate !== null && metrics.mt4_swap_estimate !== undefined ? `，下次预估 ${signedUsd(metrics.mt4_swap_estimate)}` : "";
-        const accrued = metrics.mt4_accrued_swap !== null && metrics.mt4_accrued_swap !== undefined ? `，已产生 ${signedUsd(metrics.mt4_accrued_swap)}` : "";
+        const next = metrics.mt4_next_rollover_time_ms
+          ? `倒计时 ${countdown(metrics.mt4_next_rollover_time_ms)}`
+          : "等待新版 EA 上报过夜时间";
+        const estimate =
+          pair &&
+          metrics.mt4_swap_estimate !== null &&
+          metrics.mt4_swap_estimate !== undefined
+            ? `，下次预估 ${signedUsd(metrics.mt4_swap_estimate)}`
+            : "";
+        const accrued =
+          metrics.mt4_accrued_swap !== null &&
+          metrics.mt4_accrued_swap !== undefined
+            ? `，已产生 ${signedUsd(metrics.mt4_accrued_swap)}`
+            : "";
         parts.push(next);
         return `${parts.join("，")}${estimate}${accrued}`;
       }
@@ -1306,7 +1777,8 @@
       function renderConfig(config) {
         if (!config) return;
         lastConfig = config;
-        $("mt4HedgeQty").textContent = `${fmt(config.target_oz)} XAU，自动折算 ${fmt(Number(config.target_oz) / Number(config.mt4_lot_size_oz))} 手`;
+        $("mt4HedgeQty").textContent =
+          `${fmt(config.target_oz)} XAU，自动折算 ${fmt(Number(config.target_oz) / Number(config.mt4_lot_size_oz))} 手`;
         if (!configDirty) fillConfigInputs(config);
       }
 
@@ -1357,7 +1829,8 @@
           appendLog("参数已保存");
           await loadStatus();
         } catch (error) {
-          $("configSaveState").textContent = `保存失败：${translateError(error.message)}`;
+          $("configSaveState").textContent =
+            `保存失败：${translateError(error.message)}`;
           throw error;
         } finally {
           $("saveConfigBtn").disabled = false;
@@ -1368,11 +1841,14 @@
         $("historyBtn").disabled = true;
         $("historyStatus").textContent = "正在读取历史并对比币安K线...";
         try {
-          const data = await api("analysis/spread?days=7&interval=1m&threshold=0.5");
+          const data = await api(
+            "analysis/spread?days=7&interval=1m&threshold=0.5",
+          );
           renderHistory(data);
           appendLog("历史价差分析已完成");
         } catch (error) {
-          $("historyStatus").textContent = `分析失败：${translateError(error.message)}`;
+          $("historyStatus").textContent =
+            `分析失败：${translateError(error.message)}`;
           appendLog(`历史价差分析失败：${translateError(error.message)}`);
         } finally {
           $("historyBtn").disabled = false;
@@ -1388,12 +1864,24 @@
           $("historyClosest").textContent = "MT4 EA 启动后会自动补传最近7天K线";
           return;
         }
-        $("historyStatus").textContent = `已对齐 ${fmt(data.matched_points)} 根K线，MT4 ${fmt(data.mt4_bars)} 根，币安 ${fmt(data.binance_bars)} 根`;
-        $("historyMin").textContent = `${fmt(data.min_abs_diff)} 美元，时间 ${timeText(data.min_abs_diff_time_ms)}`;
-        $("historyLatest").textContent = `${fmt(data.latest_diff)} 美元，时间 ${timeText(data.latest_time_ms)}`;
-        $("historyReturn").textContent = data.returned_to_threshold ? `有，${fmt(data.return_count)} 次小于等于 0.5 美元` : "没有回到 0.5 美元以内";
-        const closest = (data.closest_points || []).slice(0, 3).map((point) => `${timeText(point.timestamp_ms)}：${fmt(point.diff)} 美元`);
-        $("historyClosest").textContent = closest.length ? closest.join("；") : "-";
+        $("historyStatus").textContent =
+          `已对齐 ${fmt(data.matched_points)} 根K线，MT4 ${fmt(data.mt4_bars)} 根，币安 ${fmt(data.binance_bars)} 根`;
+        $("historyMin").textContent =
+          `${fmt(data.min_abs_diff)} 美元，时间 ${timeText(data.min_abs_diff_time_ms)}`;
+        $("historyLatest").textContent =
+          `${fmt(data.latest_diff)} 美元，时间 ${timeText(data.latest_time_ms)}`;
+        $("historyReturn").textContent = data.returned_to_threshold
+          ? `有，${fmt(data.return_count)} 次小于等于 0.5 美元`
+          : "没有回到 0.5 美元以内";
+        const closest = (data.closest_points || [])
+          .slice(0, 3)
+          .map(
+            (point) =>
+              `${timeText(point.timestamp_ms)}：${fmt(point.diff)} 美元`,
+          );
+        $("historyClosest").textContent = closest.length
+          ? closest.join("；")
+          : "-";
       }
 
       async function loadTradeHistory() {
@@ -1404,7 +1892,8 @@
           renderTradeHistory(data);
           appendLog("做单历史已刷新");
         } catch (error) {
-          $("tradeHistoryStatus").textContent = `读取失败：${translateError(error.message)}`;
+          $("tradeHistoryStatus").textContent =
+            `读取失败：${translateError(error.message)}`;
           appendLog(`做单历史读取失败：${translateError(error.message)}`);
         } finally {
           $("tradeHistoryBtn").disabled = false;
@@ -1413,12 +1902,17 @@
 
       function renderTradeHistory(data) {
         const rows = data.items || [];
-        $("tradeHistoryStatus").textContent = rows.length ? `${data.source}，共 ${rows.length} 组` : "暂无 MT4 账户历史；请使用新版 EA 后等待上传";
+        $("tradeHistoryStatus").textContent = rows.length
+          ? `${data.source}，共 ${rows.length} 组`
+          : "暂无 MT4 账户历史；请使用新版 EA 后等待上传";
         if (!rows.length) {
-          $("tradeHistoryBody").innerHTML = `<tr><td colspan="10">暂无真实做单历史</td></tr>`;
+          $("tradeHistoryBody").innerHTML =
+            `<tr><td colspan="10">暂无真实做单历史</td></tr>`;
           return;
         }
-        $("tradeHistoryBody").innerHTML = rows.map((item) => `
+        $("tradeHistoryBody").innerHTML = rows
+          .map(
+            (item) => `
           <tr>
             <td>${timeText(item.open_time_ms)}</td>
             <td>${timeText(item.close_time_ms)}</td>
@@ -1431,7 +1925,9 @@
             <td>${signedUsd(item.net_pnl)}</td>
             <td>${item.status || "-"}</td>
           </tr>
-        `).join("");
+        `,
+          )
+          .join("");
       }
 
       function tradeSideText(value) {
@@ -1458,7 +1954,9 @@
       }
 
       async function resumeEngine() {
-        const ok = window.confirm("确认恢复运行？恢复后只要满足价差条件，系统会继续自动挂币安限价单。");
+        const ok = window.confirm(
+          "确认恢复运行？恢复后只要满足价差条件，系统会继续自动挂币安限价单。",
+        );
         if (!ok) return;
         $("resumeBtn").disabled = true;
         const result = await api("control/resume", { method: "POST" });
@@ -1467,7 +1965,9 @@
       }
 
       async function startLiveMode() {
-        const ok = window.confirm("确认启动实盘？启动后系统会使用真实 Binance API 挂单，成交后 MT4 会真实跟随。");
+        const ok = window.confirm(
+          "确认启动实盘？启动后系统会使用真实 Binance API 挂单，成交后 MT4 会真实跟随。",
+        );
         if (!ok) return;
         $("startLiveBtn").disabled = true;
         const result = await api("control/live/start", { method: "POST" });
@@ -1540,7 +2040,10 @@
           ["Binance API credentials missing", "币安密钥未配置"],
           ["invalid MT4 token", "MT4 连接口令不正确"],
           ["MT4 quote missing before hedge", "MT4 对冲前报价缺失"],
-          ["post only would take liquidity", "只做挂单会立即成交，已拒绝并等待重挂"],
+          [
+            "post only would take liquidity",
+            "只做挂单会立即成交，已拒绝并等待重挂",
+          ],
           ["paper quote missing", "模拟行情缺失"],
           ["MT4 hedge timeout", "MT4 对冲超时"],
           ["MT4 command failed", "MT4 命令执行失败"],
@@ -1548,7 +2051,10 @@
           ["Internal Server Error", "服务器内部异常"],
           ["Bad Gateway", "服务正在重启，请稍等几秒"],
           ["502", "服务正在重启，请稍等几秒"],
-          ["Unexpected token '<'", "服务返回了网页错误，通常是重启中的临时状态"],
+          [
+            "Unexpected token '<'",
+            "服务返回了网页错误，通常是重启中的临时状态",
+          ],
           ["Not Found", "接口不存在"],
           ["Forbidden", "没有访问权限"],
           ["MT4 quote missing", "MT4 报价缺失"],
@@ -1556,17 +2062,38 @@
           ["daily loss limit reached", "已达到每日亏损上限"],
           ["maker fee missing", "币安挂单手续费率未读取"],
         ];
-        return replacements.reduce((current, [source, target]) => current.replaceAll(source, target), text);
+        return replacements.reduce(
+          (current, [source, target]) => current.replaceAll(source, target),
+          text,
+        );
       }
 
       $("refreshBtn").addEventListener("click", loadStatus);
       $("toggleParamsTopBtn").addEventListener("click", toggleParams);
       $("toggleParamsPanelBtn").addEventListener("click", toggleParams);
-      $("clearPaperBtn").addEventListener("click", () => clearPaperState().catch((error) => appendLog(translateError(error.message))));
-      $("startLiveBtn").addEventListener("click", () => startLiveMode().catch((error) => appendLog(translateError(error.message))));
-      $("stopLiveBtn").addEventListener("click", () => stopLiveMode().catch((error) => appendLog(translateError(error.message))));
-      $("resumeBtn").addEventListener("click", () => resumeEngine().catch((error) => appendLog(translateError(error.message))));
-      $("saveConfigBtn").addEventListener("click", () => saveConfig().catch((error) => appendLog(translateError(error.message))));
+      $("clearPaperBtn").addEventListener("click", () =>
+        clearPaperState().catch((error) =>
+          appendLog(translateError(error.message)),
+        ),
+      );
+      $("startLiveBtn").addEventListener("click", () =>
+        startLiveMode().catch((error) =>
+          appendLog(translateError(error.message)),
+        ),
+      );
+      $("stopLiveBtn").addEventListener("click", () =>
+        stopLiveMode().catch((error) =>
+          appendLog(translateError(error.message)),
+        ),
+      );
+      $("resumeBtn").addEventListener("click", () =>
+        resumeEngine().catch((error) =>
+          appendLog(translateError(error.message)),
+        ),
+      );
+      $("saveConfigBtn").addEventListener("click", () =>
+        saveConfig().catch((error) => appendLog(translateError(error.message))),
+      );
       $("resetConfigBtn").addEventListener("click", resetConfigForm);
       $("historyBtn").addEventListener("click", () => loadHistoryAnalysis());
       $("tradeHistoryBtn").addEventListener("click", () => loadTradeHistory());
