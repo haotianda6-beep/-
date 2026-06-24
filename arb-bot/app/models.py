@@ -264,6 +264,7 @@ class SpreadAnalysis(BaseModel):
 
 
 class TradeHistoryItem(BaseModel):
+    strategy_version: str = "v1.0"
     open_time_ms: int | None = None
     close_time_ms: int | None = None
     quantity_oz: Decimal | None = None
@@ -358,6 +359,7 @@ class RuntimeConfig(BaseModel):
     config_files: list[str]
     mt4_script_path: str
     gold_v2_observation_only: bool
+    gold_v2_history_start_ms: int
     binance_leverage: int
     binance_entry_offset_usd: Decimal
     open_min_edge: Decimal

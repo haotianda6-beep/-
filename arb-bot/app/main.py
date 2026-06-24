@@ -629,6 +629,7 @@ def _build_trade_history(
         status = "完整真实数据" if entry_trade and exit_trade else "缺少币安成交匹配"
         items.append(
             TradeHistoryItem(
+                strategy_version=_trade_history_version(mt4_order.open_time_ms, mt4_order.close_time_ms),
                 open_time_ms=mt4_order.open_time_ms,
                 close_time_ms=mt4_order.close_time_ms,
                 quantity_oz=quantity_oz,
@@ -662,6 +663,14 @@ def _build_trade_history(
     aligned_items = _align_unmatched_trade_history_items(event_aligned_items, combined_binance_trades)
     funded_items = _apply_funding_income(aligned_items, funding_rows or [])
     return _apply_trade_history_summaries(funded_items)
+
+
+def _trade_history_version(open_time_ms: int | None, close_time_ms: int | None) -> str:
+    cutoff = settings.gold_v2_history_start_ms
+    if cutoff <= 0:
+        return "v1.0"
+    trade_time = open_time_ms or close_time_ms or 0
+    return "v2.0" if trade_time >= cutoff else "v1.0"
 
 
 def _build_event_exit_links(events: list[dict[str, Any]]) -> dict[frozenset[int], dict[str, Any]]:
@@ -901,7 +910,7 @@ def _group_trade_history_items(items: list[TradeHistoryItem]) -> list[TradeHisto
     unmatched: list[TradeHistoryItem] = []
     for item in items:
         if item.binance_exit_order_id:
-            key = item.binance_exit_order_id
+            key = f"{item.strategy_version}:{item.binance_exit_order_id}"
             grouped.setdefault(key, []).append(item)
         else:
             unmatched.append(item)
@@ -918,10 +927,11 @@ def _cluster_mt4_history_batches(items: list[TradeHistoryItem]) -> list[list[Tra
         last_batch = batches[-1] if batches else []
         last_item = last_batch[-1] if last_batch else None
         same_side = bool(last_item and last_item.mt4_side == item.mt4_side)
+        same_version = bool(last_item and last_item.strategy_version == item.strategy_version)
         last_close = last_item.close_time_ms if last_item else None
         current_close = item.close_time_ms
         near_close = last_close is not None and current_close is not None and abs(current_close - last_close) <= HISTORY_MT4_BATCH_WINDOW_MS
-        if same_side and near_close:
+        if same_side and same_version and near_close:
             last_batch.append(item)
         else:
             batches.append([item])
@@ -1028,6 +1038,7 @@ def _merge_trade_group(group: list[TradeHistoryItem]) -> TradeHistoryItem:
     else:
         status = f"部分缺少币安成交匹配（{len(group)}张合并）"
     return TradeHistoryItem(
+        strategy_version=_same_value([item.strategy_version for item in group]) or "混合版本",
         open_time_ms=min((item.open_time_ms for item in group if item.open_time_ms is not None), default=None),
         close_time_ms=max((item.close_time_ms for item in group if item.close_time_ms is not None), default=None),
         quantity_oz=quantity,
@@ -1548,6 +1559,7 @@ def _runtime_config() -> RuntimeConfig:
         config_files=[str(path) for path in existing_env_paths()],
         mt4_script_path=str((MT4_DIR / "ArbBridgeEA.mq4").resolve()),
         gold_v2_observation_only=settings.gold_v2_observation_only,
+        gold_v2_history_start_ms=settings.gold_v2_history_start_ms,
         binance_leverage=settings.binance_leverage,
         binance_entry_offset_usd=settings.binance_entry_offset_usd,
         open_min_edge=settings.open_min_edge,

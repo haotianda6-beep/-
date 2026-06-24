@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     live_trading: bool = Field(default=False, alias="LIVE_TRADING")
     paper_mode: bool = Field(default=True, alias="PAPER_MODE")
     gold_v2_observation_only: bool = Field(default=True, alias="GOLD_V2_OBSERVATION_ONLY")
+    gold_v2_history_start_ms: int = Field(default=0, alias="GOLD_V2_HISTORY_START_MS")
     service_host: str = Field(default="127.0.0.1", alias="SERVICE_HOST")
     service_port: int = Field(default=8011, alias="SERVICE_PORT")
 
@@ -157,6 +158,7 @@ class Settings(BaseSettings):
         "paper_fill_delay_ms",
         "negative_swap_close_before_minutes",
         "max_pair_age_minutes",
+        "gold_v2_history_start_ms",
     )
     @classmethod
     def non_negative_or_positive_timing(cls, value: int) -> int:

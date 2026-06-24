@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from app import main as main_module
 from app.history import compare_spreads
 from app.models import HistoryBar, Mt4ClosedOrder, Side
 from app.storage import Storage
@@ -210,3 +211,19 @@ def test_trade_history_uses_event_link_when_binance_exit_precedes_manual_mt4_clo
     assert "原因：本单盈利+28.97985952U" in items[0].status
     assert "MT4盈亏+58.8U" in items[0].status
     assert "币安合约盈亏-30.63U" in items[0].status
+
+
+def test_trade_history_separates_v1_and_v2_versions(monkeypatch):
+    monkeypatch.setattr(main_module.settings, "gold_v2_history_start_ms", 1500)
+
+    items = main_module._build_trade_history(
+        [
+            mt4_order(1, 1000, 1100, "4100", "4099", "-1"),
+            mt4_order(2, 2000, 2100, "4100", "4101", "1"),
+        ],
+        [],
+        [],
+    )
+
+    assert len(items) == 2
+    assert [item.strategy_version for item in items] == ["v2.0", "v1.0"]

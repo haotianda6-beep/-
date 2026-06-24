@@ -695,6 +695,7 @@
               <table>
                 <thead>
                   <tr>
+                    <th>版本</th>
                     <th>开仓时间</th>
                     <th>平仓时间</th>
                     <th>数量</th>
@@ -709,7 +710,7 @@
                 </thead>
                 <tbody id="tradeHistoryBody">
                   <tr>
-                    <td colspan="10">等待数据</td>
+                    <td colspan="11">等待数据</td>
                   </tr>
                 </tbody>
               </table>
@@ -1907,13 +1908,14 @@
           : "暂无 MT4 账户历史；请使用新版 EA 后等待上传";
         if (!rows.length) {
           $("tradeHistoryBody").innerHTML =
-            `<tr><td colspan="10">暂无真实做单历史</td></tr>`;
+            `<tr><td colspan="11">暂无真实做单历史</td></tr>`;
           return;
         }
         $("tradeHistoryBody").innerHTML = rows
           .map(
             (item) => `
           <tr>
+            <td>${item.strategy_version || "v1.0"}</td>
             <td>${timeText(item.open_time_ms)}</td>
             <td>${timeText(item.close_time_ms)}</td>
             <td>${fmt(item.quantity_oz)} XAU</td>
