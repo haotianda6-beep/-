@@ -26,6 +26,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.entry_hedge_side: Side | None = None
         self.hedge_command_id: str | None = None
         self.close_command_id: str | None = None
+        self.close_command_tickets: dict[str, int] = {}
+        self.pending_close_tickets: set[int] = set()
         self.order_created_ms = 0
         self.hedge_started_ms = 0
         self.close_started_ms = 0
@@ -62,6 +64,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.entry_hedge_side = None
         self.hedge_command_id = None
         self.close_command_id = None
+        self.close_command_tickets = {}
+        self.pending_close_tickets = set()
         self.order_created_ms = 0
         self.hedge_started_ms = 0
         self.close_started_ms = 0
@@ -232,14 +236,45 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
 
     def _queue_mt4_close(self) -> None:
         pair = self.runtime.open_pair
-        if not pair or not pair.mt4_ticket:
+        if not pair:
             self._pause("V2 平仓缺少 MT4 单号，币安可能已平，请人工确认")
             return
-        command = self.mt4.queue_close(pair.mt4_ticket, lots_from_qty(self.settings, pair.quantity_oz), "v2_exit_follow")
-        self.close_command_id = command.command_id
+        tickets = list(pair.mt4_tickets or ([] if pair.mt4_ticket is None else [pair.mt4_ticket]))
+        if not tickets:
+            self._pause("V2 平仓缺少 MT4 单号，币安可能已平，请人工确认")
+            return
+        lots_by_ticket = self._close_lots_by_ticket(tickets, pair.quantity_oz)
+        self.close_command_tickets = {}
+        self.pending_close_tickets = set()
+        for ticket in tickets:
+            lots = lots_by_ticket.get(ticket)
+            if lots is None or lots <= 0:
+                continue
+            command = self.mt4.queue_close(ticket, lots, "v2_exit_follow")
+            self.close_command_id = command.command_id
+            self.close_command_tickets[command.command_id] = ticket
+            self.pending_close_tickets.add(ticket)
+        if not self.pending_close_tickets:
+            self._pause("V2 没有可平的 MT4 持仓票，币安可能已平，请人工确认")
+            return
         self.close_started_ms = utc_now_ms()
         self.runtime.state = StrategyState.CLOSING_MT4
-        self.storage.record_event("v2_mt4_close_queued", {"command_id": command.command_id, "ticket": pair.mt4_ticket})
+        self.storage.record_event(
+            "v2_mt4_close_queued",
+            {
+                "command_ids": list(self.close_command_tickets.keys()),
+                "tickets": list(self.pending_close_tickets),
+                "lots_by_ticket": {str(ticket): str(lots_by_ticket[ticket]) for ticket in self.pending_close_tickets},
+            },
+        )
+
+    def _close_lots_by_ticket(self, tickets: list[int], quantity_oz: Decimal) -> dict[int, Decimal]:
+        positions = {position.ticket: position.lots for position in self.mt4.positions() if position.ticket in tickets}
+        if positions:
+            return {ticket: positions[ticket] for ticket in tickets if ticket in positions}
+        per_ticket_qty = quantity_oz / Decimal(len(tickets))
+        per_ticket_lots = lots_from_qty(self.settings, per_ticket_qty)
+        return {ticket: per_ticket_lots for ticket in tickets}
 
     def _process_mt4_reports(self) -> bool:
         reports = self.mt4.drain_reports()
@@ -247,7 +282,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             self.storage.record_event("v2_mt4_report", report.model_dump(mode="json"))
             if report.command_id == self.hedge_command_id:
                 self._handle_hedge_report(report)
-            elif report.command_id == self.close_command_id:
+            elif report.command_id == self.close_command_id or report.command_id in self.close_command_tickets:
                 self._handle_close_report(report)
         return bool(reports)
 
@@ -269,11 +304,21 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if report.status != "ok":
             self._pause(f"MT4 平仓跟随失败：{report.message or report.error_code}")
             return
+        ticket = report.ticket or self.close_command_tickets.get(report.command_id)
         pair_id = self.runtime.open_pair.pair_id if self.runtime.open_pair else None
-        self.storage.record_event("v2_pair_closed", {"pair_id": pair_id, "ticket": report.ticket})
+        if ticket is not None:
+            self.pending_close_tickets.discard(ticket)
+        self.close_command_tickets.pop(report.command_id, None)
+        self.storage.record_event("v2_pair_close_ticket", {"pair_id": pair_id, "ticket": ticket})
+        if self.pending_close_tickets:
+            return
+        tickets = self.runtime.open_pair.mt4_tickets if self.runtime.open_pair else []
+        self.storage.record_event("v2_pair_closed", {"pair_id": pair_id, "tickets": tickets})
         self.runtime.open_pair = None
         self.active_order = None
         self.close_command_id = None
+        self.close_command_tickets = {}
+        self.pending_close_tickets = set()
         self.last_closed_ms = utc_now_ms()
         self.runtime.state = StrategyState.IDLE
         self.runtime.last_error = None

@@ -107,13 +107,13 @@ class Storage:
                 SELECT id, ts, kind, payload
                 FROM events
                 WHERE ts >= ? AND ts <= ?
-                ORDER BY id ASC
+                ORDER BY id DESC
                 LIMIT ?
                 """,
                 (start_iso, end_iso, limit),
             ).fetchall()
         events = []
-        for row in rows:
+        for row in reversed(rows):
             try:
                 payload = json.loads(row[3])
             except json.JSONDecodeError:

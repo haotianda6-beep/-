@@ -61,6 +61,16 @@ def test_storage_reads_events_in_time_window(tmp_path):
     assert events[0]["payload"]["order_id"] == "1"
 
 
+def test_storage_reads_most_recent_events_when_limit_is_smaller_than_window(tmp_path):
+    store = Storage(tmp_path / "test.sqlite3")
+    for index in range(5):
+        store.record_event(f"sample_{index}", {"order_id": str(index)})
+
+    events = store.get_events(0, 4_102_444_800_000, limit=2)
+
+    assert [event["kind"] for event in events] == ["sample_3", "sample_4"]
+
+
 def test_spread_analysis_detects_return_to_threshold():
     mt4 = [bar(60_038, "4170"), bar(120_038, "4171"), bar(180_038, "4172")]
     binance = [bar(60_000, "4173"), bar(120_000, "4171.40"), bar(180_000, "4175")]
@@ -211,6 +221,80 @@ def test_trade_history_uses_event_link_when_binance_exit_precedes_manual_mt4_clo
     assert "原因：本单盈利+28.97985952U" in items[0].status
     assert "MT4盈亏+58.8U" in items[0].status
     assert "币安合约盈亏-30.63U" in items[0].status
+
+
+def test_trade_history_event_links_prevent_manual_close_batch_cross_pair_mix():
+    items = _build_trade_history(
+        [
+            mt4_order(1, 100_000, 200_100, "4081", "4017", "-64"),
+            mt4_order(2, 110_000, 360_000, "4060", "4014", "-46"),
+            mt4_order(3, 120_000, 360_001, "4044", "4014", "-30"),
+            mt4_order(4, 190_000, 360_002, "4010", "4014", "4"),
+        ],
+        [
+            binance_trade(800, "SELL", "1", "4083", "0", 100_000),
+            binance_trade(801, "SELL", "1", "4063", "0", 110_000),
+            binance_trade(802, "SELL", "1", "4047", "0", 120_000),
+            binance_trade(900, "BUY", "3", "4022", "120", 200_000),
+            binance_trade(803, "SELL", "1", "4014", "0", 210_000),
+            binance_trade(901, "BUY", "1", "4016", "-2", 300_000),
+        ],
+        [],
+        [
+            {
+                "id": 1,
+                "ts": "1970-01-01T00:01:40+00:00",
+                "kind": "v2_pair_open",
+                "payload": {"pair_id": "old", "mt4_ticket": 1, "mt4_tickets": [1], "opened_ms": 100_000},
+            },
+            {
+                "id": 2,
+                "ts": "1970-01-01T00:02:00+00:00",
+                "kind": "v2_pair_added",
+                "payload": {"pair_id": "old", "mt4_tickets": [1, 2, 3], "opened_ms": 100_000},
+            },
+            {
+                "id": 3,
+                "ts": "1970-01-01T00:03:20+00:00",
+                "kind": "v2_exit_order",
+                "payload": {"order_id": "900", "timestamp_ms": 200_000},
+            },
+            {
+                "id": 4,
+                "ts": "1970-01-01T00:03:21+00:00",
+                "kind": "v2_pair_closed",
+                "payload": {"pair_id": "old", "tickets": [1, 2, 3]},
+            },
+            {
+                "id": 5,
+                "ts": "1970-01-01T00:03:30+00:00",
+                "kind": "v2_pair_open",
+                "payload": {"pair_id": "new", "mt4_ticket": 4, "mt4_tickets": [4], "opened_ms": 210_000},
+            },
+            {
+                "id": 6,
+                "ts": "1970-01-01T00:05:00+00:00",
+                "kind": "v2_exit_order",
+                "payload": {"order_id": "901", "timestamp_ms": 300_000},
+            },
+            {
+                "id": 7,
+                "ts": "1970-01-01T00:06:00+00:00",
+                "kind": "manual_flat_pair_cleared",
+                "payload": {"pair_id": "new", "binance_position_qty": "0", "mt4_positions": []},
+            },
+        ],
+    )
+
+    old_item = next(item for item in items if set(item.mt4_tickets or []) == {1, 2, 3})
+    new_item = next(item for item in items if set(item.mt4_tickets or []) == {4})
+
+    assert old_item.binance_exit_order_id == "900"
+    assert old_item.binance_realized_pnl == Decimal("120")
+    assert old_item.net_pnl == Decimal("-20")
+    assert new_item.binance_exit_order_id == "901"
+    assert new_item.net_pnl == Decimal("2")
+    assert all(set(item.mt4_tickets or []) != {2, 3, 4} for item in items)
 
 
 def test_trade_history_separates_v1_and_v2_versions(monkeypatch):

@@ -178,3 +178,95 @@ async def test_v2_add_position_merges_pair_after_binance_fill_and_mt4_follow(tmp
     await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "10"}})
     assert run.state == StrategyState.PAIR_OPEN
     assert executor.active_order is None
+
+
+@pytest.mark.asyncio
+async def test_v2_exit_closes_all_mt4_tickets_before_clearing_pair(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", MAX_ADD_COUNT=1)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(short_plan("101"))
+    client.set_quote(Decimal("101"), Decimal("101.2"))
+    await executor.step(short_plan("101"))
+    command = mt4.next_command()
+    mt4.submit_report(
+        Mt4Report(
+            command_id=command["command_id"],
+            status="ok",
+            action="BUY",
+            ticket=7,
+            fill_price=Decimal("99"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await executor.step(short_plan("101"))
+
+    client.set_quote(Decimal("104"), Decimal("104.2"))
+    mt4_tick(mt4, "100.8", "101")
+    await executor.step(add_plan("105"))
+    client.set_quote(Decimal("105"), Decimal("105.2"))
+    await executor.step(add_plan("105"))
+    add_command = mt4.next_command()
+    mt4.submit_report(
+        Mt4Report(
+            command_id=add_command["command_id"],
+            status="ok",
+            action="BUY",
+            ticket=8,
+            fill_price=Decimal("101.5"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await executor.step(add_plan("105"))
+
+    executor.post_add_exit_block_until_ms = 0
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("100.8"),
+            ask=Decimal("101.1"),
+            positions=[],
+        )
+    )
+    client.set_quote(Decimal("101"), Decimal("101.2"))
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "10"}})
+    assert run.state == StrategyState.QUOTING_BINANCE_EXIT
+
+    client.set_quote(Decimal("100.8"), executor.active_order.price)
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "10"}})
+    first_close = mt4.next_command()
+    second_close = mt4.next_command()
+    assert {first_close["ticket"], second_close["ticket"]} == {7, 8}
+
+    mt4.submit_report(
+        Mt4Report(
+            command_id=first_close["command_id"],
+            status="ok",
+            action="CLOSE",
+            ticket=first_close["ticket"],
+            fill_price=Decimal("100.8"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await executor.step({"selected_entry": {"ready": False}})
+    assert run.state == StrategyState.CLOSING_MT4
+    assert run.open_pair is not None
+
+    mt4.submit_report(
+        Mt4Report(
+            command_id=second_close["command_id"],
+            status="ok",
+            action="CLOSE",
+            ticket=second_close["ticket"],
+            fill_price=Decimal("100.8"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await executor.step({"selected_entry": {"ready": False}})
+    assert run.state == StrategyState.IDLE
+    assert run.open_pair is None

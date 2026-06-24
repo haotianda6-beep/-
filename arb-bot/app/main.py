@@ -621,6 +621,7 @@ def _build_trade_history(
 ) -> list[TradeHistoryItem]:
     items: list[TradeHistoryItem] = []
     combined_binance_trades = _combined_binance_order_trades(binance_trades)
+    event_links = _build_event_exit_links(event_rows or [])
     exit_allocations = _allocate_exit_trades(mt4_orders, combined_binance_trades)
     for mt4_order in mt4_orders:
         quantity_oz = mt4_order.lots * settings.mt4_lot_size_oz
@@ -664,11 +665,12 @@ def _build_trade_history(
                 status=status,
             )
         )
-    grouped_items = _group_trade_history_items(items)
+    event_grouped_items = _group_event_linked_trade_history_items(items, event_links)
+    grouped_items = _group_trade_history_items(event_grouped_items)
     event_aligned_items = _align_event_linked_trade_history_items(
         grouped_items,
         combined_binance_trades,
-        _build_event_exit_links(event_rows or []),
+        event_links,
     )
     aligned_items = _align_unmatched_trade_history_items(event_aligned_items, combined_binance_trades)
     funded_items = _apply_funding_income(aligned_items, funding_rows or [])
@@ -685,36 +687,87 @@ def _trade_history_version(open_time_ms: int | None, close_time_ms: int | None) 
 
 def _build_event_exit_links(events: list[dict[str, Any]]) -> dict[frozenset[int], dict[str, Any]]:
     links: dict[frozenset[int], dict[str, Any]] = {}
+    pair_tickets: dict[str, frozenset[int]] = {}
+    pair_opened_ms: dict[str, int] = {}
+    current_pair_id: str | None = None
+    latest_exit_by_pair: dict[str, dict[str, Any]] = {}
     latest_exit_order_id: str | None = None
     latest_exit_ms: int | None = None
     for event in sorted(events, key=lambda row: int(row.get("id") or 0)):
         kind = str(event.get("kind") or "")
         payload = event.get("payload") or {}
         event_ms = _event_time_ms(event)
-        if kind in {"exit_order", "exit_order_filled", "exit_cancel_race_filled_following_mt4"}:
+        pair_id = payload.get("pair_id")
+        if kind in {"v2_pair_open", "v2_pair_added"}:
+            pair_id = str(pair_id or "")
+            tickets = _event_payload_tickets(payload)
+            if pair_id and tickets:
+                pair_tickets[pair_id] = tickets
+                opened_ms = _int_field(payload, "opened_ms")
+                if opened_ms is not None:
+                    pair_opened_ms[pair_id] = opened_ms
+                current_pair_id = pair_id
+        if kind in {"exit_order", "exit_order_filled", "exit_cancel_race_filled_following_mt4", "v2_exit_order"}:
             order_id = payload.get("order_id")
             if order_id:
                 latest_exit_order_id = str(order_id)
                 latest_exit_ms = _int_field(payload, "timestamp_ms") or event_ms
-        if kind != "open_pair_live_mismatch_paused":
+                if current_pair_id:
+                    latest_exit_by_pair[current_pair_id] = {
+                        "exit_order_id": latest_exit_order_id,
+                        "exit_ms": latest_exit_ms,
+                    }
+        if kind == "v2_pair_closed":
+            pair_id = str(pair_id or "")
+            tickets = pair_tickets.get(pair_id) or _event_payload_tickets(payload)
+            exit_info = latest_exit_by_pair.get(pair_id) if pair_id else None
+            if tickets and exit_info:
+                links.setdefault(
+                    tickets,
+                    {
+                        "exit_order_id": exit_info["exit_order_id"],
+                        "pair_id": pair_id,
+                        "linked_ms": event_ms or exit_info["exit_ms"],
+                        "exit_ms": exit_info["exit_ms"],
+                        "opened_ms": pair_opened_ms.get(pair_id),
+                    },
+                )
+            continue
+        if kind not in {"open_pair_live_mismatch_paused", "manual_flat_pair_cleared"}:
             continue
         if Decimal(str(payload.get("binance_position_qty") or "0")) != 0:
             continue
         positions = payload.get("mt4_positions") or []
         tickets = frozenset(int(position["ticket"]) for position in positions if position.get("ticket") is not None)
-        if not tickets or not latest_exit_order_id or latest_exit_ms is None or event_ms is None:
+        if not tickets and pair_id:
+            tickets = pair_tickets.get(str(pair_id)) or frozenset()
+        exit_info = latest_exit_by_pair.get(str(pair_id)) if pair_id else None
+        order_id = (exit_info or {}).get("exit_order_id") or latest_exit_order_id
+        exit_ms = (exit_info or {}).get("exit_ms") or latest_exit_ms
+        if not tickets or not order_id or exit_ms is None or event_ms is None:
             continue
-        if event_ms - latest_exit_ms > HISTORY_EVENT_EXIT_LINK_WINDOW_MS:
+        if kind != "manual_flat_pair_cleared" and event_ms - exit_ms > HISTORY_EVENT_EXIT_LINK_WINDOW_MS:
             continue
         links.setdefault(
             tickets,
             {
-                "exit_order_id": latest_exit_order_id,
+                "exit_order_id": order_id,
                 "pair_id": payload.get("pair_id"),
                 "linked_ms": event_ms,
+                "exit_ms": exit_ms,
+                "opened_ms": pair_opened_ms.get(str(pair_id)) if pair_id else None,
             },
         )
     return links
+
+
+def _event_payload_tickets(payload: dict[str, Any]) -> frozenset[int]:
+    tickets = payload.get("mt4_tickets") or payload.get("tickets") or []
+    result = {int(ticket) for ticket in tickets if ticket is not None}
+    ticket = payload.get("mt4_ticket") or payload.get("ticket")
+    if ticket is not None:
+        result.add(int(ticket))
+    return frozenset(result)
 
 
 def _event_time_ms(event: dict[str, Any]) -> int | None:
@@ -758,7 +811,15 @@ def _align_event_linked_trade_history_items(
         if str(final_exit_trade.get("side")) != exit_side.value:
             aligned.append(item)
             continue
-        realized_trades = _realized_binance_trades_between(trades, exit_side, item.open_time_ms, item.close_time_ms)
+        realized_start_ms = _int_field(link, "opened_ms") or item.open_time_ms
+        realized_until_ms = _int_field(link, "exit_ms") or _int_field(link, "linked_ms") or item.close_time_ms
+        realized_trades = _realized_binance_trades_between(
+            trades,
+            exit_side,
+            realized_start_ms,
+            realized_until_ms,
+            tolerance_ms=0,
+        )
         final_order_id = str(final_exit_trade.get("orderId") or final_exit_trade.get("order_id") or "")
         if final_order_id and all(str(trade.get("orderId") or trade.get("order_id") or "") != final_order_id for trade in realized_trades):
             realized_trades.append(final_exit_trade)
@@ -789,13 +850,41 @@ def _align_event_linked_trade_history_items(
     return aligned
 
 
-def _realized_binance_trades_between(trades: list[dict], side: Side, start_ms: int, end_ms: int) -> list[dict]:
+def _group_event_linked_trade_history_items(
+    items: list[TradeHistoryItem],
+    links: dict[frozenset[int], dict[str, Any]],
+) -> list[TradeHistoryItem]:
+    if not links:
+        return items
+    ticket_to_group: dict[int, frozenset[int]] = {}
+    for tickets in links:
+        for ticket in tickets:
+            ticket_to_group[ticket] = tickets
+    grouped: dict[frozenset[int], list[TradeHistoryItem]] = {}
+    rest: list[TradeHistoryItem] = []
+    for item in items:
+        tickets = item.mt4_tickets or ([] if item.mt4_ticket is None else [item.mt4_ticket])
+        keys = {ticket_to_group[ticket] for ticket in tickets if ticket in ticket_to_group}
+        if len(keys) == 1:
+            grouped.setdefault(next(iter(keys)), []).append(item)
+        else:
+            rest.append(item)
+    return [_merge_trade_group(group) for group in grouped.values()] + rest
+
+
+def _realized_binance_trades_between(
+    trades: list[dict],
+    side: Side,
+    start_ms: int,
+    end_ms: int,
+    tolerance_ms: int = 60_000,
+) -> list[dict]:
     rows = []
     for trade in trades:
         if str(trade.get("side")) != side.value:
             continue
         trade_time = _int_field(trade, "time")
-        if trade_time is None or trade_time < start_ms - 60_000 or trade_time > end_ms + 60_000:
+        if trade_time is None or trade_time < start_ms - tolerance_ms or trade_time > end_ms + tolerance_ms:
             continue
         realized = _decimal_field(trade, "realizedPnl") or Decimal("0")
         if realized == 0:
@@ -1367,10 +1456,11 @@ async def _strategy_loop() -> None:
             if settings.gold_v2_observation_only:
                 strategy.last_error = None
             else:
-                metrics = await _position_metrics()
-                await v2_executor.step(
-                    await _gold_v2_status(metrics, binance_client.latest_quote(), mt4_bridge.latest_quote())
-                )
+                if not await _reconcile_open_pair_live_state():
+                    metrics = await _position_metrics()
+                    await v2_executor.step(
+                        await _gold_v2_status(metrics, binance_client.latest_quote(), mt4_bridge.latest_quote())
+                    )
         except Exception as exc:  # noqa: BLE001
             strategy.last_error = str(exc)[:240]
             logger.exception("strategy loop error")
@@ -1434,18 +1524,21 @@ async def _reconcile_open_pair_live_state() -> bool:
             {
                 "pair_id": pair.pair_id,
                 "binance_position_qty": str(binance_qty),
+                "active_order": v2_executor.active_order.model_dump(mode="json") if v2_executor.active_order else None,
                 "mt4_positions": [
                     {"ticket": position.ticket, "symbol": position.symbol, "side": position.side.value, "lots": str(position.lots)}
                     for position in mt4_positions
                 ],
             },
         )
+        v2_executor.clear()
         strategy.clear_runtime_state()
         _persist_runtime_state()
         return True
     if action == "pause":
         mt4_symbol_positions = [position for position in mt4_positions if position.symbol == settings.mt4_symbol]
         if binance_qty == 0 and mt4_symbol_positions:
+            v2_executor.clear()
             if strategy.queue_mt4_close_after_binance_flat_mismatch(mt4_symbol_positions):
                 storage.record_event(
                     "open_pair_live_mismatch_auto_mt4_close",
