@@ -107,6 +107,11 @@ async def startup() -> None:
     global _loop_task
     await binance_client.start()
     _load_runtime_state()
+    if settings.gold_v2_observation_only and settings.is_dry_run:
+        if isinstance(binance_client, PaperBinanceClient):
+            binance_client.clear_orders()
+        strategy.clear_runtime_state()
+        _persist_runtime_state()
     await _reconcile_live_startup_state()
     mode = "dry-run" if settings.is_dry_run else "live"
     logger.info("arb executor starting mode=%s symbol=%s/%s", mode, settings.binance_symbol, settings.mt4_symbol)
@@ -1331,7 +1336,9 @@ async def _restart_after_response() -> None:
 async def _strategy_loop() -> None:
     while True:
         try:
-            if _live_pair_operation_cooldown_until_ms > _now_ms():
+            if settings.gold_v2_observation_only:
+                strategy.last_error = None
+            elif _live_pair_operation_cooldown_until_ms > _now_ms():
                 remaining_ms = _live_pair_operation_cooldown_until_ms - _now_ms()
                 if strategy.open_pair is not None and strategy.state == StrategyState.PAIR_OPEN:
                     strategy.last_error = f"币安接口临时限频冷却中，约 {max(1, remaining_ms // 1000)} 秒后重新对账"
