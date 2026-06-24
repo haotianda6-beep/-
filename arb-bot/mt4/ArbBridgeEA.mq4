@@ -410,6 +410,11 @@ long NextRolloverMs()
    datetime serverDate = StrToTime(TimeToString(nowServer, TIME_DATE));
    datetime nextServer = serverDate + 86400;
    int serverOffsetSec = (int)MathRound((TimeCurrent() - TimeGMT()) / 60.0) * 60;
+   datetime nowUtc = TimeGMT();
+   while (nextServer - serverOffsetSec <= nowUtc)
+   {
+      nextServer += 86400;
+   }
    return (long)(nextServer - serverOffsetSec) * 1000;
 }
 
