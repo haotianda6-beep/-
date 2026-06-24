@@ -4,7 +4,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from app.api import routes
-from app.core.models import BotSettings, CashCarryOpportunity, DataSource, ExchangeName
+from app.core.models import BotSettings, CashCarryOpportunity, CashCarryPositionRow, DataSource, ExchangeName, PositionSnapshot
 from app.services.arbitrage_engine import ArbitrageEngine
 from app.services.live_market_types import CashCarryScan
 from app.services.settings_store import SettingsStore
@@ -95,6 +95,18 @@ def test_cash_positions_snapshot_refreshes_in_background(tmp_path) -> None:
     assert engine.cash_carry_positions.started is True
 
 
+def test_cash_positions_snapshot_drops_stale_spot_only_cache_when_live_perp_arrives(tmp_path) -> None:
+    engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
+    engine.cash_carry_positions = _SlowCashPositionBuilder()
+    engine._cash_positions_cache = [_cash_position_row(status="spot_only", perp_side="none", perp_base="0")]
+    engine._cash_positions_cache_at = time.monotonic()
+
+    rows = engine._cash_positions_snapshot([_live_position()], [], BotSettings())
+
+    assert rows == []
+    assert engine._cash_positions_refreshing is True
+
+
 class _SlowCashPositionBuilder:
     started = False
 
@@ -105,6 +117,48 @@ class _SlowCashPositionBuilder:
         self.started = True
         time.sleep(0.2)
         return []
+
+
+def _live_position() -> PositionSnapshot:
+    return PositionSnapshot(
+        exchange=ExchangeName.BITGET,
+        symbol="USUSDT",
+        side="short",
+        quantity=Decimal("100"),
+        entry_price=Decimal("1"),
+        mark_price=Decimal("1.1"),
+        leverage=Decimal("3"),
+        unrealized_pnl=Decimal("-10"),
+        liquidation_price=Decimal("1.8"),
+    )
+
+
+def _cash_position_row(status: str = "matched", perp_side: str = "short", perp_base: str = "100") -> CashCarryPositionRow:
+    return CashCarryPositionRow(
+        exchange=ExchangeName.BITGET,
+        symbol="USUSDT",
+        status=status,
+        spot_quantity=Decimal("100"),
+        spot_entry_price=Decimal("1"),
+        spot_price=Decimal("1"),
+        spot_unrealized_pnl=Decimal("0"),
+        perp_side=perp_side,
+        perp_contracts=Decimal("100"),
+        perp_base_quantity=Decimal(perp_base),
+        contract_size=Decimal("1"),
+        perp_entry_price=Decimal("1"),
+        perp_mark_price=Decimal("1.1"),
+        leverage=Decimal("3"),
+        perp_unrealized_pnl=Decimal("-10"),
+        estimated_funding_rate_pct=Decimal("0"),
+        estimated_funding_income=Decimal("0"),
+        estimated_open_fee=Decimal("0.1"),
+        estimated_close_fee=Decimal("0.1"),
+        current_net_profit=Decimal("-10.2"),
+        quantity_gap=Decimal("0"),
+        basis_pct=Decimal("10"),
+        updated_at=datetime.now(timezone.utc),
+    )
 
 
 def _cash_opportunity() -> CashCarryOpportunity:
@@ -156,3 +210,6 @@ def _reset_snapshot_state() -> None:
     routes._snapshot_json_cache = ""
     routes._snapshot_cache_at = 0.0
     routes._snapshot_refreshing = False
+    routes.engine._cash_positions_cache = []
+    routes.engine._cash_positions_cache_at = 0.0
+    routes.engine._cash_positions_refreshing = False

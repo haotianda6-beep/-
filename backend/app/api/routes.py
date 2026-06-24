@@ -302,12 +302,15 @@ def _lightweight_snapshot() -> RealtimeSnapshot:
     now = datetime.now(timezone.utc)
     live_enabled = engine.live_read.live_data_enabled()
     runtime = engine.live_runtime.get(settings) if live_enabled and _lightweight_cash_carry_enabled() else None
-    balances = runtime.account.balances if runtime else []
-    positions = runtime.account.positions if runtime else []
-    cash_opps = _trim(runtime.cash_carry.opportunities if runtime else [], 20)
-    cash_candidates = _trim(runtime.cash_carry.candidates if runtime else [], 50)
-    alpha_opps = _trim(runtime.alpha_alert.opportunities if runtime else [], 20)
-    alpha_candidates = _trim(runtime.alpha_alert.candidates if runtime else [], 80)
+    account = getattr(runtime, "account", None)
+    cash_scan = getattr(runtime, "cash_carry", None)
+    alpha_scan = getattr(runtime, "alpha_alert", None)
+    balances = getattr(account, "balances", []) if account else []
+    positions = getattr(account, "positions", []) if account else []
+    cash_opps = _trim(getattr(cash_scan, "opportunities", []) if cash_scan else [], 20)
+    cash_candidates = _trim(getattr(cash_scan, "candidates", []) if cash_scan else [], 50)
+    alpha_opps = _trim(getattr(alpha_scan, "opportunities", []) if alpha_scan else [], 20)
+    alpha_candidates = _trim(getattr(alpha_scan, "candidates", []) if alpha_scan else [], 80)
     cash_prices = [*cash_opps, *cash_candidates]
     cash_positions = engine._cash_positions_snapshot(positions, cash_prices, settings) if live_enabled else []
     risk_events = [
@@ -323,11 +326,12 @@ def _lightweight_snapshot() -> RealtimeSnapshot:
     risk_events.extend(
         engine.get_risk_events(
             settings,
-            runtime.account.issues if runtime else [],
-            runtime.cash_carry.issues if runtime else ["正向期现实时扫描未启动"],
-            runtime.alpha_alert.issues if runtime else ["币安 Alpha 提醒后台未启动"],
+            getattr(account, "issues", []) if account else [],
+            getattr(cash_scan, "issues", ["正向期现实时扫描未启动"]) if cash_scan else ["正向期现实时扫描未启动"],
+            getattr(alpha_scan, "issues", ["币安 Alpha 提醒后台未启动"]) if alpha_scan else ["币安 Alpha 提醒后台未启动"],
             [],
             cash_positions,
+            positions,
         )
     )
     return RealtimeSnapshot(

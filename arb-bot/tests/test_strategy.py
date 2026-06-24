@@ -1728,6 +1728,56 @@ async def test_add_position_records_actual_add_fill_spread(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_add_fill_rolls_back_when_projected_mt4_edge_is_below_trigger(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        PositionTrackingPaperClient,
+        settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 2},
+    )
+    await open_live_pair(engine, client, mt4, ticket=111111)
+    age_open_pair_for_add(engine)
+    client.set_quote(Decimal("2002"), Decimal("2003"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("2000"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+            account_margin=Decimal("4.34"),
+        )
+    )
+    await engine.step()
+
+    add_order = engine.active_order
+    assert add_order is not None
+    assert engine.active_add_trigger_edge == Decimal("3")
+    await client.simulate_fill(add_order.order_id, Decimal("1"), Decimal("2004.2"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("2001.7"),
+            ask=Decimal("2002.2"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+            account_margin=Decimal("4.34"),
+        )
+    )
+    await engine.step()
+
+    assert mt4.next_command()["command"] == "NONE"
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.open_pair is not None
+    assert engine.open_pair.quantity_oz == Decimal("1")
+    rollback_orders = [order for order in client._orders.values() if order.reduce_only]
+    assert rollback_orders
+    assert rollback_orders[-1].side == Side.BUY
+    assert rollback_orders[-1].executed_qty == Decimal("1")
+
+
+@pytest.mark.asyncio
 async def test_exit_repair_does_not_move_add_ladder_anchor_after_add(tmp_path):
     engine, _client, mt4 = await make_engine(tmp_path, PositionTrackingPaperClient)
     engine.open_pair = OpenPair(

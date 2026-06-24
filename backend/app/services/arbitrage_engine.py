@@ -71,6 +71,7 @@ class ArbitrageEngine:
             live_runtime.alpha_alert.issues if live_runtime else [],
             live_runtime.mt4_spread_issues if live_runtime else [],
             cash_positions,
+            positions,
         )
         return RealtimeSnapshot(
             balances=balances,
@@ -118,9 +119,11 @@ class ArbitrageEngine:
                 self._cash_positions_cache = []
                 self._cash_positions_cache_at = time.monotonic()
             return []
+        live_keys = {(ExchangeName(item.exchange), item.symbol) for item in positions}
         with self._cash_positions_lock:
             cached = list(self._cash_positions_cache)
-            stale = time.monotonic() - self._cash_positions_cache_at > 5
+            conflict = self._cash_position_cache_conflicts_with_live(cached, live_keys)
+            stale = conflict or time.monotonic() - self._cash_positions_cache_at > 5
             if stale and not self._cash_positions_refreshing:
                 self._cash_positions_refreshing = True
                 threading.Thread(
@@ -129,7 +132,23 @@ class ArbitrageEngine:
                     daemon=True,
                     name="cash-position-refresh",
                 ).start()
-            return cached
+            return [] if conflict else cached
+
+    def _cash_position_cache_conflicts_with_live(
+        self,
+        cached: list[CashCarryPositionRow],
+        live_keys: set[tuple[ExchangeName, str]],
+    ) -> bool:
+        if not live_keys:
+            return False
+        cached_by_key = {(ExchangeName(row.exchange), row.symbol): row for row in cached}
+        for key in live_keys:
+            row = cached_by_key.get(key)
+            if row is None:
+                return True
+            if row.perp_side == "none" or row.perp_base_quantity <= 0 or row.status == "spot_only":
+                return True
+        return False
 
     def _refresh_cash_positions(self, positions: list[PositionSnapshot], cash_prices: list, settings: BotSettings) -> None:
         try:
@@ -150,6 +169,7 @@ class ArbitrageEngine:
         alpha_alert_issues: list[str] | None = None,
         mt4_spread_issues: list[str] | None = None,
         cash_carry_positions: list[CashCarryPositionRow] | None = None,
+        live_positions: list[PositionSnapshot] | None = None,
     ) -> list[RiskEvent]:
         now = datetime.now(timezone.utc)
         events = []
@@ -169,6 +189,7 @@ class ArbitrageEngine:
             events.append(RiskEvent(id=f"alpha-alert-issue-{index}", severity="warning", title="币安 Alpha 提醒异常", detail=issue, action="检查币安 Alpha 公共行情接口和服务器网络。", created_at=now))
         for index, issue in enumerate(mt4_spread_issues or []):
             events.append(RiskEvent(id=f"mt4-spread-issue-{index}", severity="warning", title="MT4 价差扫描异常", detail=issue, action="检查 MT4 插件报价推送、品种映射和交易所合约行情接口。", created_at=now))
+        events.extend(self._liquidation_distance_events(live_positions or [], now))
         events.extend(self._cash_carry_add_config_events(settings, now))
         for result in recent_execution_results():
             if result["status"] not in {"failed", "blocked_by_safety_gate"}:
@@ -182,6 +203,36 @@ class ArbitrageEngine:
         if settings.emergency_close_enabled:
             events.append(RiskEvent(id="emergency-close", severity="critical", title="紧急平仓开关已打开", detail="系统应停止新开仓并准备执行保护性平仓。", action="检查持仓并人工确认。", created_at=now))
         return events
+
+    def _liquidation_distance_events(self, positions: list[PositionSnapshot], now: datetime) -> list[RiskEvent]:
+        events = []
+        for item in positions:
+            if ExchangeName(item.exchange) not in CASH_CARRY_EXCHANGES or item.liquidation_price is None:
+                continue
+            distance = self._liquidation_distance_pct(item)
+            if distance is None or distance > Decimal("20"):
+                continue
+            severity = "critical" if distance <= Decimal("10") else "warning"
+            events.append(
+                RiskEvent(
+                    id=f"liq-distance-{item.exchange}-{item.symbol}",
+                    severity=severity,
+                    title="正向期现强平距离过近",
+                    detail=f"{item.exchange} {item.symbol} 当前标记价 {item.mark_price}，强平价 {item.liquidation_price}，距离约 {distance:.2f}%。",
+                    action="暂停该交易所新开仓；若距离继续缩小，优先补保证金、降低杠杆或人工减仓，避免再次强平。",
+                    created_at=now,
+                )
+            )
+        return events
+
+    def _liquidation_distance_pct(self, position: PositionSnapshot) -> Decimal | None:
+        if position.mark_price <= 0 or position.liquidation_price is None or position.liquidation_price <= 0:
+            return None
+        if position.side == "short":
+            distance = (position.liquidation_price - position.mark_price) / position.mark_price * Decimal("100")
+        else:
+            distance = (position.mark_price - position.liquidation_price) / position.mark_price * Decimal("100")
+        return distance if distance >= 0 else Decimal("0")
 
     def _cash_carry_add_config_events(self, settings: BotSettings, now: datetime) -> list[RiskEvent]:
         if (

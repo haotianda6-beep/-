@@ -88,7 +88,8 @@ def test_trade_history_store_keeps_unreconciled_cash_carry_closed_rows(tmp_path)
     assert rows[0].strategy_type == "cash_carry"
     assert rows[0].symbol == "AIAUSDT"
     assert rows[0].reconcile_status == "pending"
-    assert rows[0].close_reason == "合约腿已平，现货单腿已人工卖出"
+    assert rows[0].close_reason.startswith("合约腿已平，现货单腿已人工卖出；原因总结：")
+    assert "真实净利" in rows[0].close_reason
 
 
 def test_trade_history_store_shows_cash_carry_liquidation_mismatch(tmp_path) -> None:
@@ -142,3 +143,4 @@ def test_trade_history_store_shows_cash_carry_liquidation_mismatch(tmp_path) -> 
     assert rows[0].long_close_price is None
     assert rows[0].actual_net_profit == Decimal("-30.394")
     assert rows[0].reconcile_status == "verified"
+    assert "合约腿发生交易所强平" in rows[0].close_reason

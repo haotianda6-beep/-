@@ -1,11 +1,11 @@
 import type { BotSettings, CredentialsOverview, ExchangeCredentialInput, ExchangeName, RealtimeSnapshot, TradeHistory } from "../types/api";
 
 export async function fetchSnapshot(): Promise<RealtimeSnapshot> {
-  const response = await fetch("/api/snapshot");
+  const response = await fetch("/api/snapshot", { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`snapshot request failed: ${response.status}`);
   }
-  return response.json();
+  return parseJson<RealtimeSnapshot>(response, "主控台快照");
 }
 
 export async function saveSettings(settings: BotSettings): Promise<BotSettings> {
@@ -25,7 +25,7 @@ export async function fetchTrades(): Promise<TradeHistory[]> {
   if (!response.ok) {
     throw new Error(`trades request failed: ${response.status}`);
   }
-  return response.json();
+  return parseJson<TradeHistory[]>(response, "做单历史");
 }
 
 export async function fetchCredentials(): Promise<CredentialsOverview> {
@@ -33,7 +33,7 @@ export async function fetchCredentials(): Promise<CredentialsOverview> {
   if (!response.ok) {
     throw new Error(`credentials request failed: ${response.status}`);
   }
-  return response.json();
+  return parseJson<CredentialsOverview>(response, "API 管理");
 }
 
 export async function saveExchangeCredentials(exchange: ExchangeName, payload: ExchangeCredentialInput): Promise<CredentialsOverview> {
@@ -115,13 +115,32 @@ async function errorText(response: Response, fallback: string): Promise<string> 
   return `${fallback}: ${response.status}`;
 }
 
+async function parseJson<T>(response: Response, label: string): Promise<T> {
+  const contentType = response.headers.get("content-type") || "";
+  const text = await response.text();
+  if (!contentType.includes("application/json")) {
+    throw new Error(`${label}返回了非 JSON 数据，后端或登录代理正在重启`);
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`${label}JSON 解析失败，已保留上一份实时数据`);
+  }
+}
+
 export function createRealtimeSocket(
   onMessage: (snapshot: RealtimeSnapshot) => void,
   onError: () => void,
 ): WebSocket {
   const scheme = window.location.protocol === "https:" ? "wss" : "ws";
   const socket = new WebSocket(`${scheme}://${window.location.host}/ws/realtime`);
-  socket.onmessage = (event) => onMessage(JSON.parse(event.data));
+  socket.onmessage = (event) => {
+    try {
+      onMessage(JSON.parse(event.data));
+    } catch {
+      onError();
+    }
+  };
   socket.onerror = onError;
   return socket;
 }

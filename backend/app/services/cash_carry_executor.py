@@ -184,7 +184,7 @@ class CashCarryExecutor:
         spot_qty = spot_quantity or record.quantity
         perp_qty = perp_quantity or record.quantity
         try:
-            guard_floor = self._close_profit_floor(settings, reason) if self._requires_profit_floor(reason) else Decimal("-999999999")
+            guard_floor = self._close_profit_floor(settings, reason)
             guard = forward_close_depth_guard(
                 spot,
                 swap,
@@ -526,9 +526,6 @@ class CashCarryExecutor:
         if "固定U止盈" in reason and settings.take_profit_usdt > 0:
             return max(base_floor, settings.take_profit_usdt)
         return base_floor
-
-    def _requires_profit_floor(self, reason: str) -> bool:
-        return "亏损" not in reason and "止损" not in reason
 
     def _close_depth_guard_fields(self, guard, min_net_profit: Decimal) -> dict[str, str]:
         return {

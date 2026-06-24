@@ -594,6 +594,12 @@ class StrategyEngine:
                 {"side": hedge_side.value, "quantity": str(qty), "fill_price": str(fill)},
             )
             return
+        if self.adding_to_pair and self.active_add_trigger_edge is not None:
+            projected_mt4_fill = mt4_quote.ask if self.active_plan.mt4_hedge_side == Side.BUY else mt4_quote.bid
+            projected_edge = self._entry_spread(self.active_plan.direction, fill_price, projected_mt4_fill)
+            if projected_edge < self.active_add_trigger_edge:
+                await self._rollback_add_fill_for_edge(qty, projected_edge, self.active_add_trigger_edge, fill_price, projected_mt4_fill)
+                return
         lots = qty / self.settings.mt4_lot_size_oz
         if not self._mt4_lots_executable(lots):
             await self._rollback_unhedgeable_entry_fill(qty, lots)
@@ -610,6 +616,49 @@ class StrategyEngine:
         self.hedge_started_ms = utc_now_ms()
         self.pending_hedge_qty += qty
         self.state = StrategyState.HEDGING_MT4
+
+    async def _rollback_add_fill_for_edge(
+        self,
+        qty: Decimal,
+        projected_edge: Decimal,
+        trigger_edge: Decimal,
+        binance_fill_price: Decimal,
+        mt4_projected_fill: Decimal,
+    ) -> None:
+        if not self.active_order:
+            return
+        side = Side.BUY if self.active_order.side == Side.SELL else Side.SELL
+        position_side = "SHORT" if self.active_order.side == Side.SELL else "LONG"
+        close_order = await self.binance.place_market_order(
+            OrderRequest(
+                symbol=self.settings.binance_symbol,
+                side=side,
+                quantity=qty,
+                post_only=False,
+                reduce_only=True,
+                position_side=position_side,
+            )
+        )
+        self.storage.record_event(
+            "add_fill_edge_rolled_back",
+            {
+                "entry_order_id": self.active_order.order_id,
+                "entry_side": self.active_order.side.value,
+                "quantity": str(qty),
+                "binance_fill_price": str(binance_fill_price),
+                "mt4_projected_fill": str(mt4_projected_fill),
+                "projected_edge": str(projected_edge),
+                "trigger_edge": str(trigger_edge),
+                "close_order_id": close_order.order_id,
+                "close_status": close_order.status.value,
+                "close_executed_qty": str(close_order.executed_qty),
+            },
+        )
+        if close_order.executed_qty < qty:
+            self.state = StrategyState.PAUSED
+            self.last_error = "币安补仓价差失效回滚未完全成交，已暂停，请人工确认"
+            return
+        self._clear_entry()
 
     def _mt4_lots_executable(self, lots: Decimal) -> bool:
         if lots < self.settings.mt4_min_lot:

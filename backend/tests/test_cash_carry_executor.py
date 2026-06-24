@@ -303,7 +303,7 @@ def test_cash_carry_close_blocks_when_depth_guard_estimates_loss(tmp_path) -> No
     assert executor.swap.orders == []
 
 
-def test_cash_carry_loss_exit_is_not_blocked_by_profit_floor(tmp_path) -> None:
+def test_cash_carry_loss_exit_is_blocked_by_profit_floor(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = _RecordingExecutor(state)
     executor.spot.bids = [[99.9, 100]]
@@ -313,9 +313,10 @@ def test_cash_carry_loss_exit_is_not_blocked_by_profit_floor(tmp_path) -> None:
     result = executor.evaluate_close([_opportunity(basis="0.1", funding="0")], settings, [_position_row(net="-1.2", basis="0.1", funding="0")])
 
     assert result is not None
-    assert result.status == "close_submitted"
-    assert executor.spot.orders
-    assert executor.swap.orders
+    assert result.status == "blocked_by_depth"
+    assert "盘口可成交净利" in result.reason
+    assert executor.spot.orders == []
+    assert executor.swap.orders == []
 
 
 def test_gate_transfer_is_skipped_when_spot_and_swap_have_enough_usdt(tmp_path) -> None:

@@ -77,7 +77,7 @@ class TradeHistoryStore:
                 short_pnl=short_pnl,
                 funding_net=funding,
                 actual_net_profit=net,
-                close_reason=self._close_reason(item.get("close_reason")),
+                close_reason=self._close_reason_with_summary(item.get("close_reason"), total_pnl, funding, fee, net, history),
                 long_order_ids=self._ids(history.get("long_order_ids"), item.get("spot_order_id"), item.get("close_spot_order_id")),
                 short_order_ids=self._ids(history.get("short_order_ids"), item.get("perp_order_id"), item.get("close_perp_order_id")),
                 reconcile_status=ReconcileStatus(history.get("reconcile_status") or "pending"),
@@ -108,3 +108,63 @@ class TradeHistoryStore:
             "manual_flattened": "人工处理平仓",
         }
         return mapping.get(str(reason), str(reason))
+
+    def _close_reason_with_summary(
+        self,
+        reason,
+        total_pnl: Decimal,
+        funding: Decimal,
+        fee: Decimal,
+        net: Decimal,
+        history: dict[str, Any],
+    ) -> str | None:
+        base = self._close_reason(reason) or "历史平仓"
+        if "原因总结：" in base:
+            return base
+        enriched_history = {**history, "close_reason": base}
+        return f"{base}；原因总结：{self._pnl_summary(total_pnl, funding, fee, net, enriched_history)}"
+
+    def _pnl_summary(
+        self,
+        total_pnl: Decimal,
+        funding: Decimal,
+        fee: Decimal,
+        net: Decimal,
+        history: dict[str, Any],
+    ) -> str:
+        pieces = []
+        if self._is_liquidation(history):
+            pieces.append("合约腿发生交易所强平，是主要风险来源")
+        if self._has_quantity_mismatch(history):
+            pieces.append("现货与合约数量不一致，存在单腿或部分对冲风险")
+        if net < 0:
+            if total_pnl > 0 and total_pnl + funding > 0 and fee >= total_pnl + funding:
+                pieces.append("价差毛利润被真实手续费完全吃掉")
+            elif total_pnl > 0 and total_pnl + funding - fee < 0:
+                pieces.append("价差毛利润不足以覆盖手续费和资金费")
+            elif total_pnl < 0:
+                pieces.append("现货和合约合计成交亏损，说明平仓价格未覆盖滑点/价差回撤")
+            else:
+                pieces.append("资金费和手续费扣减后转为亏损")
+        else:
+            if funding > 0:
+                pieces.append("价差收益叠加资金费收入后盈利")
+            elif total_pnl > fee:
+                pieces.append("价差毛利润覆盖手续费后盈利")
+            else:
+                pieces.append("净利为正，但利润空间较薄")
+        pieces.append(f"真实净利 {net} USDT")
+        return "；".join(pieces)
+
+    def _is_liquidation(self, history: dict[str, Any]) -> bool:
+        if str(history.get("external_close_type") or "").lower() == "liquidation":
+            return True
+        text = json.dumps(history, ensure_ascii=False).lower()
+        return "强平" in text or "liquidation" in text or "liq" in text
+
+    def _has_quantity_mismatch(self, history: dict[str, Any]) -> bool:
+        status = str(history.get("reconcile_status") or "").lower()
+        if status == "mismatch":
+            return True
+        quantity = history.get("quantity")
+        return quantity in (None, "")

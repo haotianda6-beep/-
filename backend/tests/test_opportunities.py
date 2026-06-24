@@ -1,7 +1,7 @@
 from decimal import Decimal
 from datetime import datetime, timezone
 
-from app.core.models import BotSettings, CashCarryPositionRow, ExchangeName
+from app.core.models import BotSettings, CashCarryPositionRow, ExchangeName, PositionSnapshot
 from app.services.arbitrage_engine import ArbitrageEngine
 from app.services.market_checks import TransferNetworks, bidirectional_route_check
 from app.services.settings_store import SettingsStore
@@ -71,6 +71,31 @@ def test_cash_carry_add_config_warns_when_limits_block_first_add(tmp_path) -> No
     event = next(item for item in events if item.id == "cash-carry-add-config-blocked")
     assert event.title == "正向期现补仓参数不可执行"
     assert "单币最大仓位 500U" in event.detail
+
+
+def test_cash_carry_liquidation_distance_warns_when_too_close(tmp_path) -> None:
+    engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
+
+    events = engine.get_risk_events(
+        BotSettings(),
+        live_positions=[
+            PositionSnapshot(
+                exchange=ExchangeName.BITGET,
+                symbol="ABCUSDT",
+                side="short",
+                quantity=Decimal("100"),
+                entry_price=Decimal("1"),
+                mark_price=Decimal("1"),
+                leverage=Decimal("3"),
+                unrealized_pnl=Decimal("-1"),
+                liquidation_price=Decimal("1.08"),
+            )
+        ],
+    )
+
+    event = next(item for item in events if item.id == "liq-distance-BITGET-ABCUSDT")
+    assert event.title == "正向期现强平距离过近"
+    assert event.severity == "critical"
 
 
 def _cash_position() -> CashCarryPositionRow:
