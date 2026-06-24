@@ -308,6 +308,33 @@ async def test_v2_mt4_hedge_failure_retries_after_report_without_pause(tmp_path)
     assert "继续重试" in run.last_error
 
 
+def test_v2_recovers_missing_entry_context_from_filled_order(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    order = OrderUpdate(
+        order_id="filled-entry",
+        client_order_id="client-entry",
+        symbol="XAUUSDT",
+        side=Side.SELL,
+        status=OrderStatus.FILLED,
+        price=Decimal("101"),
+        orig_qty=Decimal("1"),
+        executed_qty=Decimal("1"),
+        avg_price=Decimal("101"),
+    )
+
+    executor._queue_mt4_add_or_entry(order)
+
+    command = mt4.next_command()
+    assert run.state == StrategyState.HEDGING_MT4
+    assert command["action"] == "BUY"
+    assert executor.entry_direction == "BINANCE_SHORT_MT4_LONG"
+    assert executor.entry_hedge_side == Side.BUY
+
+
 @pytest.mark.asyncio
 async def test_v2_mt4_close_timeout_waits_pending_command_without_duplicate(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")

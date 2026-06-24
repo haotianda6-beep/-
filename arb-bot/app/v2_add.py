@@ -45,7 +45,11 @@ class V2AddMixin:
 
     def _queue_mt4_add_or_entry(self, order: OrderUpdate) -> None:
         if not self.entry_hedge_side or not self.entry_direction:
-            self._pause("V2 成交缺少方向信息")
+            self._recover_entry_context_from_order(order)
+        if not self.entry_hedge_side or not self.entry_direction:
+            self.runtime.last_error = "V2 成交缺少方向信息，等待下一次循环从实盘状态恢复。"
+            self.storage.record_event("v2_entry_context_missing_recovering", order.model_dump(mode="json"))
+            self.runtime.state = StrategyState.QUOTING_BINANCE_ENTRY
             return
         reason = "v2_add_follow" if self.adding_to_pair else "v2_entry_follow"
         command = self.mt4.queue_market_order(self.entry_hedge_side, lots_from_qty(self.settings, order.executed_qty), reason)
@@ -53,6 +57,27 @@ class V2AddMixin:
         self.hedge_started_ms = utc_now_ms()
         self.runtime.state = StrategyState.HEDGING_MT4
         self.storage.record_event("v2_mt4_add_queued" if self.adding_to_pair else "v2_mt4_entry_queued", {"command_id": command.command_id, "lots": str(command.lots)})
+
+    def _recover_entry_context_from_order(self, order: OrderUpdate) -> None:
+        if self.runtime.open_pair:
+            self.entry_direction = self.runtime.open_pair.direction
+            self.entry_hedge_side = Side.BUY if self.runtime.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else Side.SELL
+            self.storage.record_event(
+                "v2_entry_context_recovered_from_pair",
+                {"order_id": order.order_id, "direction": self.entry_direction.value, "hedge_side": self.entry_hedge_side.value},
+            )
+            return
+        if order.side == Side.SELL:
+            self.entry_direction = PairDirection.BINANCE_SHORT_MT4_LONG
+            self.entry_hedge_side = Side.BUY
+        elif order.side == Side.BUY:
+            self.entry_direction = PairDirection.BINANCE_LONG_MT4_SHORT
+            self.entry_hedge_side = Side.SELL
+        if self.entry_direction and self.entry_hedge_side:
+            self.storage.record_event(
+                "v2_entry_context_recovered_from_order",
+                {"order_id": order.order_id, "side": order.side.value, "direction": self.entry_direction.value, "hedge_side": self.entry_hedge_side.value},
+            )
 
     def _handle_add_report(self, report) -> bool:
         if not self.adding_to_pair:
