@@ -1991,11 +1991,17 @@ def _effective_close_profit_usd_per_oz(pair) -> Decimal:
 def _exit_follow_buffer_usd_per_oz(swap_info, mt4_bars: list[HistoryBar] | None = None) -> Decimal:
     point = swap_info.point or Decimal("0.01")
     configured = (Decimal(settings.mt4_slippage_points) * point) + settings.mt4_close_extra_buffer_usd
-    recent_move = recent_move_budget_usd_per_oz(
-        mt4_bars or [],
+    recent_move = mt4_bridge.recent_move_budget(
+        settings.max_hedge_delay_ms,
         percentile=GOLD_V2_EXIT_BUFFER_MOVE_PERCENTILE,
         min_points=GOLD_V2_EXIT_BUFFER_MIN_POINTS,
     )
+    if recent_move is None:
+        recent_move = recent_move_budget_usd_per_oz(
+        mt4_bars or [],
+        percentile=GOLD_V2_EXIT_BUFFER_MOVE_PERCENTILE,
+        min_points=GOLD_V2_EXIT_BUFFER_MIN_POINTS,
+        )
     return configured + recent_move
 
 

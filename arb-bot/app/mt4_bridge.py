@@ -13,6 +13,7 @@ class Mt4Bridge:
         self.settings = settings
         self._lock = threading.RLock()
         self._quote: MarketQuote | None = None
+        self._quote_history: deque[MarketQuote] = deque(maxlen=2000)
         self._commands: deque[Mt4Command] = deque()
         self._pending: dict[str, Mt4Command] = {}
         self._reports: deque[Mt4Report] = deque()
@@ -32,6 +33,7 @@ class Mt4Bridge:
         quote = MarketQuote(symbol=tick.symbol, bid=tick.bid, ask=tick.ask, timestamp_ms=received_ms)
         with self._lock:
             self._quote = quote
+            self._quote_history.append(quote)
             self._positions = list(tick.positions)
             self._swap_info = Mt4SwapInfo(
                 swap_long_per_lot=tick.swap_long_per_lot,
@@ -69,6 +71,22 @@ class Mt4Bridge:
     def latest_quote(self) -> MarketQuote | None:
         with self._lock:
             return self._quote
+
+    def recent_move_budget(self, lookback_ms: int, percentile: int = 70, min_points: int = 8) -> Decimal | None:
+        now = utc_now_ms()
+        cutoff = now - max(int(lookback_ms), 0)
+        with self._lock:
+            quotes = [quote for quote in self._quote_history if quote.timestamp_ms >= cutoff]
+        if len(quotes) < min_points:
+            return None
+        quotes.sort(key=lambda quote: quote.timestamp_ms)
+        moves = [abs(curr.bid - prev.bid) for prev, curr in zip(quotes, quotes[1:])]
+        if not moves:
+            return None
+        moves.sort()
+        bounded_percentile = min(max(percentile, 0), 100)
+        index = ((len(moves) - 1) * bounded_percentile) // 100
+        return moves[index]
 
     def latest_swap_info(self) -> Mt4SwapInfo:
         with self._lock:

@@ -1755,7 +1755,8 @@ class StrategyEngine:
 
     def _exit_follow_buffer_usd_per_oz(self) -> Decimal:
         point = self.mt4.latest_swap_info().point or Decimal("0.01")
-        return (Decimal(self.settings.mt4_slippage_points) * point) + self.settings.mt4_close_extra_buffer_usd
+        recent_move = self.mt4.recent_move_budget(self.settings.max_hedge_delay_ms)
+        return (Decimal(self.settings.mt4_slippage_points) * point) + self.settings.mt4_close_extra_buffer_usd + (recent_move or Decimal("0"))
 
     def _effective_close_profit_usd_per_oz(self) -> Decimal:
         if not self.open_pair or self.settings.max_pair_age_minutes <= 0:
