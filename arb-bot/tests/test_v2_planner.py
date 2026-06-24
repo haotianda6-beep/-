@@ -132,7 +132,7 @@ def test_v2_blocks_entry_when_next_triple_swap_makes_exit_unsafe(tmp_path):
             mt4_swap_long_per_lot=Decimal("-65.96"),
             mt4_swap_short_per_lot=Decimal("27.09"),
             mt4_swap_type=0,
-            mt4_next_rollover_time_ms=int(datetime(2026, 6, 24, 20, 59, tzinfo=timezone.utc).timestamp() * 1000),
+            mt4_next_rollover_time_ms=int(datetime(2026, 7, 1, 20, 59, tzinfo=timezone.utc).timestamp() * 1000),
         ),
     )
 
@@ -142,6 +142,28 @@ def test_v2_blocks_entry_when_next_triple_swap_makes_exit_unsafe(tmp_path):
     assert status["short_entry"]["exit_viable"] is False
     assert status["short_entry"]["ready"] is False
     assert "隔夜费" in status["short_entry"]["reason"]
+
+
+def test_v2_blocks_entry_when_mt4_rollover_time_is_stale(tmp_path):
+    cfg = settings(tmp_path)
+    store = Storage(cfg.sqlite_path)
+    mt4_bars, binance_bars = recent_bars([Decimal("2")] * 10)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4005.0"), ask=Decimal("4005.2")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(mt4_next_rollover_time_ms=1),
+    )
+
+    assert status["short_entry"]["ready"] is False
+    assert "结算时间已过期" in status["short_entry"]["reason"]
+    assert status["selected_entry"]["reason"] == status["short_entry"]["reason"]
 
 
 def test_v2_short_order_price_keeps_threshold_and_slippage_budget(tmp_path):

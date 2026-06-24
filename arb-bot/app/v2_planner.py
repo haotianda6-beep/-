@@ -135,6 +135,9 @@ def _entry_plan(
     gap_reason = xau_quote_gap_reason(binance, mt4)
     if gap_reason:
         return _missing_plan(direction, threshold, qty, f"报价异常：{gap_reason}")
+    stale_rollover = _stale_rollover_reason(metrics)
+    if stale_rollover:
+        return _missing_plan(direction, threshold, qty, stale_rollover)
     if direction == PairDirection.BINANCE_SHORT_MT4_LONG:
         current_edge = binance.ask - mt4.ask
         limit_price = _round_up(max(binance.ask + settings.binance_entry_offset_usd, mt4.ask + threshold + slippage_budget), filters.tick_size)
@@ -259,6 +262,14 @@ def _entry_settlement_adjustment(
     }
 
 
+def _stale_rollover_reason(metrics: PositionMetrics | None) -> str | None:
+    if not metrics or metrics.mt4_next_rollover_time_ms is None:
+        return None
+    if metrics.mt4_next_rollover_time_ms <= utc_now_ms():
+        return "MT4 隔夜费结算时间已过期，等待 EA 刷新下一次结算时间后再评估开仓"
+    return None
+
+
 def _entry_binance_funding_estimate(
     direction: PairDirection,
     qty: Decimal,
@@ -281,6 +292,8 @@ def _entry_mt4_swap_estimate(
 ) -> Decimal | None:
     raw = metrics.mt4_swap_long_per_lot if direction == PairDirection.BINANCE_SHORT_MT4_LONG else metrics.mt4_swap_short_per_lot
     if raw is None:
+        return None
+    if metrics.mt4_next_rollover_time_ms is not None and metrics.mt4_next_rollover_time_ms <= utc_now_ms():
         return None
     lots = qty / settings.mt4_lot_size_oz
     multiplier = _entry_mt4_swap_multiplier(settings, metrics.mt4_next_rollover_time_ms)

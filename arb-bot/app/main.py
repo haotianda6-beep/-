@@ -2027,6 +2027,8 @@ def _estimate_mt4_swap(pair, qty: Decimal, swap_info) -> Decimal | None:
     raw = swap_info.swap_long_per_lot if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else swap_info.swap_short_per_lot
     if raw is None:
         return None
+    if swap_info.next_rollover_time_ms is not None and swap_info.next_rollover_time_ms <= utc_now_ms():
+        return None
     multiplier = _mt4_swap_multiplier_for_rollover(swap_info.next_rollover_time_ms)
     if swap_info.swap_type == 0:
         if not swap_info.tick_value or not swap_info.tick_size or not swap_info.point:
