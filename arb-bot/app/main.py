@@ -1795,6 +1795,8 @@ def _runtime_config() -> RuntimeConfig:
         mt4_lot_step=settings.mt4_lot_step,
         mt4_slippage_points=settings.mt4_slippage_points,
         mt4_close_extra_buffer_usd=settings.mt4_close_extra_buffer_usd,
+        mt4_triple_swap_weekday=settings.mt4_triple_swap_weekday,
+        mt4_triple_swap_multiplier=settings.mt4_triple_swap_multiplier,
         loop_interval_ms=settings.loop_interval_ms,
         paper_auto_fill=settings.paper_auto_fill,
         paper_fill_delay_ms=settings.paper_fill_delay_ms,
@@ -2025,11 +2027,21 @@ def _estimate_mt4_swap(pair, qty: Decimal, swap_info) -> Decimal | None:
     raw = swap_info.swap_long_per_lot if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else swap_info.swap_short_per_lot
     if raw is None:
         return None
+    multiplier = _mt4_swap_multiplier_for_rollover(swap_info.next_rollover_time_ms)
     if swap_info.swap_type == 0:
         if not swap_info.tick_value or not swap_info.tick_size or not swap_info.point:
-            return raw * lots
-        return raw * (swap_info.point / swap_info.tick_size) * swap_info.tick_value * lots
-    return raw * lots
+            return raw * lots * multiplier
+        return raw * (swap_info.point / swap_info.tick_size) * swap_info.tick_value * lots * multiplier
+    return raw * lots * multiplier
+
+
+def _mt4_swap_multiplier_for_rollover(next_rollover_time_ms: int | None) -> Decimal:
+    if next_rollover_time_ms is None:
+        return Decimal("1")
+    rollover_day = datetime.fromtimestamp(next_rollover_time_ms / 1000, timezone.utc).weekday()
+    if rollover_day == settings.mt4_triple_swap_weekday:
+        return settings.mt4_triple_swap_multiplier
+    return Decimal("1")
 
 
 def _mt4_accrued_swap(pair) -> Decimal | None:
@@ -2177,7 +2189,10 @@ def _negative_swap_close_summary(pair) -> str | None:
     projected_net = _convergence_net_after_next_mt4_swap(pair, estimate)
     ms_left = next_rollover - utc_now_ms()
     lead_ms = settings.negative_swap_close_before_minutes * 60 * 1000
-    if ms_left < 0 or ms_left > lead_ms:
+    if ms_left < 0:
+        net_text = f"，扣后回归净利预估 {projected_net}" if projected_net is not None else ""
+        return f"MT4 下次隔夜费预估亏损 {estimate}{net_text}，结算点刚过，等待 MT4 刷新下一次隔夜费时间。"
+    if ms_left > lead_ms:
         minutes_left = max(0, ms_left // 60000)
         net_text = f"，扣后回归净利预估 {projected_net}" if projected_net is not None else ""
         return f"MT4 下次隔夜费预估亏损 {estimate}{net_text}，距离结算约 {minutes_left} 分钟；低于 {settings.negative_swap_close_before_minutes} 分钟且回归净利不够才会提前平仓。"

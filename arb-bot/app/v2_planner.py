@@ -269,7 +269,14 @@ def _negative_swap_exit_plan(settings: Settings, pair: OpenPair, metrics: Positi
     lead_ms = settings.negative_swap_close_before_minutes * 60 * 1000
     projected_net = _projected_convergence_net_after_next_swap(settings, pair, metrics, estimate)
     minutes_left = max(0, ms_left // 60_000)
-    if ms_left < 0 or ms_left > lead_ms:
+    if ms_left < 0:
+        return {
+            "active": False,
+            "reason": f"MT4 下次隔夜费预估亏损 {estimate}，结算点刚过，等待 MT4 刷新下一次隔夜费时间。",
+            "projected_convergence_net": projected_net,
+            "minutes_left": 0,
+        }
+    if ms_left > lead_ms:
         return {
             "active": False,
             "reason": f"MT4 下次隔夜费预估亏损 {estimate}，距离结算约 {minutes_left} 分钟，未到提前处理窗口。",

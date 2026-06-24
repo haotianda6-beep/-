@@ -390,6 +390,8 @@ class RuntimeConfig(BaseModel):
     mt4_lot_step: Decimal
     mt4_slippage_points: int
     mt4_close_extra_buffer_usd: Decimal
+    mt4_triple_swap_weekday: int
+    mt4_triple_swap_multiplier: Decimal
     loop_interval_ms: int
     paper_auto_fill: bool
     paper_fill_delay_ms: int
@@ -424,6 +426,8 @@ class RuntimeConfigUpdate(BaseModel):
     mt4_lot_step: Decimal | None = None
     mt4_slippage_points: int | None = None
     mt4_close_extra_buffer_usd: Decimal | None = None
+    mt4_triple_swap_weekday: int | None = None
+    mt4_triple_swap_multiplier: Decimal | None = None
     loop_interval_ms: int | None = None
     paper_auto_fill: bool | None = None
     paper_fill_delay_ms: int | None = None
@@ -442,6 +446,7 @@ class RuntimeConfigUpdate(BaseModel):
         "mt4_lot_size_oz",
         "mt4_min_lot",
         "mt4_lot_step",
+        "mt4_triple_swap_multiplier",
         "binance_entry_offset_usd",
     )
     @classmethod
@@ -476,6 +481,7 @@ class RuntimeConfigUpdate(BaseModel):
         "paper_fill_delay_ms",
         "negative_swap_close_before_minutes",
         "max_pair_age_minutes",
+        "mt4_triple_swap_weekday",
     )
     @classmethod
     def positive_int(cls, value: int | None) -> int | None:
@@ -502,6 +508,13 @@ class RuntimeConfigUpdate(BaseModel):
     def valid_max_add_count(cls, value: int | None) -> int | None:
         if value is not None and value < 0:
             raise ValueError("不能小于 0")
+        return value
+
+    @field_validator("mt4_triple_swap_weekday")
+    @classmethod
+    def valid_weekday(cls, value: int | None) -> int | None:
+        if value is not None and (value < 0 or value > 6):
+            raise ValueError("星期必须在 0 到 6 之间")
         return value
 
 

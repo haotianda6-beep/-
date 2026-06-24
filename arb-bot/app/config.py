@@ -40,6 +40,8 @@ CONFIG_FIELD_TO_ENV = {
     "mt4_lot_step": "MT4_LOT_STEP",
     "mt4_slippage_points": "MT4_SLIPPAGE_POINTS",
     "mt4_close_extra_buffer_usd": "MT4_CLOSE_EXTRA_BUFFER_USD",
+    "mt4_triple_swap_weekday": "MT4_TRIPLE_SWAP_WEEKDAY",
+    "mt4_triple_swap_multiplier": "MT4_TRIPLE_SWAP_MULTIPLIER",
     "loop_interval_ms": "LOOP_INTERVAL_MS",
     "paper_auto_fill": "PAPER_AUTO_FILL",
     "paper_fill_delay_ms": "PAPER_FILL_DELAY_MS",
@@ -105,6 +107,8 @@ class Settings(BaseSettings):
     mt4_lot_step: Decimal = Field(default=Decimal("0.01"), alias="MT4_LOT_STEP")
     mt4_slippage_points: int = Field(default=30, alias="MT4_SLIPPAGE_POINTS")
     mt4_close_extra_buffer_usd: Decimal = Field(default=Decimal("3.00"), alias="MT4_CLOSE_EXTRA_BUFFER_USD")
+    mt4_triple_swap_weekday: int = Field(default=2, alias="MT4_TRIPLE_SWAP_WEEKDAY")
+    mt4_triple_swap_multiplier: Decimal = Field(default=Decimal("3"), alias="MT4_TRIPLE_SWAP_MULTIPLIER")
     sqlite_path: Path = Field(default=Path("data/arb.sqlite3"), alias="SQLITE_PATH")
     loop_interval_ms: int = Field(default=50, alias="LOOP_INTERVAL_MS")
     paper_auto_fill: bool = Field(default=True, alias="PAPER_AUTO_FILL")
@@ -127,6 +131,7 @@ class Settings(BaseSettings):
         "binance_entry_offset_usd",
         "binance_tick_size",
         "binance_qty_step",
+        "mt4_triple_swap_multiplier",
     )
     @classmethod
     def positive_decimal(cls, value: Decimal) -> Decimal:
@@ -173,6 +178,13 @@ class Settings(BaseSettings):
     def non_negative_add_count(cls, value: int) -> int:
         if value < 0:
             raise ValueError("max add count must not be negative")
+        return value
+
+    @field_validator("mt4_triple_swap_weekday")
+    @classmethod
+    def valid_weekday(cls, value: int) -> int:
+        if value < 0 or value > 6:
+            raise ValueError("MT4 triple swap weekday must be 0-6")
         return value
 
     @property
