@@ -1,4 +1,7 @@
+import pytest
+
 from app.config import update_local_config_file, update_mode_file
+from app.models import RuntimeConfigUpdate
 
 
 def test_update_local_config_file_only_writes_safe_parameters(tmp_path):
@@ -34,3 +37,8 @@ def test_update_mode_file_only_writes_mode_flags(tmp_path):
     assert "BINANCE_API_KEY=secret-key" in content
     assert "LIVE_TRADING=true" in content
     assert "PAPER_MODE=false" in content
+
+
+def test_runtime_config_rejects_sentinel_open_min_edge():
+    with pytest.raises(ValueError, match="开仓最小价差不能超过"):
+        RuntimeConfigUpdate(open_min_edge="999")

@@ -186,9 +186,12 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         mt4_quote = self.mt4.latest_quote()
         if not pair or not quote or not mt4_quote:
             return
+        post_add_message = "补仓刚完成，等待币安仓位快照稳定后再允许平仓挂单"
         if utc_now_ms() < self.post_add_exit_block_until_ms:
-            self.runtime.last_error = "补仓刚完成，等待币安仓位快照稳定后再允许平仓挂单"
+            self.runtime.last_error = post_add_message
             return
+        if self.runtime.last_error == post_add_message:
+            self.runtime.last_error = None
         target = target_exit_spread(self.settings, pair, plan_status)
         self.exit_target_spread = target
         if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:

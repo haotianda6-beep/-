@@ -449,6 +449,13 @@ class RuntimeConfigUpdate(BaseModel):
             raise ValueError("必须大于 0")
         return value
 
+    @field_validator("open_min_edge")
+    @classmethod
+    def reasonable_open_min_edge(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value > Decimal("50"):
+            raise ValueError("开仓最小价差不能超过 50 美元；如需暂停请使用观察模式或停止实盘")
+        return value
+
     @field_validator("mt4_close_extra_buffer_usd")
     @classmethod
     def non_negative_decimal(cls, value: Decimal | None) -> Decimal | None:

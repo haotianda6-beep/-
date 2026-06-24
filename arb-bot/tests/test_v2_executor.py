@@ -137,6 +137,35 @@ async def test_v2_partial_entry_fill_does_not_queue_mt4(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_v2_clears_stale_post_add_wait_message_after_cooldown(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.last_error = "补仓刚完成，等待币安仓位快照稳定后再允许平仓挂单"
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry-1",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    executor.post_add_exit_block_until_ms = utc_now_ms() - 1
+    client.set_quote(Decimal("100"), Decimal("100.1"))
+    mt4_tick(mt4, "99", "99.2")
+
+    await executor.step({"exit_plan": {"enabled": True, "target_exit_spread": "0.5"}})
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert run.last_error is None
+
+
+@pytest.mark.asyncio
 async def test_v2_terminal_partial_entry_requotes_remaining_then_hedges_total(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False)
     client = PaperBinanceClient(cfg)
