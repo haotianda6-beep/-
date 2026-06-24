@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import app.main as main
+import app.mt4_rollover as mt4_rollover
 from app.models import OpenPair, PairDirection
 from app.main import (
     _dynamic_close_spread,
@@ -80,6 +81,33 @@ def test_mt4_swap_estimate_uses_normal_day(monkeypatch):
         tick_size=None,
         point=None,
         next_rollover_time_ms=int(datetime(2026, 7, 2, 20, 59, tzinfo=timezone.utc).timestamp() * 1000),
+    )
+
+    assert _estimate_mt4_swap(pair, Decimal("1"), swap_info) == Decimal("-0.6596")
+
+
+def test_mt4_swap_estimate_rolls_recent_stale_rollover_to_next_day(monkeypatch):
+    monkeypatch.setattr(main.settings, "mt4_lot_size_oz", Decimal("100"))
+    monkeypatch.setattr(main.settings, "mt4_triple_swap_weekday", 2)
+    monkeypatch.setattr(main.settings, "mt4_triple_swap_multiplier", Decimal("3"))
+    stale_rollover = int(datetime(2026, 7, 1, 20, 59, tzinfo=timezone.utc).timestamp() * 1000)
+    monkeypatch.setattr(main, "utc_now_ms", lambda: stale_rollover + 60_000)
+    monkeypatch.setattr(mt4_rollover, "utc_now_ms", lambda: stale_rollover + 60_000)
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("4013.46"),
+        mt4_entry_price=Decimal("4010.63"),
+        binance_order_id="entry",
+    )
+    swap_info = SimpleNamespace(
+        swap_long_per_lot=Decimal("-65.96"),
+        swap_short_per_lot=Decimal("27.09"),
+        swap_type=0,
+        tick_value=None,
+        tick_size=None,
+        point=None,
+        next_rollover_time_ms=stale_rollover,
     )
 
     assert _estimate_mt4_swap(pair, Decimal("1"), swap_info) == Decimal("-0.6596")

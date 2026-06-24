@@ -6,6 +6,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from app.config import Settings
 from app.models import ExchangeFilters, HistoryBar, MarketQuote, OpenPair, PairDirection, PositionMetrics, Side, utc_now_ms
 from app.mt4_costs import live_spread_usd_per_oz, recent_move_budget_usd_per_oz, slippage_budget_usd_per_oz
+from app.mt4_rollover import normalize_mt4_rollover_ms
 from app.quote_guard import MAX_REASONABLE_XAU_MID_GAP, xau_quote_gap_reason
 from app.storage import Storage
 
@@ -269,7 +270,7 @@ def _entry_settlement_adjustment(
 def _stale_rollover_reason(metrics: PositionMetrics | None) -> str | None:
     if not metrics or metrics.mt4_next_rollover_time_ms is None:
         return None
-    if metrics.mt4_next_rollover_time_ms <= utc_now_ms():
+    if metrics.mt4_next_rollover_time_ms <= utc_now_ms() and normalize_mt4_rollover_ms(metrics.mt4_next_rollover_time_ms) is None:
         return "MT4 隔夜费结算时间已过期，等待 EA 刷新下一次结算时间后再评估开仓"
     return None
 
@@ -297,10 +298,11 @@ def _entry_mt4_swap_estimate(
     raw = metrics.mt4_swap_long_per_lot if direction == PairDirection.BINANCE_SHORT_MT4_LONG else metrics.mt4_swap_short_per_lot
     if raw is None:
         return None
-    if metrics.mt4_next_rollover_time_ms is not None and metrics.mt4_next_rollover_time_ms <= utc_now_ms():
+    next_rollover_time_ms = normalize_mt4_rollover_ms(metrics.mt4_next_rollover_time_ms)
+    if metrics.mt4_next_rollover_time_ms is not None and next_rollover_time_ms is None and metrics.mt4_next_rollover_time_ms <= utc_now_ms():
         return None
     lots = qty / settings.mt4_lot_size_oz
-    multiplier = _entry_mt4_swap_multiplier(settings, metrics.mt4_next_rollover_time_ms)
+    multiplier = _entry_mt4_swap_multiplier(settings, next_rollover_time_ms)
     return raw * lots * multiplier
 
 

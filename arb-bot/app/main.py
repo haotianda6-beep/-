@@ -45,6 +45,7 @@ from app.models import (
 )
 from app.mt4_bridge import Mt4Bridge
 from app.mt4_costs import live_spread_usd_per_oz, recent_move_budget_usd_per_oz, spread_cost_usd
+from app.mt4_rollover import normalize_mt4_rollover_ms
 from app.quote_guard import xau_quote_gap_reason
 from app.risk import RiskManager
 from app.storage import Storage
@@ -1809,10 +1810,12 @@ async def _position_metrics() -> PositionMetrics:
     binance_quote = binance_client.latest_quote()
     mt4_quote = mt4_bridge.latest_quote()
     swap_info = mt4_bridge.latest_swap_info()
+    normalized_rollover_time_ms = normalize_mt4_rollover_ms(swap_info.next_rollover_time_ms)
+    next_rollover_time_ms = normalized_rollover_time_ms if normalized_rollover_time_ms is not None else swap_info.next_rollover_time_ms
     metrics = PositionMetrics(
         binance_funding_rate=funding.funding_rate if funding else None,
         binance_next_funding_time_ms=funding.next_funding_time_ms if funding else None,
-        mt4_next_rollover_time_ms=swap_info.next_rollover_time_ms,
+        mt4_next_rollover_time_ms=next_rollover_time_ms,
         mt4_swap_long_per_lot=swap_info.swap_long_per_lot,
         mt4_swap_short_per_lot=swap_info.swap_short_per_lot,
         mt4_swap_type=swap_info.swap_type,
@@ -2027,9 +2030,10 @@ def _estimate_mt4_swap(pair, qty: Decimal, swap_info) -> Decimal | None:
     raw = swap_info.swap_long_per_lot if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else swap_info.swap_short_per_lot
     if raw is None:
         return None
-    if swap_info.next_rollover_time_ms is not None and swap_info.next_rollover_time_ms <= utc_now_ms():
+    next_rollover_time_ms = normalize_mt4_rollover_ms(swap_info.next_rollover_time_ms)
+    if swap_info.next_rollover_time_ms is not None and next_rollover_time_ms is None and swap_info.next_rollover_time_ms <= utc_now_ms():
         return None
-    multiplier = _mt4_swap_multiplier_for_rollover(swap_info.next_rollover_time_ms)
+    multiplier = _mt4_swap_multiplier_for_rollover(next_rollover_time_ms)
     if swap_info.swap_type == 0:
         if not swap_info.tick_value or not swap_info.tick_size or not swap_info.point:
             return raw * lots * multiplier
