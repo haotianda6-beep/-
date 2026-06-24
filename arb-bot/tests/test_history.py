@@ -1,10 +1,12 @@
 from decimal import Decimal
 
+import pytest
+
 from app import main as main_module
 from app.history import compare_spreads
 from app.models import HistoryBar, Mt4ClosedOrder, Side
 from app.storage import Storage
-from app.main import _build_trade_history
+from app.main import BINANCE_HISTORY_MAX_WINDOW_MS, _build_trade_history, _fetch_binance_history_rows
 
 
 def bar(ts: int, close: str) -> HistoryBar:
@@ -311,3 +313,47 @@ def test_trade_history_separates_v1_and_v2_versions(monkeypatch):
 
     assert len(items) == 2
     assert [item.strategy_version for item in items] == ["v2.0", "v1.0"]
+
+
+class FakeHistoryClient:
+    def __init__(self, batches):
+        self.batches = list(batches)
+        self.calls = []
+
+    async def user_trades(self, start_ms: int, end_ms: int, limit: int = 1000):
+        self.calls.append((start_ms, end_ms, limit))
+        if self.batches:
+            return self.batches.pop(0)
+        return [{"time": start_ms, "orderId": len(self.calls)}]
+
+
+@pytest.mark.asyncio
+async def test_binance_history_fetch_splits_windows_under_exchange_limit():
+    client = FakeHistoryClient([])
+
+    rows = await _fetch_binance_history_rows(
+        client,
+        "user_trades",
+        0,
+        30 * 86_400_000,
+        limit=1000,
+    )
+
+    assert len(rows) == len(client.calls)
+    assert len(client.calls) == 5
+    assert all(end - start <= BINANCE_HISTORY_MAX_WINDOW_MS for start, end, _ in client.calls)
+
+
+@pytest.mark.asyncio
+async def test_binance_history_fetch_paginates_full_windows_by_last_time():
+    client = FakeHistoryClient(
+        [
+            [{"time": 1000, "orderId": 1}, {"time": 1200, "orderId": 2}],
+            [{"time": 1300, "orderId": 3}],
+        ]
+    )
+
+    rows = await _fetch_binance_history_rows(client, "user_trades", 0, 10_000, limit=2)
+
+    assert [row["orderId"] for row in rows] == [1, 2, 3]
+    assert client.calls == [(0, 10_000, 2), (1201, 10_000, 2)]

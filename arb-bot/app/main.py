@@ -68,6 +68,7 @@ LIVE_PAIR_RECONCILE_INTERVAL_MS = 30_000
 HISTORY_MT4_BATCH_WINDOW_MS = 180_000
 HISTORY_BINANCE_ALIGN_WINDOW_MS = 900_000
 HISTORY_EVENT_EXIT_LINK_WINDOW_MS = 600_000
+BINANCE_HISTORY_MAX_WINDOW_MS = 7 * 86_400_000 - 1
 QTY_EPSILON = Decimal("0.000001")
 
 settings: Settings = load_settings()
@@ -592,12 +593,12 @@ async def trade_history(days: int = Query(default=7, ge=1, le=30)) -> TradeHisto
         temporary_history_client = BinanceFuturesClient(settings)
         history_client = temporary_history_client
     try:
-        binance_trades = await history_client.user_trades(start_ms, end_ms, limit=1000)
+        binance_trades = await _fetch_binance_history_rows(history_client, "user_trades", start_ms, end_ms, limit=1000)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Binance trade history unavailable: %s", str(exc)[:160])
         binance_trades = []
     try:
-        funding_rows = await history_client.funding_income(start_ms, end_ms, limit=1000)
+        funding_rows = await _fetch_binance_history_rows(history_client, "funding_income", start_ms, end_ms, limit=1000)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Binance funding history unavailable: %s", str(exc)[:160])
         funding_rows = []
@@ -608,6 +609,45 @@ async def trade_history(days: int = Query(default=7, ge=1, le=30)) -> TradeHisto
         source="币安真实成交/资金费 + MT4 EA 上传的账户历史",
         items=_build_trade_history(mt4_orders, binance_trades, funding_rows, event_rows),
     )
+
+
+async def _fetch_binance_history_rows(
+    history_client: BinanceBaseClient,
+    method_name: str,
+    start_ms: int,
+    end_ms: int,
+    limit: int = 1000,
+) -> list[dict[str, Any]]:
+    if end_ms <= start_ms:
+        return []
+    fetcher = getattr(history_client, method_name)
+    page_limit = min(max(int(limit), 1), 1000)
+    rows: list[dict[str, Any]] = []
+    window_start = int(start_ms)
+    while window_start <= end_ms:
+        window_end = min(window_start + BINANCE_HISTORY_MAX_WINDOW_MS, end_ms)
+        page_start = window_start
+        while page_start <= window_end:
+            batch = list(await fetcher(page_start, window_end, limit=page_limit))
+            rows.extend(batch)
+            if len(batch) < page_limit:
+                break
+            last_ms = max(
+                (
+                    _int_field(row, "time")
+                    or _int_field(row, "timeStamp")
+                    or _int_field(row, "timestamp")
+                    or page_start
+                    for row in batch
+                ),
+                default=page_start,
+            )
+            next_start = last_ms + 1
+            if next_start <= page_start:
+                break
+            page_start = next_start
+        window_start = window_end + 1
+    return rows
 
 
 def _build_trade_history(
