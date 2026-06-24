@@ -6,7 +6,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from app.config import Settings
 from app.models import ExchangeFilters, HistoryBar, MarketQuote, OpenPair, PairDirection, PositionMetrics, Side, utc_now_ms
 from app.mt4_costs import live_spread_usd_per_oz, recent_move_budget_usd_per_oz, slippage_budget_usd_per_oz
-from app.quote_guard import xau_quote_gap_reason
+from app.quote_guard import MAX_REASONABLE_XAU_MID_GAP, xau_quote_gap_reason
 from app.storage import Storage
 
 
@@ -91,21 +91,25 @@ def _spread_ranges(mt4_bars: list[HistoryBar], binance_bars: list[HistoryBar]) -
     binance_by_time = {bar.open_time_ms - (bar.open_time_ms % 60_000): bar for bar in binance_bars}
     short_values: list[Decimal] = []
     long_values: list[Decimal] = []
+    discarded = 0
     for mt4_bar in mt4_bars:
         aligned = mt4_bar.open_time_ms - (mt4_bar.open_time_ms % 60_000)
         binance_bar = binance_by_time.get(aligned)
         if not binance_bar:
             continue
         diff = binance_bar.close - mt4_bar.close
+        if abs(diff) > MAX_REASONABLE_XAU_MID_GAP:
+            discarded += 1
+            continue
         short_values.append(diff)
         long_values.append(-diff)
-    return _range(short_values), _range(long_values)
+    return _range(short_values, discarded), _range(long_values, discarded)
 
 
-def _range(values: list[Decimal]) -> dict:
+def _range(values: list[Decimal], discarded: int = 0) -> dict:
     if not values:
-        return {"points": 0, "low": None, "high": None, "latest": None}
-    return {"points": len(values), "low": min(values), "high": max(values), "latest": values[-1]}
+        return {"points": 0, "discarded": discarded, "low": None, "high": None, "latest": None}
+    return {"points": len(values), "discarded": discarded, "low": min(values), "high": max(values), "latest": values[-1]}
 
 
 def _entry_threshold(spread_range: dict, manual_min: Decimal) -> Decimal:

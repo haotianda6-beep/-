@@ -108,6 +108,28 @@ def test_v2_blocks_entry_when_quote_gap_is_unreasonable(tmp_path):
     assert status["selected_entry"]["reason"].startswith("报价异常")
 
 
+def test_v2_ignores_unreasonable_historical_bar_gap(tmp_path):
+    cfg = settings(tmp_path)
+    store = Storage(cfg.sqlite_path)
+    mt4_bars, binance_bars = recent_bars([Decimal("2"), Decimal("3"), Decimal("999"), Decimal("4"), Decimal("5")] * 2)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4005"), ask=Decimal("4005.2")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("4000"), ask=Decimal("4000.2")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+    )
+
+    assert status["short_range"]["discarded"] == 2
+    assert status["short_range"]["high"] == Decimal("5")
+    assert status["short_entry"]["threshold"] == Decimal("4.1")
+
+
 def test_v2_blocks_entry_when_next_triple_swap_makes_exit_unsafe(tmp_path):
     cfg = settings(
         tmp_path,
