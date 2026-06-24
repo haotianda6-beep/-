@@ -44,6 +44,7 @@ from app.models import (
     utc_now_ms,
 )
 from app.mt4_bridge import Mt4Bridge
+from app.mt4_costs import live_spread_usd_per_oz, spread_cost_usd
 from app.risk import RiskManager
 from app.storage import Storage
 from app.strategy import (
@@ -1633,11 +1634,13 @@ async def _position_metrics() -> PositionMetrics:
     mt4_swap_estimate = _estimate_mt4_swap(pair, qty, swap_info)
     accrued_funding = await _binance_accrued_funding(pair)
     accrued_swap = _mt4_accrued_swap(pair)
+    mt4_live_spread = live_spread_usd_per_oz(mt4_quote)
+    mt4_spread_protection = spread_cost_usd(mt4_quote, qty)
     gross = _estimate_close_gross(pair, binance_quote, mt4_quote, binance_entry_price, mt4_entry_price)
     fees = _estimate_binance_fees(pair, binance_quote, binance_entry_price, include_entry_fee=True)
     actual_entry_spread = _actual_entry_spread(pair, binance_entry_price, mt4_entry_price)
     current_exit_spread = _current_exit_spread(pair, binance_quote, mt4_quote)
-    profitable_spread_threshold = _profitable_spread_threshold(pair, actual_entry_spread, accrued_funding, accrued_swap, fees)
+    profitable_spread_threshold = _profitable_spread_threshold(pair, actual_entry_spread, accrued_funding, accrued_swap, fees, mt4_spread_protection)
     exit_follow_buffer = _exit_follow_buffer_usd_per_oz(swap_info)
     close_profit = _effective_close_profit_usd_per_oz(pair)
     dynamic_close_spread = _dynamic_close_spread(profitable_spread_threshold, exit_follow_buffer, close_profit)
@@ -1652,6 +1655,8 @@ async def _position_metrics() -> PositionMetrics:
             net += mt4_swap_estimate
         if accrued_swap is not None:
             net += accrued_swap
+        if mt4_spread_protection is not None:
+            net -= mt4_spread_protection
     return metrics.model_copy(
         update={
             "binance_position_entry_price": binance_snapshot.entry_price if binance_snapshot else None,
@@ -1666,6 +1671,8 @@ async def _position_metrics() -> PositionMetrics:
             "dynamic_close_spread": dynamic_close_spread,
             "close_profit_usd_per_oz": close_profit,
             "exit_follow_buffer_usd_per_oz": exit_follow_buffer,
+            "mt4_live_spread_usd_per_oz": mt4_live_spread,
+            "mt4_spread_protection_usd": mt4_spread_protection,
             "binance_accrued_funding": accrued_funding,
             "binance_funding_estimate": funding_estimate,
             "mt4_swap_estimate": mt4_swap_estimate,
@@ -1764,10 +1771,12 @@ def _profitable_spread_threshold(
     accrued_funding: Decimal | None,
     accrued_swap: Decimal | None,
     fees: Decimal | None,
+    mt4_spread_protection: Decimal | None = None,
 ) -> Decimal | None:
     if actual_entry_spread is None or fees is None or pair.quantity_oz <= 0:
         return None
     adjustment = pair.realized_pnl + (accrued_funding or Decimal("0")) + (accrued_swap or Decimal("0")) - fees
+    adjustment -= mt4_spread_protection or Decimal("0")
     return actual_entry_spread + (adjustment / pair.quantity_oz)
 
 

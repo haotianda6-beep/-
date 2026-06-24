@@ -79,8 +79,10 @@ def test_v2_short_order_price_keeps_threshold_and_slippage_budget(tmp_path):
     )
 
     assert status["short_entry"]["threshold"] == Decimal("3.10")
-    assert status["short_entry"]["binance_price"] == Decimal("4003.4")
-    assert status["short_entry"]["expected_locked_edge"] == Decimal("3.4")
+    assert status["mt4_slippage_budget"] == Decimal("0.5")
+    assert status["mt4_live_spread_usd_per_oz"] == Decimal("0.2")
+    assert status["short_entry"]["binance_price"] == Decimal("4003.6")
+    assert status["short_entry"]["expected_locked_edge"] == Decimal("3.6")
 
 
 def test_v2_add_plan_uses_real_first_edge_plus_step(tmp_path):

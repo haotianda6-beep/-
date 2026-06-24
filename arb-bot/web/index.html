@@ -625,6 +625,10 @@
                 <span id="mt4SwapLine">-</span>
               </div>
               <div class="compact-row">
+                <strong>MT4点差保护</strong>
+                <span id="mt4SpreadCostLine">-</span>
+              </div>
+              <div class="compact-row">
                 <strong>估算净利</strong>
                 <span id="netEstimateLine">-</span>
               </div>
@@ -1331,7 +1335,7 @@
           ? `延迟 ${age(b.timestamp_ms)}`
           : "等待报价";
         $("mt4Meta").textContent = m
-          ? `延迟 ${age(m.timestamp_ms)}`
+          ? `延迟 ${age(m.timestamp_ms)}，实时点差 ${fmt(Number(m.ask) - Number(m.bid))} 美元`
           : "等待报价";
         $("binanceLine").textContent = b
           ? `买 ${fmt(b.bid)} / 卖 ${fmt(b.ask)} / ${age(b.timestamp_ms)}`
@@ -1360,6 +1364,7 @@
         $("pairEntryLine").textContent = renderPairEntry(pair, metrics);
         $("binanceFundingLine").textContent = renderFunding(metrics, pair);
         $("mt4SwapLine").textContent = renderMt4Swap(metrics, pair);
+        $("mt4SpreadCostLine").textContent = renderMt4SpreadCost(metrics, pair);
         $("netEstimateLine").textContent = renderNetEstimate(metrics);
         $("profitSpreadLine").textContent = renderProfitSpread(pair, metrics);
         $("executionPlan").textContent = data.execution_plan?.summary || "-";
@@ -1413,8 +1418,13 @@
           $("v2AddPlanLine").textContent = add.reason || "补仓未启动";
         }
         const policy = (plan.partial_fill_policy || []).slice(0, 2).join("；");
+        const liveSpread =
+          plan.mt4_live_spread_usd_per_oz !== null &&
+          plan.mt4_live_spread_usd_per_oz !== undefined
+            ? `；MT4实时点差 ${fmt(plan.mt4_live_spread_usd_per_oz)} 美元`
+            : "";
         $("v2RiskLine").textContent =
-          `${policy || "禁止币安市价单"}；MT4滑点预算 ${fmt(plan.mt4_slippage_budget)} 美元`;
+          `${policy || "禁止币安市价单"}；MT4滑点预算 ${fmt(plan.mt4_slippage_budget)} 美元${liveSpread}`;
       }
 
       function renderLimitOrder(data) {
@@ -1721,7 +1731,12 @@
           metrics.binance_accrued_funding !== undefined
             ? `，币安已结算资金费 ${signedMoney(metrics.binance_accrued_funding)}`
             : "";
-        return `${signedUsd(metrics.estimated_close_net)}，毛利 ${signedUsd(metrics.estimated_close_gross)}，预估手续费 ${signedUsd(-Number(metrics.estimated_fees || 0))}${funding}`;
+        const mt4Spread =
+          metrics.mt4_spread_protection_usd !== null &&
+          metrics.mt4_spread_protection_usd !== undefined
+            ? `，已扣MT4实时点差保护 ${signedUsd(-Number(metrics.mt4_spread_protection_usd))}`
+            : "";
+        return `${signedUsd(metrics.estimated_close_net)}，毛利 ${signedUsd(metrics.estimated_close_gross)}，预估手续费 ${signedUsd(-Number(metrics.estimated_fees || 0))}${mt4Spread}${funding}`;
       }
 
       function renderProfitSpread(pair, metrics) {
@@ -1754,7 +1769,29 @@
           Number(metrics.exit_follow_buffer_usd_per_oz) > 0
             ? `，MT4跟随保护 ${fmt(metrics.exit_follow_buffer_usd_per_oz)} 美元/盎司`
             : "";
-        return `${current}保本价差 ${fmt(metrics.profitable_spread_threshold)} 美元${profit}${follow}${trigger}`;
+        const spreadProtection =
+          metrics.mt4_live_spread_usd_per_oz !== null &&
+          metrics.mt4_live_spread_usd_per_oz !== undefined
+            ? `，实时点差保护 ${fmt(metrics.mt4_live_spread_usd_per_oz)} 美元/盎司`
+            : "";
+        return `${current}保护后保本价差 ${fmt(metrics.profitable_spread_threshold)} 美元${profit}${follow}${spreadProtection}${trigger}`;
+      }
+
+      function renderMt4SpreadCost(metrics, pair) {
+        if (!metrics) return "-";
+        const live =
+          metrics.mt4_live_spread_usd_per_oz !== null &&
+          metrics.mt4_live_spread_usd_per_oz !== undefined
+            ? `实时点差 ${fmt(metrics.mt4_live_spread_usd_per_oz)} 美元/盎司`
+            : "等待MT4 bid/ask";
+        if (
+          !pair ||
+          metrics.mt4_spread_protection_usd === null ||
+          metrics.mt4_spread_protection_usd === undefined
+        ) {
+          return live;
+        }
+        return `${live}，本仓保护扣减 ${signedUsd(-Number(metrics.mt4_spread_protection_usd))}`;
       }
 
       function renderMt4Swap(metrics, pair) {

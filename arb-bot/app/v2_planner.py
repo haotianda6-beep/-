@@ -4,6 +4,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
 from app.config import Settings
 from app.models import ExchangeFilters, HistoryBar, MarketQuote, OpenPair, PairDirection, PositionMetrics, Side, utc_now_ms
+from app.mt4_costs import live_spread_usd_per_oz, slippage_budget_usd_per_oz
 from app.storage import Storage
 
 
@@ -29,7 +30,7 @@ def build_gold_v2_status(
     short_range, long_range = _spread_ranges(mt4_bars, binance_bars)
     short_threshold = _entry_threshold(short_range, settings.open_min_edge)
     long_threshold = _entry_threshold(long_range, settings.open_min_edge)
-    slippage_budget = _mt4_slippage_budget(settings)
+    slippage_budget = _mt4_slippage_budget(settings, mt4_quote)
 
     short_plan = _entry_plan(
         direction=PairDirection.BINANCE_SHORT_MT4_LONG,
@@ -62,6 +63,7 @@ def build_gold_v2_status(
         "lookback_minutes": 30,
         "threshold_rule": "最近30分钟价差最低到最高之间取70%位置，并且不能低于手动最小开仓价差。",
         "mt4_slippage_budget": slippage_budget,
+        "mt4_live_spread_usd_per_oz": live_spread_usd_per_oz(mt4_quote),
         "short_range": short_range,
         "long_range": long_range,
         "short_entry": short_plan,
@@ -275,8 +277,8 @@ def _add_base_edge(pair: OpenPair, metrics: PositionMetrics | None) -> Decimal |
     return pair.base_edge or (metrics.actual_entry_spread if metrics else None)
 
 
-def _mt4_slippage_budget(settings: Settings) -> Decimal:
-    configured = Decimal(settings.mt4_slippage_points) * XAU_POINT_VALUE
+def _mt4_slippage_budget(settings: Settings, mt4_quote: MarketQuote | None = None) -> Decimal:
+    configured = slippage_budget_usd_per_oz(settings.mt4_slippage_points, XAU_POINT_VALUE, mt4_quote)
     return max(configured, DEFAULT_SLIPPAGE_BUDGET)
 
 

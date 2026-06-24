@@ -326,6 +326,8 @@ class PositionMetrics(BaseModel):
     dynamic_close_spread: Decimal | None = None
     close_profit_usd_per_oz: Decimal | None = None
     exit_follow_buffer_usd_per_oz: Decimal | None = None
+    mt4_live_spread_usd_per_oz: Decimal | None = None
+    mt4_spread_protection_usd: Decimal | None = None
     binance_accrued_funding: Decimal | None = None
     binance_funding_rate: Decimal | None = None
     binance_next_funding_time_ms: int | None = None
