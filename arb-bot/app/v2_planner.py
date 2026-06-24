@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
 from app.config import Settings
@@ -44,6 +45,7 @@ def build_gold_v2_status(
         slippage_budget=slippage_budget,
         point_count=short_range["points"],
         spread_range=short_range,
+        metrics=metrics,
     )
     long_plan = _entry_plan(
         direction=PairDirection.BINANCE_LONG_MT4_SHORT,
@@ -55,6 +57,7 @@ def build_gold_v2_status(
         slippage_budget=slippage_budget,
         point_count=long_range["points"],
         spread_range=long_range,
+        metrics=metrics,
     )
     selected = _selected_entry_plan(short_plan, long_plan)
 
@@ -124,6 +127,7 @@ def _entry_plan(
     slippage_budget: Decimal,
     point_count: int,
     spread_range: dict,
+    metrics: PositionMetrics | None,
 ) -> dict:
     qty = max(_round_down(settings.target_oz, filters.qty_step), filters.min_qty)
     if not binance or not mt4:
@@ -147,6 +151,7 @@ def _entry_plan(
             point_count=point_count,
             spread_range=spread_range,
             close_profit=settings.close_profit_usd_per_oz,
+            settlement_adjustment=_entry_settlement_adjustment(settings, direction, qty, binance, metrics),
         )
     current_edge = mt4.bid - binance.bid
     limit_price = _round_down(min(binance.bid - settings.binance_entry_offset_usd, mt4.bid - threshold - slippage_budget), filters.tick_size)
@@ -163,6 +168,7 @@ def _entry_plan(
         point_count=point_count,
         spread_range=spread_range,
         close_profit=settings.close_profit_usd_per_oz,
+        settlement_adjustment=_entry_settlement_adjustment(settings, direction, qty, binance, metrics),
     )
 
 
@@ -194,16 +200,20 @@ def _plan_dict(
     point_count: int,
     spread_range: dict,
     close_profit: Decimal,
+    settlement_adjustment: dict | None = None,
 ) -> dict:
     ready = current_edge >= threshold
     locked_edge = limit_price - mt4_reference_price if binance_side == Side.SELL else mt4_reference_price - limit_price
-    estimated_exit_target = max(Decimal("0"), locked_edge - slippage_budget - close_profit)
+    adjustment_value = Decimal("0")
+    if settlement_adjustment:
+        adjustment_value = Decimal(str(settlement_adjustment["total"]))
+    estimated_exit_target = max(Decimal("0"), locked_edge + (adjustment_value / qty) - slippage_budget - close_profit)
     recent_low = Decimal(str(spread_range["low"])) if spread_range.get("low") is not None else None
     exit_viable = recent_low is None or recent_low <= estimated_exit_target
     reason = "达到观察阈值，可以进入小仓验证队列" if ready else "当前价差未到观察阈值"
     if ready and not exit_viable:
         ready = False
-        reason = f"达到入场阈值，但最近30分钟最低价差 {recent_low} > 预计安全平仓价差 {estimated_exit_target}，暂不开仓"
+        reason = f"达到入场阈值，但最近30分钟最低价差 {recent_low} > 扣除下次资金费和隔夜费后的安全平仓价差 {estimated_exit_target}，暂不开仓"
     if point_count < MIN_POINTS:
         reason += "，30分钟样本不足，暂用手动阈值"
     return {
@@ -221,9 +231,69 @@ def _plan_dict(
         "estimated_exit_target_spread": estimated_exit_target,
         "recent_low_spread": recent_low,
         "exit_viable": exit_viable,
+        "next_settlement_adjustment": settlement_adjustment,
         "mt4_reference_price": mt4_reference_price,
         "mt4_slippage_budget": slippage_budget,
     }
+
+
+def _entry_settlement_adjustment(
+    settings: Settings,
+    direction: PairDirection,
+    qty: Decimal,
+    binance: MarketQuote | None,
+    metrics: PositionMetrics | None,
+) -> dict | None:
+    if not metrics or qty <= 0:
+        return None
+    funding = _entry_binance_funding_estimate(direction, qty, binance, metrics)
+    swap = _entry_mt4_swap_estimate(settings, direction, qty, metrics)
+    if funding is None and swap is None:
+        return None
+    funding = funding or Decimal("0")
+    swap = swap or Decimal("0")
+    return {
+        "binance_funding": funding,
+        "mt4_swap": swap,
+        "total": funding + swap,
+    }
+
+
+def _entry_binance_funding_estimate(
+    direction: PairDirection,
+    qty: Decimal,
+    binance: MarketQuote | None,
+    metrics: PositionMetrics,
+) -> Decimal | None:
+    if not binance or metrics.binance_funding_rate is None:
+        return None
+    amount = binance.mid * qty * metrics.binance_funding_rate
+    if direction == PairDirection.BINANCE_LONG_MT4_SHORT:
+        amount = -amount
+    return amount
+
+
+def _entry_mt4_swap_estimate(
+    settings: Settings,
+    direction: PairDirection,
+    qty: Decimal,
+    metrics: PositionMetrics,
+) -> Decimal | None:
+    raw = metrics.mt4_swap_long_per_lot if direction == PairDirection.BINANCE_SHORT_MT4_LONG else metrics.mt4_swap_short_per_lot
+    if raw is None:
+        return None
+    lots = qty / settings.mt4_lot_size_oz
+    multiplier = _entry_mt4_swap_multiplier(settings, metrics.mt4_next_rollover_time_ms)
+    return raw * lots * multiplier
+
+
+def _entry_mt4_swap_multiplier(settings: Settings, next_rollover_time_ms: int | None) -> Decimal:
+    if next_rollover_time_ms is None:
+        return Decimal("1")
+    rollover_day = datetime.fromtimestamp(next_rollover_time_ms / 1000, timezone.utc).weekday()
+    if rollover_day == settings.mt4_triple_swap_weekday:
+        return settings.mt4_triple_swap_multiplier
+    return Decimal("1")
 
 
 def _selected_entry_plan(short_plan: dict, long_plan: dict) -> dict | None:
