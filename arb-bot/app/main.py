@@ -1802,19 +1802,8 @@ async def _position_metrics() -> PositionMetrics:
     exit_follow_buffer = _exit_follow_buffer_usd_per_oz(swap_info, mt4_recent_bars)
     close_profit = _effective_close_profit_usd_per_oz(pair)
     dynamic_close_spread = _dynamic_close_spread(profitable_spread_threshold, exit_follow_buffer, close_profit)
-    net = None
-    if gross is not None and fees is not None:
-        net = gross - fees
-        if accrued_funding is not None:
-            net += accrued_funding
-        if funding_estimate is not None:
-            net += funding_estimate
-        if mt4_swap_estimate is not None:
-            net += mt4_swap_estimate
-        if accrued_swap is not None:
-            net += accrued_swap
-        if mt4_spread_protection is not None:
-            net -= mt4_spread_protection
+    net = _immediate_close_net(gross, fees, accrued_funding, accrued_swap, mt4_spread_protection)
+    projected_net = _projected_close_net_after_next_settlement(net, funding_estimate, mt4_swap_estimate)
     return metrics.model_copy(
         update={
             "binance_position_entry_price": binance_snapshot.entry_price if binance_snapshot else None,
@@ -1838,6 +1827,7 @@ async def _position_metrics() -> PositionMetrics:
             "estimated_close_gross": gross,
             "estimated_fees": fees,
             "estimated_close_net": net,
+            "projected_close_net_after_next_settlement": projected_net,
         }
     )
 
@@ -2018,6 +2008,32 @@ def _estimate_close_gross(
     binance_exit = round_up(binance_quote.ask, binance_client.filters.tick_size)
     mt4_exit = mt4_quote.ask
     return pair.realized_pnl + (binance_exit - binance_entry) * qty + (mt4_entry - mt4_exit) * qty
+
+
+def _immediate_close_net(
+    gross: Decimal | None,
+    fees: Decimal | None,
+    accrued_funding: Decimal | None,
+    accrued_swap: Decimal | None,
+    mt4_spread_protection: Decimal | None,
+) -> Decimal | None:
+    if gross is None or fees is None:
+        return None
+    net = gross - fees
+    net += accrued_funding or Decimal("0")
+    net += accrued_swap or Decimal("0")
+    net -= mt4_spread_protection or Decimal("0")
+    return net
+
+
+def _projected_close_net_after_next_settlement(
+    immediate_net: Decimal | None,
+    funding_estimate: Decimal | None,
+    mt4_swap_estimate: Decimal | None,
+) -> Decimal | None:
+    if immediate_net is None:
+        return None
+    return immediate_net + (funding_estimate or Decimal("0")) + (mt4_swap_estimate or Decimal("0"))
 
 
 def _estimate_binance_fees(

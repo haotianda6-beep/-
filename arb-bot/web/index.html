@@ -1731,12 +1731,17 @@
           metrics.binance_accrued_funding !== undefined
             ? `，币安已结算资金费 ${signedMoney(metrics.binance_accrued_funding)}`
             : "";
+        const projected =
+          metrics.projected_close_net_after_next_settlement !== null &&
+          metrics.projected_close_net_after_next_settlement !== undefined
+            ? `，含下次资金费/隔夜费预估 ${signedUsd(metrics.projected_close_net_after_next_settlement)}`
+            : "";
         const mt4Spread =
           metrics.mt4_spread_protection_usd !== null &&
           metrics.mt4_spread_protection_usd !== undefined
             ? `，已扣MT4实时点差保护 ${signedUsd(-Number(metrics.mt4_spread_protection_usd))}`
             : "";
-        return `${signedUsd(metrics.estimated_close_net)}，毛利 ${signedUsd(metrics.estimated_close_gross)}，预估手续费 ${signedUsd(-Number(metrics.estimated_fees || 0))}${mt4Spread}${funding}`;
+        return `立即平仓 ${signedUsd(metrics.estimated_close_net)}${projected}，毛利 ${signedUsd(metrics.estimated_close_gross)}，预估手续费 ${signedUsd(-Number(metrics.estimated_fees || 0))}${mt4Spread}${funding}`;
       }
 
       function renderProfitSpread(pair, metrics) {

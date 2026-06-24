@@ -341,6 +341,7 @@ class PositionMetrics(BaseModel):
     estimated_close_gross: Decimal | None = None
     estimated_fees: Decimal | None = None
     estimated_close_net: Decimal | None = None
+    projected_close_net_after_next_settlement: Decimal | None = None
 
 
 class ExecutionPlanStatus(BaseModel):
