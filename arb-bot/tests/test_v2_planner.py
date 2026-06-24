@@ -83,7 +83,7 @@ def test_v2_short_order_price_keeps_threshold_and_slippage_budget(tmp_path):
     assert status["short_entry"]["expected_locked_edge"] == Decimal("3.4")
 
 
-def test_v2_add_plan_is_calculated_but_disabled(tmp_path):
+def test_v2_add_plan_uses_real_first_edge_plus_step(tmp_path):
     cfg = settings(tmp_path, ADD_EDGE_GROWTH_USD=Decimal("1"))
     store = Storage(cfg.sqlite_path)
     pair = OpenPair(
@@ -99,13 +99,14 @@ def test_v2_add_plan_is_calculated_but_disabled(tmp_path):
         settings=cfg,
         storage=store,
         filters=filters(),
-        binance_quote=None,
-        mt4_quote=None,
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4005"), ask=Decimal("4005.2")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("4001.8"), ask=Decimal("4002.0")),
         binance_bars=[],
         open_pair=pair,
         metrics=PositionMetrics(actual_entry_spread=Decimal("1.8")),
     )
 
-    assert status["add_plan"]["enabled"] is False
+    assert status["add_plan"]["enabled"] is True
     assert status["add_plan"]["next_add_number"] == 3
     assert status["add_plan"]["next_trigger_edge"] == Decimal("4.8")
+    assert status["add_plan"]["ready"] is False

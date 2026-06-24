@@ -9,10 +9,12 @@ from app.models import ExecutionPlanStatus, OpenPair, OrderRequest, OrderStatus,
 from app.mt4_bridge import Mt4Bridge
 from app.storage import Storage
 from app.strategy import round_down, round_up
+from app.v2_add import V2AddMixin
+from app.v2_common import V2CommonMixin
 from app.v2_support import TERMINAL, execution_status, exit_spread_ready, lots_from_qty, target_exit_spread
 
 
-class GoldV2Executor:
+class GoldV2Executor(V2AddMixin, V2CommonMixin):
     def __init__(self, settings: Settings, binance: BinanceBaseClient, mt4: Mt4Bridge, storage: Storage, runtime: Any) -> None:
         self.settings = settings
         self.binance = binance
@@ -29,9 +31,13 @@ class GoldV2Executor:
         self.close_started_ms = 0
         self.last_closed_ms = 0
         self.exit_target_spread: Decimal | None = None
+        self.adding_to_pair = False
+        self.active_add_base_edge: Decimal | None = None
+        self.active_add_trigger_edge: Decimal | None = None
 
     async def step(self, plan_status: dict[str, Any]) -> None:
-        self._process_mt4_reports()
+        if self._process_mt4_reports():
+            return
         if self.runtime.state == StrategyState.PAUSED:
             return
         if self.runtime.state == StrategyState.IDLE:
@@ -42,6 +48,8 @@ class GoldV2Executor:
             self._check_mt4_timeout(self.hedge_started_ms, "MT4 开仓跟随超时")
         elif self.runtime.state == StrategyState.PAIR_OPEN:
             await self._maybe_place_exit(plan_status)
+            if self.runtime.state == StrategyState.PAIR_OPEN:
+                await self._maybe_place_add(plan_status)
         elif self.runtime.state == StrategyState.QUOTING_BINANCE_EXIT:
             await self._check_exit_order(plan_status)
         elif self.runtime.state == StrategyState.CLOSING_MT4:
@@ -57,6 +65,9 @@ class GoldV2Executor:
         self.hedge_started_ms = 0
         self.close_started_ms = 0
         self.exit_target_spread = None
+        self.adding_to_pair = False
+        self.active_add_base_edge = None
+        self.active_add_trigger_edge = None
 
     async def cancel_active_order(self, reason: str) -> None:
         if not self.active_order:
@@ -83,8 +94,7 @@ class GoldV2Executor:
         except Exception as exc:  # noqa: BLE001
             self.storage.record_event("v2_order_cancel_failed", {"reason": reason, "error": str(exc)[:160]})
         self.active_order = None
-        if self.runtime.open_pair is None:
-            self.runtime.state = StrategyState.IDLE
+        self.runtime.state = StrategyState.PAIR_OPEN if self.runtime.open_pair else StrategyState.IDLE
 
     def execution_plan_status(self) -> ExecutionPlanStatus:
         return execution_status(
@@ -141,9 +151,8 @@ class GoldV2Executor:
         age = utc_now_ms() - self.order_created_ms
         if age < max(self.settings.min_order_live_ms, self.settings.max_order_age_ms):
             return
-        selected = plan_status.get("selected_entry") or {}
-        if not selected.get("ready"):
-            await self.cancel_active_order("V2 开仓价差回落，撤销未成交限价单")
+        if not self._active_entry_plan(plan_status).get("ready"):
+            await self.cancel_active_order(self._active_entry_cancel_reason())
 
     async def _maybe_place_exit(self, plan_status: dict[str, Any]) -> None:
         pair = self.runtime.open_pair
@@ -214,12 +223,7 @@ class GoldV2Executor:
         if not self.entry_hedge_side or not self.entry_direction:
             self._pause("V2 开仓成交缺少方向信息")
             return
-        lots = lots_from_qty(self.settings, order.executed_qty)
-        command = self.mt4.queue_market_order(self.entry_hedge_side, lots, "v2_entry_follow")
-        self.hedge_command_id = command.command_id
-        self.hedge_started_ms = utc_now_ms()
-        self.runtime.state = StrategyState.HEDGING_MT4
-        self.storage.record_event("v2_mt4_entry_queued", {"command_id": command.command_id, "lots": str(lots)})
+        self._queue_mt4_add_or_entry(order)
 
     def _queue_mt4_close(self) -> None:
         pair = self.runtime.open_pair
@@ -232,15 +236,19 @@ class GoldV2Executor:
         self.runtime.state = StrategyState.CLOSING_MT4
         self.storage.record_event("v2_mt4_close_queued", {"command_id": command.command_id, "ticket": pair.mt4_ticket})
 
-    def _process_mt4_reports(self) -> None:
-        for report in self.mt4.drain_reports():
+    def _process_mt4_reports(self) -> bool:
+        reports = self.mt4.drain_reports()
+        for report in reports:
             self.storage.record_event("v2_mt4_report", report.model_dump(mode="json"))
             if report.command_id == self.hedge_command_id:
                 self._handle_hedge_report(report)
             elif report.command_id == self.close_command_id:
                 self._handle_close_report(report)
+        return bool(reports)
 
     def _handle_hedge_report(self, report) -> None:
+        if self._handle_add_report(report):
+            return
         if report.status != "ok" or report.fill_price is None or not self.active_order or not self.entry_direction:
             self._pause(f"MT4 开仓跟随失败：{report.message or report.error_code}")
             return
@@ -271,26 +279,3 @@ class GoldV2Executor:
         if latest:
             self.active_order = latest
         return self.active_order
-
-    def _display_exit_spread(self, pair: OpenPair) -> Decimal:
-        return self.exit_target_spread if self.exit_target_spread is not None else target_exit_spread(self.settings, pair)
-
-    def _clear_terminal_order(self) -> None:
-        if self.active_order and self.active_order.executed_qty > 0:
-            self._pause("币安限价单已结束但存在成交数量，请人工确认")
-            return
-        self.active_order = None
-        self.runtime.state = StrategyState.PAIR_OPEN if self.runtime.open_pair else StrategyState.IDLE
-
-    def _check_mt4_timeout(self, started_ms: int, message: str) -> None:
-        if started_ms and utc_now_ms() - started_ms > self.settings.max_hedge_delay_ms:
-            self._pause(message)
-
-    def _pause(self, reason: str) -> None:
-        self.runtime.last_error = reason
-        self.runtime.state = StrategyState.PAUSED
-        self.storage.record_event("v2_paused", {"reason": reason})
-
-    def _clear_to_idle(self) -> None:
-        self.clear()
-        self.runtime.state = StrategyState.IDLE

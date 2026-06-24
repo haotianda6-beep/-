@@ -57,7 +57,7 @@ def build_gold_v2_status(
         "mode": "V2 实盘执行" if not settings.gold_v2_observation_only else "只读观察",
         "auto_trade_enabled": not settings.gold_v2_observation_only,
         "execution_enabled": not settings.gold_v2_observation_only,
-        "add_enabled": False,
+        "add_enabled": bool(open_pair and settings.max_add_count > 0),
         "reason": "V2 执行器已解锁，会按币安全限价和 MT4 跟随执行。" if not settings.gold_v2_observation_only else "新版七步方案处于观察阶段，只计算机会和挂单位置，不会自动下单。",
         "lookback_minutes": 30,
         "threshold_rule": "最近30分钟价差最低到最高之间取70%位置，并且不能低于手动最小开仓价差。",
@@ -68,10 +68,10 @@ def build_gold_v2_status(
         "long_entry": long_plan,
         "selected_entry": selected,
         "exit_plan": _exit_plan(open_pair, metrics),
-        "add_plan": _disabled_add_plan(settings, open_pair, metrics),
+        "add_plan": _add_plan(settings, filters, open_pair, metrics, binance_quote, mt4_quote, slippage_budget),
         "partial_fill_policy": [
             "币安只允许挂单成交，禁止市价开仓和平仓。",
-            "首版不启用补仓；补仓触发价会计算但不会执行。",
+            "补仓按真实首仓价差加阶梯触发，币安仍只允许挂单成交。",
             "部分成交先不让MT4跟随，继续等待原挂单补齐到目标数量；超时后暂停并提示人工确认。",
         ],
     }
@@ -223,22 +223,56 @@ def _exit_plan(pair: OpenPair | None, metrics: PositionMetrics | None) -> dict:
     }
 
 
-def _disabled_add_plan(settings: Settings, pair: OpenPair | None, metrics: PositionMetrics | None) -> dict:
+def _add_plan(settings: Settings, filters: ExchangeFilters, pair: OpenPair | None, metrics: PositionMetrics | None, binance: MarketQuote | None, mt4: MarketQuote | None, slippage_budget: Decimal) -> dict:
     if not pair:
         return {"enabled": False, "reason": "无持仓，补仓计划不启动。"}
-    base = metrics.actual_entry_spread if metrics and metrics.actual_entry_spread is not None else pair.base_edge
+    if settings.max_add_count <= 0:
+        return {"enabled": False, "reason": "补仓次数上限为0，补仓关闭。"}
+    if pair.add_count >= settings.max_add_count:
+        return {"enabled": False, "reason": "补仓次数已达上限。", "add_count": pair.add_count, "max_add_count": settings.max_add_count}
+    base = _add_base_edge(pair, metrics)
     if base is None:
         return {"enabled": False, "reason": "等待组合真实均价差后再计算补仓阶梯。"}
     next_count = pair.add_count + 1
     trigger = base + settings.add_edge_growth_usd * Decimal(next_count)
-    return {
-        "enabled": False,
-        "reason": "补仓代码已计算，但七步观察阶段不执行。",
+    data = {
+        "enabled": True,
+        "reason": "等待价差走扩到补仓触发位。",
         "base_edge": base,
         "next_add_number": next_count,
         "next_trigger_edge": trigger,
+        "add_count": pair.add_count,
         "max_add_count": settings.max_add_count,
+        "quantity_oz": max(_round_down(settings.target_oz, filters.qty_step), filters.min_qty),
     }
+    if not binance or not mt4:
+        return {**data, "ready": False, "reason": "等待币安和MT4同时返回报价。"}
+    qty = data["quantity_oz"]
+    if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+        edge = binance.ask - mt4.ask
+        price = _round_up(max(binance.ask + settings.binance_entry_offset_usd, mt4.ask + trigger + slippage_budget), filters.tick_size)
+        side, mt4_side, locked = Side.SELL, Side.BUY, price - mt4.ask
+    else:
+        edge = mt4.bid - binance.bid
+        price = _round_down(min(binance.bid - settings.binance_entry_offset_usd, mt4.bid - trigger - slippage_budget), filters.tick_size)
+        side, mt4_side, locked = Side.BUY, Side.SELL, mt4.bid - price
+    ready = edge >= trigger
+    return {**data,
+        "ready": ready,
+        "reason": "达到补仓触发位，可以挂补仓限价单。" if ready else "当前价差未到补仓触发位。",
+        "current_edge": edge,
+        "binance_side": side.value,
+        "binance_price": price,
+        "mt4_follow_side": mt4_side.value,
+        "expected_locked_edge": locked,
+        "mt4_slippage_budget": slippage_budget,
+    }
+
+
+def _add_base_edge(pair: OpenPair, metrics: PositionMetrics | None) -> Decimal | None:
+    if pair.add_count == 0 and metrics and metrics.actual_entry_spread is not None:
+        return metrics.actual_entry_spread
+    return pair.base_edge or (metrics.actual_entry_spread if metrics else None)
 
 
 def _mt4_slippage_budget(settings: Settings) -> Decimal:

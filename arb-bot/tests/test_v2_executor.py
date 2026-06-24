@@ -53,6 +53,22 @@ def short_plan(price: str = "101") -> dict:
     }
 
 
+def add_plan(price: str = "105") -> dict:
+    return {
+        "selected_entry": {"ready": False, "reason": "已有持仓"},
+        "add_plan": {
+            "enabled": True,
+            "ready": True,
+            "base_edge": "2",
+            "next_trigger_edge": "3",
+            "quantity_oz": "1",
+            "binance_side": "SELL",
+            "binance_price": price,
+            "mt4_follow_side": "BUY",
+        },
+    }
+
+
 @pytest.mark.asyncio
 async def test_v2_entry_and_exit_use_binance_post_only_then_mt4_follow(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
@@ -118,3 +134,41 @@ async def test_v2_partial_entry_fill_does_not_queue_mt4(tmp_path):
     assert executor.active_order.status == OrderStatus.PARTIALLY_FILLED
     assert mt4.next_command() == {"command": "NONE"}
     assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+
+
+@pytest.mark.asyncio
+async def test_v2_add_position_merges_pair_after_binance_fill_and_mt4_follow(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", MAX_ADD_COUNT=1)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(short_plan("101"))
+    client.set_quote(Decimal("101"), Decimal("101.2"))
+    await executor.step(short_plan("101"))
+    command = mt4.next_command()
+    mt4.submit_report(Mt4Report(command_id=command["command_id"], status="ok", action="BUY", ticket=7, fill_price=Decimal("99"), lots=Decimal("0.01")))
+    await executor.step(short_plan("101"))
+
+    client.set_quote(Decimal("104"), Decimal("104.2"))
+    mt4_tick(mt4, "100.8", "101")
+    await executor.step(add_plan("105"))
+    assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert executor.adding_to_pair is True
+
+    client.set_quote(Decimal("105"), Decimal("105.2"))
+    await executor.step(add_plan("105"))
+    add_command = mt4.next_command()
+    assert add_command["action"] == "BUY"
+    assert add_command["reason"] == "v2_add_follow"
+
+    mt4.submit_report(Mt4Report(command_id=add_command["command_id"], status="ok", action="BUY", ticket=8, fill_price=Decimal("101.5"), lots=Decimal("0.01")))
+    await executor.step(add_plan("105"))
+    assert run.state == StrategyState.PAIR_OPEN
+    assert run.open_pair.quantity_oz == Decimal("2")
+    assert run.open_pair.add_count == 1
+    assert run.open_pair.last_add_trigger_edge == Decimal("3")
+    assert run.open_pair.mt4_tickets == [7, 8]
