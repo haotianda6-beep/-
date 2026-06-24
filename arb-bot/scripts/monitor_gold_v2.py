@@ -114,13 +114,20 @@ def summarize_status(status: dict[str, Any]) -> dict[str, Any]:
     selected = gold_v2.get("selected_entry") or {}
     exit_plan = gold_v2.get("exit_plan") or {}
     metrics = status.get("position_metrics") or {}
+    execution_plan = status.get("execution_plan") or {}
+    active_binance_order = bool(status.get("active_order")) or bool(execution_plan.get("active_binance_order"))
     return {
         "state": status.get("state"),
         "last_error": status.get("last_error"),
         "binance_qty": status.get("binance_position_qty"),
         "mt4_count": len(status.get("mt4_positions") or []),
         "mt4_oz": str(mt4_quantity_oz(status)),
-        "active_order": bool(status.get("active_order")),
+        "active_order": active_binance_order,
+        "order_status": execution_plan.get("binance_order_status"),
+        "order_side": execution_plan.get("binance_order_side"),
+        "order_price": execution_plan.get("binance_order_price"),
+        "order_qty": execution_plan.get("binance_order_qty"),
+        "order_executed_qty": execution_plan.get("binance_order_executed_qty"),
         "current_edge": selected.get("current_edge"),
         "entry_threshold": selected.get("threshold"),
         "entry_ready": selected.get("ready"),
