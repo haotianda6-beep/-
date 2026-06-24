@@ -7,6 +7,7 @@ from app.binance_client import BinanceBaseClient, BinanceError
 from app.config import Settings
 from app.models import ExecutionPlanStatus, OpenPair, OrderRequest, OrderStatus, OrderUpdate, PairDirection, Side, StrategyState, utc_now_ms
 from app.mt4_bridge import Mt4Bridge
+from app.quote_guard import xau_quote_gap_reason
 from app.storage import Storage
 from app.strategy import round_down, round_up
 from app.v2_add import V2AddMixin
@@ -186,6 +187,10 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         mt4_quote = self.mt4.latest_quote()
         if not pair or not quote or not mt4_quote:
             return
+        gap_reason = xau_quote_gap_reason(quote, mt4_quote)
+        if gap_reason:
+            self.runtime.last_error = f"报价异常，暂停本轮平仓挂单：{gap_reason}"
+            return
         post_add_message = "补仓刚完成，等待币安仓位快照稳定后再允许平仓挂单"
         if utc_now_ms() < self.post_add_exit_block_until_ms:
             self.runtime.last_error = post_add_message
@@ -248,7 +253,13 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             await self.cancel_active_order("V2 组合记录消失")
             return
         target = target_exit_spread(self.settings, pair, plan_status)
-        if not exit_spread_ready(pair, self.binance.latest_quote(), self.mt4.latest_quote(), target):
+        binance_quote = self.binance.latest_quote()
+        mt4_quote = self.mt4.latest_quote()
+        gap_reason = xau_quote_gap_reason(binance_quote, mt4_quote)
+        if gap_reason:
+            await self.cancel_active_order(f"V2 平仓报价异常，撤销未成交限价单：{gap_reason}")
+            return
+        if not exit_spread_ready(pair, binance_quote, mt4_quote, target):
             await self.cancel_active_order("V2 平仓价差回落，撤销未成交限价单")
             return
         if utc_now_ms() - self.order_created_ms > max(self.settings.min_order_live_ms, self.settings.max_order_age_ms):

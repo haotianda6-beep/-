@@ -4,6 +4,7 @@ from decimal import Decimal, ROUND_FLOOR
 
 from app.config import Settings
 from app.models import ExecutionPlanStatus, MarketQuote, OpenPair, OrderStatus, OrderUpdate, PairDirection, Side
+from app.quote_guard import xau_quote_gap_reason
 
 
 TERMINAL = {OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED}
@@ -40,6 +41,8 @@ def target_exit_spread(settings: Settings, pair: OpenPair, plan_status: dict | N
 
 def exit_spread_ready(pair: OpenPair, binance: MarketQuote | None, mt4: MarketQuote | None, target: Decimal) -> bool:
     if not binance or not mt4:
+        return False
+    if xau_quote_gap_reason(binance, mt4):
         return False
     if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
         return binance.ask - mt4.bid <= target

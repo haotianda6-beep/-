@@ -45,6 +45,7 @@ from app.models import (
 )
 from app.mt4_bridge import Mt4Bridge
 from app.mt4_costs import live_spread_usd_per_oz, recent_move_budget_usd_per_oz, spread_cost_usd
+from app.quote_guard import xau_quote_gap_reason
 from app.risk import RiskManager
 from app.storage import Storage
 from app.strategy import (
@@ -1948,6 +1949,8 @@ def _actual_entry_spread(pair, binance_entry_price: Decimal, mt4_entry_price: De
 def _current_exit_spread(pair, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> Decimal | None:
     if not binance_quote or not mt4_quote:
         return None
+    if xau_quote_gap_reason(binance_quote, mt4_quote):
+        return None
     if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
         return round_down(binance_quote.bid, binance_client.filters.tick_size) - mt4_quote.bid
     return mt4_quote.ask - round_up(binance_quote.ask, binance_client.filters.tick_size)
@@ -2044,6 +2047,8 @@ def _estimate_close_gross(
     mt4_entry_price: Decimal | None = None,
 ) -> Decimal | None:
     if not binance_quote or not mt4_quote:
+        return None
+    if xau_quote_gap_reason(binance_quote, mt4_quote):
         return None
     qty = pair.quantity_oz
     binance_entry = binance_entry_price or pair.binance_entry_price
@@ -2205,6 +2210,9 @@ def _quote_plan_block_reason(binance_quote: MarketQuote | None, mt4_quote: Marke
         check = risk.quote_fresh(quote)
         if not check.ok:
             return f"{label}报价未刷新（{_risk_reason_text(check.reason)}）"
+    gap_reason = xau_quote_gap_reason(binance_quote, mt4_quote)
+    if gap_reason:
+        return f"黄金报价异常：{gap_reason}"
     return None
 
 

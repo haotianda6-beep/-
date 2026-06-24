@@ -1167,6 +1167,19 @@
         return n.toLocaleString("zh-CN", { maximumFractionDigits: 6 });
       }
 
+      function quoteSpreadText(binance, mt4) {
+        const binanceMid = (Number(binance.bid) + Number(binance.ask)) / 2;
+        const mt4Mid = (Number(mt4.bid) + Number(mt4.ask)) / 2;
+        if (
+          !Number.isFinite(binanceMid) ||
+          !Number.isFinite(mt4Mid) ||
+          Math.abs(binanceMid - mt4Mid) > 100
+        ) {
+          return "报价异常：币安与 MT4 中间价相差超过 100 美元，已禁止按该价差判断";
+        }
+        return `开仓差 ${fmt(Number(binance.ask) - Number(mt4.ask))} 美元；反向差 ${fmt(Number(mt4.bid) - Number(binance.bid))} 美元`;
+      }
+
       function signedMoney(value) {
         if (value === null || value === undefined || value === "") return "-";
         const n = Number(value);
@@ -1344,9 +1357,7 @@
           ? `买 ${fmt(m.bid)} / 卖 ${fmt(m.ask)} / ${age(m.timestamp_ms)}`
           : "等待报价";
         $("spreadLine").textContent =
-          b && m
-            ? `开仓差 ${fmt(Number(b.ask) - Number(m.ask))} 美元；反向差 ${fmt(Number(m.bid) - Number(b.bid))} 美元`
-            : "-";
+          b && m ? quoteSpreadText(b, m) : "-";
         renderAccounts(data);
         renderV2Plan(data.gold_v2);
         renderLimitOrder(data);
@@ -1401,8 +1412,12 @@
           $("v2OrderLine").textContent = "-";
         } else {
           const readyText = selected.ready ? "达到观察阈值" : "未达到观察阈值";
+          const currentText =
+            selected.current_edge !== null && selected.current_edge !== undefined
+              ? `当前 ${fmt(selected.current_edge)} 美元，`
+              : "";
           $("v2SelectedLine").textContent =
-            `${selected.direction_text || "-"}，当前 ${fmt(selected.current_edge)} 美元，${readyText}`;
+            `${selected.direction_text || "-"}，${currentText}${readyText}，${selected.reason || ""}`;
           $("v2OrderLine").textContent =
             `${translateAction(selected.binance_side)} ${fmt(selected.quantity_oz)} XAU，建议挂 ${fmt(selected.binance_price)}，预留价差 ${fmt(selected.expected_locked_edge)} 美元`;
         }

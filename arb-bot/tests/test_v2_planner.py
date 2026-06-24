@@ -84,6 +84,29 @@ def test_v2_blocks_entry_when_recent_range_has_no_safe_exit(tmp_path):
     assert "安全平仓" in status["short_entry"]["reason"]
 
 
+def test_v2_blocks_entry_when_quote_gap_is_unreasonable(tmp_path):
+    cfg = settings(tmp_path)
+    store = Storage(cfg.sqlite_path)
+    mt4_bars, binance_bars = recent_bars([Decimal("2")] * 10)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4000"), ask=Decimal("4000.2")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3000"), ask=Decimal("3000.2")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+    )
+
+    assert status["short_entry"]["ready"] is False
+    assert status["short_entry"]["current_edge"] is None
+    assert "报价异常" in status["short_entry"]["reason"]
+    assert status["selected_entry"]["reason"].startswith("报价异常")
+
+
 def test_v2_short_order_price_keeps_threshold_and_slippage_budget(tmp_path):
     cfg = settings(tmp_path)
     store = Storage(cfg.sqlite_path)

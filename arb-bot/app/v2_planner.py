@@ -5,6 +5,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from app.config import Settings
 from app.models import ExchangeFilters, HistoryBar, MarketQuote, OpenPair, PairDirection, PositionMetrics, Side, utc_now_ms
 from app.mt4_costs import live_spread_usd_per_oz, recent_move_budget_usd_per_oz, slippage_budget_usd_per_oz
+from app.quote_guard import xau_quote_gap_reason
 from app.storage import Storage
 
 
@@ -127,6 +128,9 @@ def _entry_plan(
     qty = max(_round_down(settings.target_oz, filters.qty_step), filters.min_qty)
     if not binance or not mt4:
         return _missing_plan(direction, threshold, qty, "等待币安和MT4同时返回报价")
+    gap_reason = xau_quote_gap_reason(binance, mt4)
+    if gap_reason:
+        return _missing_plan(direction, threshold, qty, f"报价异常：{gap_reason}")
     if direction == PairDirection.BINANCE_SHORT_MT4_LONG:
         current_edge = binance.ask - mt4.ask
         limit_price = _round_up(max(binance.ask + settings.binance_entry_offset_usd, mt4.ask + threshold + slippage_budget), filters.tick_size)
