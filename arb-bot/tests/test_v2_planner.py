@@ -61,6 +61,29 @@ def test_v2_uses_upper_range_threshold_from_recent_spreads(tmp_path):
     assert status["selected_entry"]["direction"] == PairDirection.BINANCE_SHORT_MT4_LONG.value
 
 
+def test_v2_blocks_entry_when_recent_range_has_no_safe_exit(tmp_path):
+    cfg = settings(tmp_path, CLOSE_PROFIT_USD_PER_OZ=Decimal("2.5"))
+    store = Storage(cfg.sqlite_path)
+    mt4_bars, binance_bars = recent_bars([Decimal("3.0"), Decimal("3.2"), Decimal("3.4"), Decimal("3.6"), Decimal("3.8"), Decimal("4.0")] * 2)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4005.0"), ask=Decimal("4005.2")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+    )
+
+    assert status["short_entry"]["current_edge"] >= status["short_entry"]["threshold"]
+    assert status["short_entry"]["exit_viable"] is False
+    assert status["short_entry"]["ready"] is False
+    assert "安全平仓" in status["short_entry"]["reason"]
+
+
 def test_v2_short_order_price_keeps_threshold_and_slippage_budget(tmp_path):
     cfg = settings(tmp_path)
     store = Storage(cfg.sqlite_path)

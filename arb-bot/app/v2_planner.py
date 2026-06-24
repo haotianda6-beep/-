@@ -42,6 +42,7 @@ def build_gold_v2_status(
         threshold=short_threshold,
         slippage_budget=slippage_budget,
         point_count=short_range["points"],
+        spread_range=short_range,
     )
     long_plan = _entry_plan(
         direction=PairDirection.BINANCE_LONG_MT4_SHORT,
@@ -52,6 +53,7 @@ def build_gold_v2_status(
         threshold=long_threshold,
         slippage_budget=slippage_budget,
         point_count=long_range["points"],
+        spread_range=long_range,
     )
     selected = _selected_entry_plan(short_plan, long_plan)
 
@@ -120,6 +122,7 @@ def _entry_plan(
     threshold: Decimal,
     slippage_budget: Decimal,
     point_count: int,
+    spread_range: dict,
 ) -> dict:
     qty = max(_round_down(settings.target_oz, filters.qty_step), filters.min_qty)
     if not binance or not mt4:
@@ -138,6 +141,8 @@ def _entry_plan(
             mt4_reference_price=mt4.ask,
             slippage_budget=slippage_budget,
             point_count=point_count,
+            spread_range=spread_range,
+            close_profit=settings.close_profit_usd_per_oz,
         )
     current_edge = mt4.bid - binance.bid
     limit_price = _round_down(min(binance.bid - settings.binance_entry_offset_usd, mt4.bid - threshold - slippage_budget), filters.tick_size)
@@ -152,6 +157,8 @@ def _entry_plan(
         mt4_reference_price=mt4.bid,
         slippage_budget=slippage_budget,
         point_count=point_count,
+        spread_range=spread_range,
+        close_profit=settings.close_profit_usd_per_oz,
     )
 
 
@@ -181,10 +188,18 @@ def _plan_dict(
     mt4_reference_price: Decimal,
     slippage_budget: Decimal,
     point_count: int,
+    spread_range: dict,
+    close_profit: Decimal,
 ) -> dict:
     ready = current_edge >= threshold
     locked_edge = limit_price - mt4_reference_price if binance_side == Side.SELL else mt4_reference_price - limit_price
+    estimated_exit_target = max(Decimal("0"), locked_edge - slippage_budget - close_profit)
+    recent_low = Decimal(str(spread_range["low"])) if spread_range.get("low") is not None else None
+    exit_viable = recent_low is None or recent_low <= estimated_exit_target
     reason = "达到观察阈值，可以进入小仓验证队列" if ready else "当前价差未到观察阈值"
+    if ready and not exit_viable:
+        ready = False
+        reason = f"达到入场阈值，但最近30分钟最低价差 {recent_low} > 预计安全平仓价差 {estimated_exit_target}，暂不开仓"
     if point_count < MIN_POINTS:
         reason += "，30分钟样本不足，暂用手动阈值"
     return {
@@ -199,6 +214,9 @@ def _plan_dict(
         "binance_price": limit_price,
         "mt4_follow_side": mt4_side.value,
         "expected_locked_edge": locked_edge,
+        "estimated_exit_target_spread": estimated_exit_target,
+        "recent_low_spread": recent_low,
+        "exit_viable": exit_viable,
         "mt4_reference_price": mt4_reference_price,
         "mt4_slippage_budget": slippage_budget,
     }
