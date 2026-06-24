@@ -188,12 +188,12 @@ async def _reconcile_live_startup_state() -> None:
                 {"error": error_text, "cooldown_ms": cooldown_ms},
             )
             return
-        strategy.state = StrategyState.PAUSED
-        strategy.last_error = "启动时检查币安持仓失败，已暂停自动挂单"
+        strategy.state = StrategyState.PAIR_OPEN
+        strategy.last_error = "启动时检查币安持仓失败，保持监控并持续重试，不新开仓"
         return
     if qty != 0 and strategy.open_pair is None:
-        strategy.state = StrategyState.PAUSED
-        strategy.last_error = f"启动时检测到币安已有 {settings.binance_symbol} 持仓 {qty}，已暂停自动挂单"
+        strategy.state = StrategyState.PAIR_OPEN
+        strategy.last_error = f"启动时检测到币安已有 {settings.binance_symbol} 持仓 {qty}，保持监控并等待自动对账"
         storage.record_event(
             "startup_existing_binance_position",
             {"symbol": settings.binance_symbol, "position_qty": str(qty)},
@@ -221,8 +221,8 @@ async def _cancel_orphan_arb_orders(reason: str) -> None:
                 {"reason": reason, "error": error_text, "cooldown_ms": cooldown_ms},
             )
             return
-        strategy.state = StrategyState.PAUSED
-        strategy.last_error = "检查币安遗留挂单失败，已暂停自动挂单"
+        strategy.state = StrategyState.PAIR_OPEN
+        strategy.last_error = "检查币安遗留挂单失败，持续重试"
         return
     for order in orders:
         if not order.client_order_id.startswith("arb_"):
@@ -249,41 +249,35 @@ async def _cancel_orphan_arb_orders(reason: str) -> None:
                 await _emergency_close_binance_fill(final_order, final_order.executed_qty, f"{reason} 时发现遗留开仓单已有成交")
         except Exception as exc:  # noqa: BLE001
             logger.warning("failed to cancel orphan Binance order during %s: %s", reason, str(exc)[:160])
-            strategy.state = StrategyState.PAUSED
-            strategy.last_error = "处理币安遗留挂单失败，已暂停自动挂单"
+            strategy.state = StrategyState.PAIR_OPEN
+            strategy.last_error = "处理币安遗留挂单失败，持续重试"
 
 
 async def _emergency_close_binance_fill(order, quantity: Decimal, reason: str) -> None:
     if quantity <= 0:
         return
-    close_side = Side.BUY if order.side == Side.SELL else Side.SELL
-    close_order = await binance_client.place_market_order(
-        OrderRequest(
-            symbol=settings.binance_symbol,
-            side=close_side,
-            quantity=quantity,
-            post_only=False,
-            reduce_only=True,
-        )
-    )
+    signed_qty = -quantity if order.side == Side.SELL else quantity
+    try:
+        live_qty = await _binance_position_quantity(force=True)
+        if live_qty:
+            signed_qty = live_qty
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("failed to refresh Binance risk quantity before post-only flatten: %s", str(exc)[:160])
+    await _queue_binance_flatten_after_live_mismatch(signed_qty, f"{reason}，改用币安只挂单风险平仓")
     storage.record_event(
-        "binance_emergency_close",
+        "binance_emergency_post_only_close_queued",
         {
             "reason": reason,
             "source_order_id": order.order_id,
-            "close_order_id": close_order.order_id,
-            "side": close_side.value,
             "quantity": str(quantity),
-            "status": close_order.status.value,
-            "avg_price": str(close_order.avg_price),
+            "signed_position_qty": str(signed_qty),
         },
     )
     logger.warning(
-        "emergency closed unhedged Binance fill reason=%s source_order_id=%s quantity=%s close_order_id=%s",
+        "queued post-only risk close for unhedged Binance fill reason=%s source_order_id=%s quantity=%s",
         reason,
         order.order_id,
         quantity,
-        close_order.order_id,
     )
 
 
@@ -1505,8 +1499,9 @@ async def _reconcile_open_pair_live_state() -> bool:
                 {"error": error_text, "cooldown_ms": cooldown_ms},
             )
             return True
-        strategy.state = StrategyState.PAUSED
-        strategy.last_error = f"组合实盘对账失败，已暂停：{error_text}"
+        strategy.state = StrategyState.PAIR_OPEN
+        strategy.last_error = f"组合实盘对账失败，持续重试：{error_text}"
+        storage.record_event("open_pair_live_reconcile_retrying", {"error": error_text})
         return True
     _live_pair_reconcile_error_count = 0
     mt4_positions = mt4_bridge.positions()
@@ -1553,10 +1548,13 @@ async def _reconcile_open_pair_live_state() -> bool:
                 )
                 _persist_runtime_state()
                 return True
-        strategy.state = StrategyState.PAUSED
-        strategy.last_error = "组合持仓与实盘不一致：币安或 MT4 方向/数量不匹配，已暂停，请人工确认"
+        if await _queue_binance_flatten_after_live_mismatch(binance_qty, "组合持仓与实盘不一致，自动优先平币安风险"):
+            _persist_runtime_state()
+            return True
+        strategy.state = StrategyState.PAIR_OPEN
+        strategy.last_error = "组合持仓与实盘不一致，正在持续重试自动修复"
         storage.record_event(
-            "open_pair_live_mismatch_paused",
+            "open_pair_live_mismatch_retrying",
             {
                 "pair_id": strategy.open_pair.pair_id,
                 "binance_position_qty": str(binance_qty),
@@ -1596,6 +1594,56 @@ async def _reconcile_open_pair_live_state() -> bool:
     return False
 
 
+async def _queue_binance_flatten_after_live_mismatch(binance_qty: Decimal, reason: str) -> bool:
+    if binance_qty == 0:
+        return False
+    if v2_executor.active_order is not None:
+        strategy.last_error = f"{reason}；币安风险平仓挂单已存在，等待成交。"
+        return True
+    quote = binance_client.latest_quote()
+    if quote is None:
+        strategy.state = StrategyState.PAIR_OPEN
+        strategy.last_error = f"{reason}；币安报价暂缺，等待报价恢复后继续挂平仓单。"
+        storage.record_event("live_mismatch_flatten_wait_quote", {"reason": reason, "binance_position_qty": str(binance_qty)})
+        return True
+    side = Side.BUY if binance_qty < 0 else Side.SELL
+    quantity = abs(binance_qty)
+    if side == Side.BUY:
+        price = round_down(quote.bid - settings.binance_entry_offset_usd, binance_client.filters.tick_size)
+        position_side = "SHORT"
+    else:
+        price = round_up(quote.ask + settings.binance_entry_offset_usd, binance_client.filters.tick_size)
+        position_side = "LONG"
+    try:
+        order = await binance_client.place_post_only_order(
+            OrderRequest(
+                symbol=settings.binance_symbol,
+                side=side,
+                quantity=quantity,
+                price=price,
+                reduce_only=True,
+                position_side=position_side,
+            )
+        )
+    except BinanceError as exc:
+        strategy.state = StrategyState.PAIR_OPEN
+        strategy.last_error = f"{reason}；币安平仓挂单暂时失败，持续重试：{str(exc)[:160]}"
+        storage.record_event(
+            "live_mismatch_flatten_order_failed",
+            {"reason": reason, "binance_position_qty": str(binance_qty), "error": str(exc)[:160]},
+        )
+        return True
+    v2_executor.active_order = order
+    v2_executor.order_created_ms = utc_now_ms()
+    strategy.state = StrategyState.QUOTING_BINANCE_EXIT
+    strategy.last_error = f"{reason}；已挂币安 Post Only 平仓单，等待成交。"
+    storage.record_event(
+        "live_mismatch_flatten_order",
+        {"reason": reason, "binance_position_qty": str(binance_qty), **order.model_dump(mode="json")},
+    )
+    return True
+
+
 def _paused_for_transient_reconcile() -> bool:
     return (
         strategy.state == StrategyState.PAUSED
@@ -1626,9 +1674,16 @@ def _load_runtime_state() -> None:
                 restored_state = StrategyState(state_value)
             except ValueError:
                 restored_state = StrategyState.PAUSED
-            strategy.state = restored_state if restored_state in {StrategyState.PAIR_OPEN, StrategyState.PAUSED} else StrategyState.PAUSED
+            strategy.state = restored_state if restored_state in {StrategyState.PAIR_OPEN, StrategyState.PAUSED} else StrategyState.PAIR_OPEN
             strategy.last_error = data.get("last_error")
-            if _paused_for_transient_reconcile():
+            if strategy.state == StrategyState.PAUSED and not _paused_for_transient_reconcile():
+                strategy.state = StrategyState.PAIR_OPEN
+                strategy.last_error = "上次为暂停状态，已恢复组合持仓监控并等待自动对账"
+                storage.record_event(
+                    "runtime_state_pause_resumed",
+                    {"pair_id": strategy.open_pair.pair_id},
+                )
+            elif _paused_for_transient_reconcile():
                 strategy.state = StrategyState.PAIR_OPEN
                 strategy.last_error = "上次因币安接口临时限频暂停，已恢复组合持仓监控并等待重新对账"
                 storage.record_event(
@@ -1637,8 +1692,8 @@ def _load_runtime_state() -> None:
                 )
             storage.record_event("runtime_state_restored", {"pair_id": strategy.open_pair.pair_id, "state": strategy.state.value})
     except Exception as exc:  # noqa: BLE001
-        strategy.state = StrategyState.PAUSED
-        strategy.last_error = "读取运行状态失败，已暂停自动挂单"
+        strategy.state = StrategyState.IDLE
+        strategy.last_error = "读取运行状态失败，已交给启动实盘对账恢复"
         logger.warning("failed to load runtime state: %s", str(exc)[:160])
 
 

@@ -2345,6 +2345,8 @@ async def make_engine(tmp_path, client_cls=PaperBinanceClient, settings_kwargs=N
         **(settings_kwargs or {}),
     )
     client = client_cls(cfg)
+    if isinstance(client, PaperBinanceClient):
+        client._use_live_market_data = False
     client.set_quote(Decimal("2001"), Decimal("2002"))
     mt4 = Mt4Bridge(cfg)
     mt4.update_tick(Mt4Tick(symbol="XAUUSD", bid=Decimal("1999"), ask=Decimal("2000")))

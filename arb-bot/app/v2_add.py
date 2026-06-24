@@ -59,7 +59,11 @@ class V2AddMixin:
             return False
         pair, order = self.runtime.open_pair, self.active_order
         if report.status != "ok" or report.fill_price is None or not pair or not order:
-            self._pause(f"MT4 补仓跟随失败：{report.message or report.error_code}")
+            retry = getattr(self, "_retry_mt4_hedge_after_failure", None)
+            if retry:
+                retry(f"MT4 补仓跟随失败：{report.message or report.error_code}")
+            else:
+                self._pause(f"MT4 补仓跟随失败：{report.message or report.error_code}")
             return True
         old_qty, add_qty = pair.quantity_oz, order.executed_qty
         new_qty = old_qty + add_qty
@@ -82,6 +86,8 @@ class V2AddMixin:
         self.post_add_exit_block_until_ms = utc_now_ms() + max(5000, self.settings.max_hedge_delay_ms)
         self.active_order = None
         self.hedge_command_id = None
+        if hasattr(self, "_clear_entry_carry"):
+            self._clear_entry_carry()
         self.adding_to_pair = False
         self.active_add_base_edge = None
         self.active_add_trigger_edge = None

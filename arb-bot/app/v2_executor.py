@@ -28,6 +28,12 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.close_command_id: str | None = None
         self.close_command_tickets: dict[str, int] = {}
         self.pending_close_tickets: set[int] = set()
+        self.carry_entry_qty = Decimal("0")
+        self.carry_entry_notional = Decimal("0")
+        self.carry_entry_order_ids: list[str] = []
+        self.carry_exit_qty = Decimal("0")
+        self.carry_exit_notional = Decimal("0")
+        self.carry_exit_order_ids: list[str] = []
         self.order_created_ms = 0
         self.hedge_started_ms = 0
         self.close_started_ms = 0
@@ -42,7 +48,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if self._process_mt4_reports():
             return
         if self.runtime.state == StrategyState.PAUSED:
-            return
+            if not self._resume_recoverable_paused_state():
+                return
         if self.runtime.state == StrategyState.IDLE:
             await self._maybe_place_entry(plan_status)
         elif self.runtime.state == StrategyState.QUOTING_BINANCE_ENTRY:
@@ -66,6 +73,12 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.close_command_id = None
         self.close_command_tickets = {}
         self.pending_close_tickets = set()
+        self.carry_entry_qty = Decimal("0")
+        self.carry_entry_notional = Decimal("0")
+        self.carry_entry_order_ids = []
+        self.carry_exit_qty = Decimal("0")
+        self.carry_exit_notional = Decimal("0")
+        self.carry_exit_order_ids = []
         self.order_created_ms = 0
         self.hedge_started_ms = 0
         self.close_started_ms = 0
@@ -91,7 +104,12 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             self._clear_terminal_order()
             return
         if self.active_order.executed_qty > 0:
-            self._pause(f"{reason}，但币安已有成交，禁止市价回滚，请人工确认")
+            self.runtime.last_error = f"{reason}，但币安已有部分成交，继续等待完全成交，不停止。"
+            self.storage.record_event(
+                "v2_cancel_skipped_partial_fill",
+                {"reason": reason, **self.active_order.model_dump(mode="json")},
+            )
+            self.runtime.state = StrategyState.QUOTING_BINANCE_EXIT if self.active_order.reduce_only else StrategyState.QUOTING_BINANCE_ENTRY
             return
         try:
             canceled = await self.binance.cancel_order(self.active_order.order_id)
@@ -148,11 +166,13 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             self._clear_to_idle()
             return
         if order.status == OrderStatus.FILLED:
-            self._queue_mt4_hedge(order)
+            self._queue_mt4_hedge(self._with_carried_entry_fill(order))
             return
         if order.executed_qty > 0:
-            if utc_now_ms() - self.order_created_ms > self.settings.max_hedge_delay_ms:
-                self._pause("币安开仓部分成交超时，V2 禁止市价补齐或回滚，请人工确认")
+            if order.status in TERMINAL:
+                await self._replace_remaining_entry_order(order, plan_status)
+                return
+            self.runtime.last_error = f"币安开仓部分成交 {order.executed_qty}/{order.orig_qty} XAU，继续等待完全成交。"
             return
         age = utc_now_ms() - self.order_created_ms
         if age < max(self.settings.min_order_live_ms, self.settings.max_order_age_ms):
@@ -212,10 +232,13 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             self.runtime.state = StrategyState.PAIR_OPEN
             return
         if order.status == OrderStatus.FILLED:
-            self._queue_mt4_close()
+            self._queue_mt4_close(self._with_carried_exit_fill(order))
             return
         if order.executed_qty > 0:
-            self._pause("币安平仓部分成交，V2 禁止市价补平，请人工确认")
+            if order.status in TERMINAL:
+                await self._replace_remaining_exit_order(order)
+                return
+            self.runtime.last_error = f"币安平仓部分成交 {order.executed_qty}/{order.orig_qty} XAU，继续等待完全成交。"
             return
         pair = self.runtime.open_pair
         if not pair:
@@ -232,16 +255,29 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if not self.entry_hedge_side or not self.entry_direction:
             self._pause("V2 开仓成交缺少方向信息")
             return
+        self.active_order = order
         self._queue_mt4_add_or_entry(order)
 
-    def _queue_mt4_close(self) -> None:
+    def _queue_mt4_close(self, order: OrderUpdate | None = None) -> None:
         pair = self.runtime.open_pair
         if not pair:
-            self._pause("V2 平仓缺少 MT4 单号，币安可能已平，请人工确认")
+            self.storage.record_event(
+                "v2_binance_risk_close_without_pair",
+                {"binance_exit_order": order.model_dump(mode="json") if order else None},
+            )
+            self.active_order = None
+            self.runtime.state = StrategyState.IDLE
+            self.runtime.last_error = "币安风险平仓已完成，但缺少组合记录，已等待下一轮实盘对账。"
             return
         tickets = list(pair.mt4_tickets or ([] if pair.mt4_ticket is None else [pair.mt4_ticket]))
         if not tickets:
-            self._pause("V2 平仓缺少 MT4 单号，币安可能已平，请人工确认")
+            self.storage.record_event(
+                "v2_exit_missing_mt4_tickets_recovering",
+                {"pair_id": pair.pair_id, "binance_exit_order": order.model_dump(mode="json") if order else None},
+            )
+            self.active_order = None
+            self.runtime.state = StrategyState.PAIR_OPEN
+            self.runtime.last_error = "V2 平仓缺少 MT4 票号，已回到实盘对账恢复。"
             return
         lots_by_ticket = self._close_lots_by_ticket(tickets, pair.quantity_oz)
         self.close_command_tickets = {}
@@ -255,13 +291,20 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             self.close_command_tickets[command.command_id] = ticket
             self.pending_close_tickets.add(ticket)
         if not self.pending_close_tickets:
-            self._pause("V2 没有可平的 MT4 持仓票，币安可能已平，请人工确认")
+            self.storage.record_event(
+                "v2_exit_no_live_mt4_ticket_recovering",
+                {"pair_id": pair.pair_id, "tickets": tickets, "binance_exit_order": order.model_dump(mode="json") if order else None},
+            )
+            self.active_order = None
+            self.runtime.state = StrategyState.PAIR_OPEN
+            self.runtime.last_error = "V2 没有可平的 MT4 持仓票，已回到实盘对账恢复。"
             return
         self.close_started_ms = utc_now_ms()
         self.runtime.state = StrategyState.CLOSING_MT4
         self.storage.record_event(
             "v2_mt4_close_queued",
             {
+                "binance_exit_order": order.model_dump(mode="json") if order else None,
                 "command_ids": list(self.close_command_tickets.keys()),
                 "tickets": list(self.pending_close_tickets),
                 "lots_by_ticket": {str(ticket): str(lots_by_ticket[ticket]) for ticket in self.pending_close_tickets},
@@ -290,19 +333,22 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if self._handle_add_report(report):
             return
         if report.status != "ok" or report.fill_price is None or not self.active_order or not self.entry_direction:
-            self._pause(f"MT4 开仓跟随失败：{report.message or report.error_code}")
+            self._retry_mt4_hedge_after_failure(f"MT4 开仓跟随失败：{report.message or report.error_code}")
             return
         edge = self.active_order.avg_price - report.fill_price if self.entry_direction == PairDirection.BINANCE_SHORT_MT4_LONG else report.fill_price - self.active_order.avg_price
         self.runtime.open_pair = OpenPair(direction=self.entry_direction, quantity_oz=self.active_order.executed_qty, binance_entry_price=self.active_order.avg_price, mt4_entry_price=report.fill_price, binance_order_id=self.active_order.order_id, mt4_ticket=report.ticket, mt4_tickets=[report.ticket] if report.ticket else [], base_edge=edge)
         self.storage.record_event("v2_pair_open", self.runtime.open_pair.model_dump(mode="json"))
         self.active_order = None
         self.hedge_command_id = None
+        self._clear_entry_carry()
         self.runtime.state = StrategyState.PAIR_OPEN
         self.runtime.last_error = None
 
     def _handle_close_report(self, report) -> None:
         if report.status != "ok":
-            self._pause(f"MT4 平仓跟随失败：{report.message or report.error_code}")
+            ticket = report.ticket or self.close_command_tickets.get(report.command_id)
+            self.close_command_tickets.pop(report.command_id, None)
+            self._retry_mt4_close_ticket(ticket, f"MT4 平仓跟随失败：{report.message or report.error_code}")
             return
         ticket = report.ticket or self.close_command_tickets.get(report.command_id)
         pair_id = self.runtime.open_pair.pair_id if self.runtime.open_pair else None
@@ -319,6 +365,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.close_command_id = None
         self.close_command_tickets = {}
         self.pending_close_tickets = set()
+        self._clear_exit_carry()
         self.last_closed_ms = utc_now_ms()
         self.runtime.state = StrategyState.IDLE
         self.runtime.last_error = None
@@ -329,3 +376,292 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if latest:
             self.active_order = latest
         return self.active_order
+
+    def _resume_recoverable_paused_state(self) -> bool:
+        if self.active_order:
+            self.runtime.state = StrategyState.QUOTING_BINANCE_EXIT if self.active_order.reduce_only else StrategyState.QUOTING_BINANCE_ENTRY
+        elif self.pending_close_tickets:
+            self.runtime.state = StrategyState.CLOSING_MT4
+        elif self.hedge_command_id:
+            self.runtime.state = StrategyState.HEDGING_MT4
+        elif self.runtime.open_pair:
+            self.runtime.state = StrategyState.PAIR_OPEN
+        else:
+            return False
+        self.storage.record_event("v2_paused_auto_resumed", {"reason": self.runtime.last_error, "state": self.runtime.state.value})
+        return True
+
+    async def _replace_remaining_entry_order(self, order: OrderUpdate, plan_status: dict[str, Any]) -> None:
+        self._carry_entry_fill(order)
+        remaining = order.orig_qty - order.executed_qty
+        if remaining <= 0:
+            self._queue_mt4_hedge(self._carried_entry_order(order))
+            return
+        plan = self._active_entry_plan(plan_status)
+        if not plan.get("ready"):
+            self.runtime.last_error = f"币安开仓部分成交后剩余 {remaining} XAU，等待价差恢复后继续补齐。"
+            self.active_order = order
+            self.runtime.state = StrategyState.QUOTING_BINANCE_ENTRY
+            return
+        side = Side(plan["binance_side"])
+        price = Decimal(str(plan["binance_price"]))
+        try:
+            new_order = await self.binance.place_post_only_order(
+                OrderRequest(
+                    symbol=self.settings.binance_symbol,
+                    side=side,
+                    quantity=remaining,
+                    price=price,
+                    position_side="SHORT" if side == Side.SELL else "LONG",
+                )
+            )
+        except BinanceError as exc:
+            self.runtime.last_error = f"币安开仓部分成交后补齐挂单失败，持续重试：{str(exc)[:160]}"
+            self.storage.record_event("v2_entry_remaining_requote_failed", {"error": str(exc)[:160], "remaining": str(remaining)})
+            self.active_order = order
+            self.runtime.state = StrategyState.QUOTING_BINANCE_ENTRY
+            return
+        self.active_order = new_order
+        self.order_created_ms = utc_now_ms()
+        self.runtime.last_error = f"币安开仓部分成交后已重挂剩余 {remaining} XAU。"
+        self.storage.record_event("v2_entry_remaining_order", new_order.model_dump(mode="json"))
+
+    async def _replace_remaining_exit_order(self, order: OrderUpdate) -> None:
+        pair = self.runtime.open_pair
+        if not pair:
+            self._recover("币安平仓部分成交后组合记录缺失，等待实盘对账自动清理")
+            return
+        self._carry_exit_fill(order)
+        remaining = pair.quantity_oz - self.carry_exit_qty
+        if remaining <= 0:
+            self._queue_mt4_close(self._carried_exit_order(order))
+            return
+        quote = self.binance.latest_quote()
+        if not quote:
+            self.active_order = order
+            self.runtime.last_error = f"币安平仓部分成交后剩余 {remaining} XAU，等待币安报价恢复后继续挂单。"
+            self.runtime.state = StrategyState.QUOTING_BINANCE_EXIT
+            return
+        side = order.side
+        if side == Side.BUY:
+            price = round_down(quote.bid - self.settings.binance_entry_offset_usd, self.binance.filters.tick_size)
+        else:
+            price = round_up(quote.ask + self.settings.binance_entry_offset_usd, self.binance.filters.tick_size)
+        try:
+            new_order = await self.binance.place_post_only_order(
+                OrderRequest(
+                    symbol=self.settings.binance_symbol,
+                    side=side,
+                    quantity=remaining,
+                    price=price,
+                    reduce_only=True,
+                    position_side="SHORT" if side == Side.BUY else "LONG",
+                )
+            )
+        except BinanceError as exc:
+            self.runtime.last_error = f"币安平仓部分成交后补齐挂单失败，持续重试：{str(exc)[:160]}"
+            self.storage.record_event("v2_exit_remaining_requote_failed", {"error": str(exc)[:160], "remaining": str(remaining)})
+            self.active_order = order
+            self.runtime.state = StrategyState.QUOTING_BINANCE_EXIT
+            return
+        self.active_order = new_order
+        self.order_created_ms = utc_now_ms()
+        self.runtime.last_error = f"币安平仓部分成交后已重挂剩余 {remaining} XAU。"
+        self.storage.record_event("v2_exit_remaining_order", new_order.model_dump(mode="json"))
+
+    def _carry_entry_fill(self, order: OrderUpdate) -> None:
+        if order.order_id in self.carry_entry_order_ids or order.executed_qty <= 0:
+            return
+        self.carry_entry_qty += order.executed_qty
+        self.carry_entry_notional += order.avg_price * order.executed_qty
+        self.carry_entry_order_ids.append(order.order_id)
+
+    def _carry_exit_fill(self, order: OrderUpdate) -> None:
+        if order.order_id in self.carry_exit_order_ids or order.executed_qty <= 0:
+            return
+        self.carry_exit_qty += order.executed_qty
+        self.carry_exit_notional += order.avg_price * order.executed_qty
+        self.carry_exit_order_ids.append(order.order_id)
+
+    def _with_carried_entry_fill(self, order: OrderUpdate) -> OrderUpdate:
+        if self.carry_entry_qty <= 0:
+            return order
+        if order.order_id not in self.carry_entry_order_ids:
+            qty = self.carry_entry_qty + order.executed_qty
+            notional = self.carry_entry_notional + (order.avg_price * order.executed_qty)
+            order_ids = [*self.carry_entry_order_ids, order.order_id]
+        else:
+            qty = self.carry_entry_qty
+            notional = self.carry_entry_notional
+            order_ids = list(self.carry_entry_order_ids)
+        return order.model_copy(update={"order_id": " / ".join(order_ids), "executed_qty": qty, "avg_price": notional / qty})
+
+    def _with_carried_exit_fill(self, order: OrderUpdate) -> OrderUpdate:
+        if self.carry_exit_qty <= 0:
+            return order
+        if order.order_id not in self.carry_exit_order_ids:
+            qty = self.carry_exit_qty + order.executed_qty
+            notional = self.carry_exit_notional + (order.avg_price * order.executed_qty)
+            order_ids = [*self.carry_exit_order_ids, order.order_id]
+        else:
+            qty = self.carry_exit_qty
+            notional = self.carry_exit_notional
+            order_ids = list(self.carry_exit_order_ids)
+        return order.model_copy(update={"order_id": " / ".join(order_ids), "executed_qty": qty, "avg_price": notional / qty})
+
+    def _carried_entry_order(self, order: OrderUpdate) -> OrderUpdate:
+        return order.model_copy(
+            update={
+                "order_id": " / ".join(self.carry_entry_order_ids),
+                "executed_qty": self.carry_entry_qty,
+                "avg_price": self.carry_entry_notional / self.carry_entry_qty,
+            }
+        )
+
+    def _carried_exit_order(self, order: OrderUpdate) -> OrderUpdate:
+        return order.model_copy(
+            update={
+                "order_id": " / ".join(self.carry_exit_order_ids),
+                "executed_qty": self.carry_exit_qty,
+                "avg_price": self.carry_exit_notional / self.carry_exit_qty,
+            }
+        )
+
+    def _clear_entry_carry(self) -> None:
+        self.carry_entry_qty = Decimal("0")
+        self.carry_entry_notional = Decimal("0")
+        self.carry_entry_order_ids = []
+
+    def _clear_exit_carry(self) -> None:
+        self.carry_exit_qty = Decimal("0")
+        self.carry_exit_notional = Decimal("0")
+        self.carry_exit_order_ids = []
+
+    def _handle_mt4_timeout(self, message: str) -> None:
+        if self.runtime.state == StrategyState.HEDGING_MT4:
+            self._recover_or_retry_mt4_hedge(message)
+            return
+        if self.runtime.state == StrategyState.CLOSING_MT4:
+            self._recover_or_retry_mt4_close(message)
+            return
+        self._recover(message)
+
+    def _recover_or_retry_mt4_hedge(self, message: str) -> None:
+        if not self.active_order:
+            self._recover(message)
+            return
+        if self._recover_hedge_from_positions():
+            return
+        if self.hedge_command_id and self.mt4.pending_command(self.hedge_command_id):
+            self.hedge_started_ms = utc_now_ms()
+            self.runtime.state = StrategyState.HEDGING_MT4
+            self.runtime.last_error = f"{message}，MT4 开仓命令仍未回报，继续等待，不重复下发。"
+            self.storage.record_event("v2_mt4_hedge_pending_wait", {"command_id": self.hedge_command_id, "reason": message})
+            return
+        self.hedge_started_ms = utc_now_ms()
+        self.runtime.last_error = f"{message}，未发现对应 MT4 持仓，已重新发送跟随开仓命令。"
+        self.storage.record_event("v2_mt4_hedge_timeout_retry", {"reason": message})
+        self._queue_mt4_hedge(self.active_order)
+
+    def _recover_hedge_from_positions(self) -> bool:
+        if not self.entry_hedge_side or not self.active_order:
+            return False
+        existing_tickets = set()
+        if self.runtime.open_pair:
+            existing_tickets.update(self.runtime.open_pair.mt4_tickets or [])
+        candidates = [
+            position
+            for position in self.mt4.positions()
+            if position.symbol == self.settings.mt4_symbol
+            and position.side == self.entry_hedge_side
+            and position.ticket not in existing_tickets
+        ]
+        if not candidates:
+            return False
+        position = max(candidates, key=lambda item: item.ticket)
+        report = type(
+            "RecoveredMt4Report",
+            (),
+            {
+                "status": "ok",
+                "fill_price": position.open_price,
+                "ticket": position.ticket,
+                "lots": position.lots,
+                "message": "recovered from MT4 positions",
+                "error_code": 0,
+            },
+        )()
+        self.storage.record_event(
+            "v2_mt4_hedge_recovered_from_position",
+            {"ticket": position.ticket, "open_price": str(position.open_price), "lots": str(position.lots)},
+        )
+        self._handle_hedge_report(report)
+        return True
+
+    def _recover_or_retry_mt4_close(self, message: str) -> None:
+        live_tickets = {position.ticket for position in self.mt4.positions() if position.symbol == self.settings.mt4_symbol}
+        self.pending_close_tickets = {ticket for ticket in self.pending_close_tickets if ticket in live_tickets}
+        if not self.pending_close_tickets:
+            self.storage.record_event("v2_mt4_close_recovered_from_positions", {"reason": message})
+            pair_id = self.runtime.open_pair.pair_id if self.runtime.open_pair else None
+            tickets = self.runtime.open_pair.mt4_tickets if self.runtime.open_pair else []
+            self.storage.record_event("v2_pair_closed", {"pair_id": pair_id, "tickets": tickets, "recovered": True})
+            self.runtime.open_pair = None
+            self.active_order = None
+            self.close_command_id = None
+            self.close_command_tickets = {}
+            self.pending_close_tickets = set()
+            self._clear_exit_carry()
+            self.last_closed_ms = utc_now_ms()
+            self.runtime.state = StrategyState.IDLE
+            self.runtime.last_error = None
+            return
+        pending_commands = [
+            command_id
+            for command_id, ticket in self.close_command_tickets.items()
+            if ticket in self.pending_close_tickets and self.mt4.pending_command(command_id)
+        ]
+        if pending_commands:
+            self.close_started_ms = utc_now_ms()
+            self.runtime.state = StrategyState.CLOSING_MT4
+            self.runtime.last_error = f"{message}，MT4 平仓命令仍未回报，继续等待，不重复下发。"
+            self.storage.record_event(
+                "v2_mt4_close_pending_wait",
+                {"command_ids": pending_commands, "tickets": list(self.pending_close_tickets), "reason": message},
+            )
+            return
+        for ticket in list(self.pending_close_tickets):
+            self._retry_mt4_close_ticket(ticket, message)
+
+    def _retry_mt4_hedge_after_failure(self, reason: str) -> None:
+        if self._recover_hedge_from_positions():
+            return
+        if self.active_order:
+            self.runtime.last_error = f"{reason}，继续重试 MT4 跟随。"
+            self.storage.record_event("v2_mt4_hedge_failed_retry", {"reason": reason})
+            self._queue_mt4_hedge(self.active_order)
+            return
+        self._recover(reason)
+
+    def _retry_mt4_close_ticket(self, ticket: int | None, reason: str) -> None:
+        if ticket is None:
+            self._recover(reason)
+            return
+        position = next((item for item in self.mt4.positions() if item.ticket == ticket and item.symbol == self.settings.mt4_symbol), None)
+        if position is None:
+            self.pending_close_tickets.discard(ticket)
+            self.storage.record_event("v2_mt4_close_ticket_already_flat", {"ticket": ticket, "reason": reason})
+            if not self.pending_close_tickets:
+                self._recover_or_retry_mt4_close(reason)
+            return
+        command = self.mt4.queue_close(ticket, position.lots, "v2_exit_follow_retry")
+        self.close_command_id = command.command_id
+        self.close_command_tickets[command.command_id] = ticket
+        self.pending_close_tickets.add(ticket)
+        self.close_started_ms = utc_now_ms()
+        self.runtime.state = StrategyState.CLOSING_MT4
+        self.runtime.last_error = f"{reason}，已重新发送 MT4 平仓命令。"
+        self.storage.record_event(
+            "v2_mt4_close_retry_queued",
+            {"command_id": command.command_id, "ticket": ticket, "lots": str(position.lots), "reason": reason},
+        )

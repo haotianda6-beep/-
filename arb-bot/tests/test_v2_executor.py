@@ -5,7 +5,7 @@ import pytest
 
 from app.binance_client import PaperBinanceClient
 from app.config import Settings
-from app.models import Mt4Report, Mt4Tick, OrderStatus, Side, StrategyState
+from app.models import Mt4Position, Mt4Report, Mt4Tick, OpenPair, OrderStatus, Side, StrategyState, utc_now_ms
 from app.mt4_bridge import Mt4Bridge
 from app.storage import Storage
 from app.v2_executor import GoldV2Executor
@@ -134,6 +134,219 @@ async def test_v2_partial_entry_fill_does_not_queue_mt4(tmp_path):
     assert executor.active_order.status == OrderStatus.PARTIALLY_FILLED
     assert mt4.next_command() == {"command": "NONE"}
     assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+
+
+@pytest.mark.asyncio
+async def test_v2_terminal_partial_entry_requotes_remaining_then_hedges_total(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(short_plan("101"))
+    first_order_id = executor.active_order.order_id
+    await client.simulate_fill(first_order_id, Decimal("0.4"), Decimal("101"))
+    client._orders[first_order_id] = client._orders[first_order_id].model_copy(update={"status": OrderStatus.CANCELED})
+
+    await executor.step(short_plan("101"))
+
+    assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert executor.active_order is not None
+    assert executor.active_order.order_id != first_order_id
+    assert executor.active_order.orig_qty == Decimal("0.6")
+    assert mt4.next_command() == {"command": "NONE"}
+
+    await client.simulate_fill(executor.active_order.order_id, Decimal("0.6"), Decimal("101"))
+    await executor.step(short_plan("101"))
+    command = mt4.next_command()
+    assert command["action"] == "BUY"
+    assert command["lots"] == "0.01"
+
+    mt4.submit_report(
+        Mt4Report(
+            command_id=command["command_id"],
+            status="ok",
+            action="BUY",
+            ticket=17,
+            fill_price=Decimal("99"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await executor.step(short_plan("101"))
+    assert run.state == StrategyState.PAIR_OPEN
+    assert run.open_pair.quantity_oz == Decimal("1.0")
+    assert run.open_pair.binance_entry_price == Decimal("101")
+
+
+@pytest.mark.asyncio
+async def test_v2_mt4_hedge_timeout_waits_pending_command_without_duplicate(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(short_plan("101"))
+    client.set_quote(Decimal("101"), Decimal("101.2"))
+    await executor.step(short_plan("101"))
+    first_command = mt4.next_command()
+    assert first_command["action"] == "BUY"
+
+    executor.hedge_started_ms = utc_now_ms() - 5_000
+    await executor.step(short_plan("101"))
+
+    assert run.state == StrategyState.HEDGING_MT4
+    assert "不重复下发" in run.last_error
+    assert mt4.next_command() == {"command": "NONE"}
+
+
+@pytest.mark.asyncio
+async def test_v2_mt4_hedge_failure_retries_after_report_without_pause(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(short_plan("101"))
+    client.set_quote(Decimal("101"), Decimal("101.2"))
+    await executor.step(short_plan("101"))
+    failed_command = mt4.next_command()
+    mt4.submit_report(
+        Mt4Report(
+            command_id=failed_command["command_id"],
+            status="error",
+            action="BUY",
+            error_code=129,
+            message="price changed",
+        )
+    )
+
+    await executor.step(short_plan("101"))
+
+    retry_command = mt4.next_command()
+    assert run.state == StrategyState.HEDGING_MT4
+    assert retry_command["action"] == "BUY"
+    assert retry_command["command_id"] != failed_command["command_id"]
+    assert "继续重试" in run.last_error
+
+
+@pytest.mark.asyncio
+async def test_v2_mt4_close_timeout_waits_pending_command_without_duplicate(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("99"),
+            ask=Decimal("99.2"),
+            positions=[
+                Mt4Position(
+                    ticket=7,
+                    symbol="XAUUSD",
+                    side=Side.BUY,
+                    lots=Decimal("0.01"),
+                    open_price=Decimal("99"),
+                )
+            ],
+        )
+    )
+
+    client.set_quote(Decimal("100"), Decimal("100.1"))
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2"}})
+    client.set_quote(Decimal("99.8"), executor.active_order.price)
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2"}})
+    close_command = mt4.next_command()
+    assert close_command["action"] == "CLOSE"
+
+    executor.close_started_ms = utc_now_ms() - 5_000
+    await executor.step({"selected_entry": {"ready": False}})
+
+    assert run.state == StrategyState.CLOSING_MT4
+    assert "不重复下发" in run.last_error
+    assert mt4.next_command() == {"command": "NONE"}
+
+
+@pytest.mark.asyncio
+async def test_v2_mt4_close_failure_retries_after_report_without_pause(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("99"),
+            ask=Decimal("99.2"),
+            positions=[
+                Mt4Position(
+                    ticket=7,
+                    symbol="XAUUSD",
+                    side=Side.BUY,
+                    lots=Decimal("0.01"),
+                    open_price=Decimal("99"),
+                )
+            ],
+        )
+    )
+
+    client.set_quote(Decimal("100"), Decimal("100.1"))
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2"}})
+    client.set_quote(Decimal("99.8"), executor.active_order.price)
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2"}})
+    failed_command = mt4.next_command()
+    mt4.submit_report(
+        Mt4Report(
+            command_id=failed_command["command_id"],
+            status="error",
+            action="CLOSE",
+            ticket=7,
+            error_code=136,
+            message="off quotes",
+        )
+    )
+
+    await executor.step({"selected_entry": {"ready": False}})
+
+    retry_command = mt4.next_command()
+    assert run.state == StrategyState.CLOSING_MT4
+    assert retry_command["action"] == "CLOSE"
+    assert retry_command["ticket"] == 7
+    assert retry_command["command_id"] != failed_command["command_id"]
+    assert "重新发送" in run.last_error
 
 
 @pytest.mark.asyncio
