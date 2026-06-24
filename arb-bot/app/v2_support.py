@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal, ROUND_FLOOR
 
 from app.config import Settings
-from app.models import ExecutionPlanStatus, OpenPair, OrderStatus, OrderUpdate, PairDirection, Side
+from app.models import ExecutionPlanStatus, MarketQuote, OpenPair, OrderStatus, OrderUpdate, PairDirection, Side
 
 
 TERMINAL = {OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED}
@@ -28,6 +28,22 @@ def lots_from_qty(settings: Settings, qty_oz: Decimal) -> Decimal:
     raw = qty_oz / settings.mt4_lot_size_oz
     stepped = (raw / settings.mt4_lot_step).to_integral_value(rounding=ROUND_FLOOR) * settings.mt4_lot_step
     return max(stepped, settings.mt4_min_lot)
+
+
+def target_exit_spread(settings: Settings, pair: OpenPair, plan_status: dict | None = None) -> Decimal:
+    exit_plan = (plan_status or {}).get("exit_plan") or {}
+    if exit_plan.get("enabled") and exit_plan.get("target_exit_spread") is not None:
+        return Decimal(str(exit_plan["target_exit_spread"]))
+    base = pair.base_edge if pair.base_edge is not None else abs(pair.binance_entry_price - pair.mt4_entry_price)
+    return max(Decimal("0"), base - settings.close_profit_usd_per_oz)
+
+
+def exit_spread_ready(pair: OpenPair, binance: MarketQuote | None, mt4: MarketQuote | None, target: Decimal) -> bool:
+    if not binance or not mt4:
+        return False
+    if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+        return binance.ask - mt4.bid <= target
+    return mt4.ask - binance.bid <= target
 
 
 def execution_status(

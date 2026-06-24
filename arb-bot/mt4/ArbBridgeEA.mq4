@@ -283,7 +283,9 @@ void ExecuteMarket(string commandId, string symbol, int type, double lots, int s
       ResetLastError();
       return;
    }
-   PostReport(commandId, "ok", OrderActionName(type), ticket, price, lots, 0, "filled");
+   double fillPrice = price;
+   if (OrderSelect(ticket, SELECT_BY_TICKET, MODE_TRADES)) fillPrice = OrderOpenPrice();
+   PostReport(commandId, "ok", OrderActionName(type), ticket, fillPrice, lots, 0, "filled");
 }
 
 void ExecuteClose(string commandId, int ticket, double lots, int slippage, double maxPrice, double minPrice)
@@ -316,7 +318,9 @@ void ExecuteClose(string commandId, int ticket, double lots, int slippage, doubl
       ResetLastError();
       return;
    }
-   PostReport(commandId, "ok", "CLOSE", ticket, price, closeLots, 0, "closed");
+   double fillPrice = price;
+   if (OrderSelect(ticket, SELECT_BY_TICKET, MODE_HISTORY)) fillPrice = OrderClosePrice();
+   PostReport(commandId, "ok", "CLOSE", ticket, fillPrice, closeLots, 0, "closed");
 }
 
 void PostReport(string commandId, string status, string action, int ticket, double fillPrice, double lots, int errorCode, string message)
