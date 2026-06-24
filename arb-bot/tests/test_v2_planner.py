@@ -7,17 +7,17 @@ from app.v2_planner import build_gold_v2_status
 
 
 def settings(tmp_path, **kwargs) -> Settings:
-    return Settings(
-        _env_file=None,
-        PAPER_MODE=True,
-        LIVE_TRADING=False,
-        SQLITE_PATH=tmp_path / "test.sqlite3",
-        OPEN_MIN_EDGE=Decimal("1.50"),
-        BINANCE_ENTRY_OFFSET_USD=Decimal("0.10"),
-        TARGET_OZ=Decimal("1"),
-        MT4_SLIPPAGE_POINTS=30,
-        **kwargs,
-    )
+    defaults = {
+        "PAPER_MODE": True,
+        "LIVE_TRADING": False,
+        "SQLITE_PATH": tmp_path / "test.sqlite3",
+        "OPEN_MIN_EDGE": Decimal("1.50"),
+        "BINANCE_ENTRY_OFFSET_USD": Decimal("0.10"),
+        "TARGET_OZ": Decimal("1"),
+        "MT4_SLIPPAGE_POINTS": 30,
+    }
+    defaults.update(kwargs)
+    return Settings(_env_file=None, **defaults)
 
 
 def filters() -> ExchangeFilters:
@@ -83,6 +83,43 @@ def test_v2_short_order_price_keeps_threshold_and_slippage_budget(tmp_path):
     assert status["mt4_live_spread_usd_per_oz"] == Decimal("0.2")
     assert status["short_entry"]["binance_price"] == Decimal("4003.6")
     assert status["short_entry"]["expected_locked_edge"] == Decimal("3.6")
+
+
+def test_v2_slippage_budget_includes_recent_mt4_movement(tmp_path):
+    cfg = settings(tmp_path, MT4_SLIPPAGE_POINTS=0)
+    store = Storage(cfg.sqlite_path)
+    start = utc_now_ms() - 10 * 60_000
+    closes = [
+        Decimal("4000.0"),
+        Decimal("4000.2"),
+        Decimal("4001.2"),
+        Decimal("4001.5"),
+        Decimal("4003.5"),
+        Decimal("4004.0"),
+        Decimal("4004.8"),
+        Decimal("4006.3"),
+        Decimal("4006.5"),
+        Decimal("4007.7"),
+    ]
+    mt4_bars = [bar(start + index * 60_000, close) for index, close in enumerate(closes)]
+    binance_bars = [bar(item.open_time_ms, item.close + Decimal("2.0")) for item in mt4_bars]
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4010.0"), ask=Decimal("4010.2")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("4007.0"), ask=Decimal("4007.3")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+    )
+
+    assert status["short_entry"]["threshold"] == Decimal("2.00")
+    assert status["mt4_slippage_budget"] == Decimal("1.3")
+    assert status["short_entry"]["binance_price"] == Decimal("4010.6")
+    assert status["short_entry"]["expected_locked_edge"] == Decimal("3.3")
 
 
 def test_v2_add_plan_uses_real_first_edge_plus_step(tmp_path):

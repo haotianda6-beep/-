@@ -13,6 +13,7 @@ MIN_POINTS = 8
 RANGE_FACTOR = Decimal("0.70")
 DEFAULT_SLIPPAGE_BUDGET = Decimal("0.30")
 XAU_POINT_VALUE = Decimal("0.01")
+MT4_MOVE_PERCENTILE = 70
 
 
 def build_gold_v2_status(
@@ -30,7 +31,7 @@ def build_gold_v2_status(
     short_range, long_range = _spread_ranges(mt4_bars, binance_bars)
     short_threshold = _entry_threshold(short_range, settings.open_min_edge)
     long_threshold = _entry_threshold(long_range, settings.open_min_edge)
-    slippage_budget = _mt4_slippage_budget(settings, mt4_quote)
+    slippage_budget = _mt4_slippage_budget(settings, mt4_quote, mt4_bars)
 
     short_plan = _entry_plan(
         direction=PairDirection.BINANCE_SHORT_MT4_LONG,
@@ -339,9 +340,22 @@ def _add_base_edge(pair: OpenPair, metrics: PositionMetrics | None) -> Decimal |
     return pair.base_edge or (metrics.actual_entry_spread if metrics else None)
 
 
-def _mt4_slippage_budget(settings: Settings, mt4_quote: MarketQuote | None = None) -> Decimal:
+def _mt4_slippage_budget(settings: Settings, mt4_quote: MarketQuote | None = None, mt4_bars: list[HistoryBar] | None = None) -> Decimal:
     configured = slippage_budget_usd_per_oz(settings.mt4_slippage_points, XAU_POINT_VALUE, mt4_quote)
-    return max(configured, DEFAULT_SLIPPAGE_BUDGET)
+    base = max(configured, DEFAULT_SLIPPAGE_BUDGET)
+    return base + _mt4_recent_move_budget(mt4_bars or [])
+
+
+def _mt4_recent_move_budget(mt4_bars: list[HistoryBar]) -> Decimal:
+    if len(mt4_bars) < MIN_POINTS:
+        return Decimal("0")
+    ordered = sorted(mt4_bars, key=lambda bar: bar.open_time_ms)
+    moves = [abs(curr.close - prev.close) for prev, curr in zip(ordered, ordered[1:])]
+    if not moves:
+        return Decimal("0")
+    moves.sort()
+    index = ((len(moves) - 1) * MT4_MOVE_PERCENTILE) // 100
+    return moves[index]
 
 
 def _direction_text(direction: PairDirection) -> str:
