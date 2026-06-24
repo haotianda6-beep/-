@@ -375,7 +375,15 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
 
     async def _refresh_active_order(self) -> OrderUpdate:
         assert self.active_order is not None
-        latest = await self.binance.get_order(self.active_order.order_id)
+        try:
+            latest = await self.binance.get_order(self.active_order.order_id)
+        except BinanceError as exc:
+            if _missing_order_error(exc):
+                missing = self.active_order.model_copy(update={"status": OrderStatus.CANCELED})
+                self.storage.record_event("v2_active_order_missing", missing.model_dump(mode="json"))
+                self.active_order = missing
+                return missing
+            raise
         if latest:
             self.active_order = latest
         return self.active_order
@@ -668,3 +676,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             "v2_mt4_close_retry_queued",
             {"command_id": command.command_id, "ticket": ticket, "lots": str(position.lots), "reason": reason},
         )
+
+
+def _missing_order_error(exc: BinanceError) -> bool:
+    text = str(exc)
+    return '"code":-2013' in text or "Order does not exist" in text

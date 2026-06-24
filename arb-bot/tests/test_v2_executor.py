@@ -3,9 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.binance_client import PaperBinanceClient
+from app.binance_client import BinanceError, PaperBinanceClient
 from app.config import Settings
-from app.models import Mt4Position, Mt4Report, Mt4Tick, OpenPair, OrderStatus, Side, StrategyState, utc_now_ms
+from app.models import Mt4Position, Mt4Report, Mt4Tick, OpenPair, OrderStatus, OrderUpdate, Side, StrategyState, utc_now_ms
 from app.mt4_bridge import Mt4Bridge
 from app.storage import Storage
 from app.v2_executor import GoldV2Executor
@@ -69,6 +69,11 @@ def add_plan(price: str = "105") -> dict:
     }
 
 
+class MissingOrderBinanceClient(PaperBinanceClient):
+    async def get_order(self, order_id: str) -> OrderUpdate | None:
+        raise BinanceError('{"code":-2013,"msg":"Order does not exist."}')
+
+
 @pytest.mark.asyncio
 async def test_v2_entry_and_exit_use_binance_post_only_then_mt4_follow(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
@@ -114,6 +119,42 @@ async def test_v2_entry_and_exit_use_binance_post_only_then_mt4_follow(tmp_path)
     assert run.state == StrategyState.IDLE
     assert run.open_pair is None
     assert all(order.is_maker for order in client._orders.values())
+
+
+@pytest.mark.asyncio
+async def test_v2_missing_exit_order_is_treated_as_canceled(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False)
+    client = MissingOrderBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.QUOTING_BINANCE_EXIT
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    executor.active_order = OrderUpdate(
+        order_id="missing_exit_order",
+        client_order_id="client_missing_exit",
+        symbol="XAUUSDT",
+        side=Side.BUY,
+        status=OrderStatus.NEW,
+        price=Decimal("100"),
+        orig_qty=Decimal("1"),
+        reduce_only=True,
+    )
+
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2"}})
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    assert run.last_error is None
 
 
 @pytest.mark.asyncio
