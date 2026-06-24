@@ -69,7 +69,7 @@ def build_gold_v2_status(
         "short_entry": short_plan,
         "long_entry": long_plan,
         "selected_entry": selected,
-        "exit_plan": _exit_plan(open_pair, metrics),
+        "exit_plan": _exit_plan(settings, open_pair, metrics),
         "add_plan": _add_plan(settings, filters, open_pair, metrics, binance_quote, mt4_quote, slippage_budget),
         "partial_fill_policy": [
             "币安只允许挂单成交，禁止市价开仓和平仓。",
@@ -210,20 +210,81 @@ def _selected_entry_plan(short_plan: dict, long_plan: dict) -> dict | None:
     return max(ready, key=lambda plan: Decimal(str(plan.get("current_edge") or "0")) - Decimal(str(plan.get("threshold") or "0")))
 
 
-def _exit_plan(pair: OpenPair | None, metrics: PositionMetrics | None) -> dict:
+def _exit_plan(settings: Settings, pair: OpenPair | None, metrics: PositionMetrics | None) -> dict:
     if not pair:
         return {"enabled": False, "reason": "当前无组合持仓，不计算平仓价差。"}
     if not metrics or metrics.dynamic_close_spread is None:
         return {"enabled": False, "reason": "等待真实均价、资金费和隔夜费数据后再计算平仓价差。"}
+    negative_swap = _negative_swap_exit_plan(settings, pair, metrics)
+    target_exit_spread = (
+        negative_swap["target_exit_spread"]
+        if negative_swap.get("active") and negative_swap.get("target_exit_spread") is not None
+        else metrics.dynamic_close_spread
+    )
+    reason = "平仓目标来自真实均价、已产生费用和额外利润空间。"
+    if negative_swap.get("active"):
+        reason = negative_swap["reason"]
     return {
         "enabled": True,
         "direction": pair.direction.value,
         "current_exit_spread": metrics.current_exit_spread,
         "break_even_spread": metrics.profitable_spread_threshold,
-        "target_exit_spread": metrics.dynamic_close_spread,
+        "target_exit_spread": target_exit_spread,
         "estimated_net": metrics.estimated_close_net,
-        "reason": "平仓目标来自真实均价、已产生费用和额外利润空间。",
+        "reason": reason,
+        "normal_target_exit_spread": metrics.dynamic_close_spread,
+        "negative_swap": negative_swap,
     }
+
+
+def _negative_swap_exit_plan(settings: Settings, pair: OpenPair, metrics: PositionMetrics) -> dict:
+    estimate = metrics.mt4_swap_estimate
+    next_rollover = metrics.mt4_next_rollover_time_ms
+    if settings.negative_swap_close_before_minutes <= 0 or estimate is None or estimate >= 0 or next_rollover is None:
+        return {"active": False, "reason": "隔夜费风控未触发。"}
+    ms_left = next_rollover - utc_now_ms()
+    lead_ms = settings.negative_swap_close_before_minutes * 60 * 1000
+    projected_net = _projected_convergence_net_after_next_swap(settings, pair, metrics, estimate)
+    minutes_left = max(0, ms_left // 60_000)
+    if ms_left < 0 or ms_left > lead_ms:
+        return {
+            "active": False,
+            "reason": f"MT4 下次隔夜费预估亏损 {estimate}，距离结算约 {minutes_left} 分钟，未到提前处理窗口。",
+            "projected_convergence_net": projected_net,
+            "minutes_left": minutes_left,
+        }
+    if projected_net is not None and projected_net > 0:
+        return {
+            "active": False,
+            "reason": f"MT4 下次隔夜费预估亏损 {estimate}，但扣后回归净利预估 {projected_net}，不提前平仓。",
+            "projected_convergence_net": projected_net,
+            "minutes_left": minutes_left,
+        }
+    safe_target = None
+    if metrics.profitable_spread_threshold is not None:
+        safe_target = metrics.profitable_spread_threshold - (metrics.exit_follow_buffer_usd_per_oz or Decimal("0"))
+    return {
+        "active": safe_target is not None,
+        "reason": f"隔夜费亏损风控进入处理窗口：预估 {estimate}，扣后回归净利 {projected_net}，距离结算约 {minutes_left} 分钟；只在不亏保护价差内平仓。",
+        "target_exit_spread": safe_target,
+        "projected_convergence_net": projected_net,
+        "minutes_left": minutes_left,
+    }
+
+
+def _projected_convergence_net_after_next_swap(
+    settings: Settings,
+    pair: OpenPair,
+    metrics: PositionMetrics,
+    next_swap: Decimal,
+) -> Decimal | None:
+    if metrics.actual_entry_spread is None:
+        return None
+    net = (metrics.actual_entry_spread - settings.close_max_spread) * pair.quantity_oz
+    net -= metrics.estimated_fees or Decimal("0")
+    net += metrics.binance_accrued_funding or Decimal("0")
+    net += metrics.mt4_accrued_swap or Decimal("0")
+    return net + next_swap
 
 
 def _add_plan(settings: Settings, filters: ExchangeFilters, pair: OpenPair | None, metrics: PositionMetrics | None, binance: MarketQuote | None, mt4: MarketQuote | None, slippage_budget: Decimal) -> dict:
