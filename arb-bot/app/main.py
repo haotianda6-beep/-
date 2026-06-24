@@ -44,7 +44,7 @@ from app.models import (
     utc_now_ms,
 )
 from app.mt4_bridge import Mt4Bridge
-from app.mt4_costs import live_spread_usd_per_oz, spread_cost_usd
+from app.mt4_costs import live_spread_usd_per_oz, recent_move_budget_usd_per_oz, spread_cost_usd
 from app.risk import RiskManager
 from app.storage import Storage
 from app.strategy import (
@@ -100,6 +100,9 @@ _gold_v2_binance_bars_failure_ms = 0
 _mt4_tick_bar_last_saved_ms = 0
 GOLD_V2_BAR_CACHE_TTL_MS = 60_000
 GOLD_V2_BAR_FAILURE_RETRY_MS = 30_000
+GOLD_V2_EXIT_BUFFER_LOOKBACK_MS = 30 * 60 * 1000
+GOLD_V2_EXIT_BUFFER_MOVE_PERCENTILE = 70
+GOLD_V2_EXIT_BUFFER_MIN_POINTS = 8
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 MT4_DIR = Path(__file__).resolve().parents[1] / "mt4"
 RUNTIME_STATE_PATH = settings.sqlite_path.parent / "runtime_state.json"
@@ -1789,7 +1792,14 @@ async def _position_metrics() -> PositionMetrics:
     actual_entry_spread = _actual_entry_spread(pair, binance_entry_price, mt4_entry_price)
     current_exit_spread = _current_exit_spread(pair, binance_quote, mt4_quote)
     profitable_spread_threshold = _profitable_spread_threshold(pair, actual_entry_spread, accrued_funding, accrued_swap, fees, mt4_spread_protection)
-    exit_follow_buffer = _exit_follow_buffer_usd_per_oz(swap_info)
+    mt4_recent_bars = storage.get_bars(
+        "mt4",
+        settings.mt4_symbol,
+        "1m",
+        utc_now_ms() - GOLD_V2_EXIT_BUFFER_LOOKBACK_MS,
+        utc_now_ms(),
+    )
+    exit_follow_buffer = _exit_follow_buffer_usd_per_oz(swap_info, mt4_recent_bars)
     close_profit = _effective_close_profit_usd_per_oz(pair)
     dynamic_close_spread = _dynamic_close_spread(profitable_spread_threshold, exit_follow_buffer, close_profit)
     net = None
@@ -1947,9 +1957,15 @@ def _effective_close_profit_usd_per_oz(pair) -> Decimal:
     return settings.close_profit_usd_per_oz
 
 
-def _exit_follow_buffer_usd_per_oz(swap_info) -> Decimal:
+def _exit_follow_buffer_usd_per_oz(swap_info, mt4_bars: list[HistoryBar] | None = None) -> Decimal:
     point = swap_info.point or Decimal("0.01")
-    return (Decimal(settings.mt4_slippage_points) * point) + settings.mt4_close_extra_buffer_usd
+    configured = (Decimal(settings.mt4_slippage_points) * point) + settings.mt4_close_extra_buffer_usd
+    recent_move = recent_move_budget_usd_per_oz(
+        mt4_bars or [],
+        percentile=GOLD_V2_EXIT_BUFFER_MOVE_PERCENTILE,
+        min_points=GOLD_V2_EXIT_BUFFER_MIN_POINTS,
+    )
+    return configured + recent_move
 
 
 def _estimate_binance_funding(pair, qty: Decimal, funding, quote: MarketQuote | None) -> Decimal | None:

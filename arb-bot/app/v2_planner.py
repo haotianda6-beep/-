@@ -4,7 +4,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
 from app.config import Settings
 from app.models import ExchangeFilters, HistoryBar, MarketQuote, OpenPair, PairDirection, PositionMetrics, Side, utc_now_ms
-from app.mt4_costs import live_spread_usd_per_oz, slippage_budget_usd_per_oz
+from app.mt4_costs import live_spread_usd_per_oz, recent_move_budget_usd_per_oz, slippage_budget_usd_per_oz
 from app.storage import Storage
 
 
@@ -347,15 +347,7 @@ def _mt4_slippage_budget(settings: Settings, mt4_quote: MarketQuote | None = Non
 
 
 def _mt4_recent_move_budget(mt4_bars: list[HistoryBar]) -> Decimal:
-    if len(mt4_bars) < MIN_POINTS:
-        return Decimal("0")
-    ordered = sorted(mt4_bars, key=lambda bar: bar.open_time_ms)
-    moves = [abs(curr.close - prev.close) for prev, curr in zip(ordered, ordered[1:])]
-    if not moves:
-        return Decimal("0")
-    moves.sort()
-    index = ((len(moves) - 1) * MT4_MOVE_PERCENTILE) // 100
-    return moves[index]
+    return recent_move_budget_usd_per_oz(mt4_bars, percentile=MT4_MOVE_PERCENTILE, min_points=MIN_POINTS)
 
 
 def _direction_text(direction: PairDirection) -> str:
