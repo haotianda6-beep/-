@@ -505,6 +505,36 @@
           </div>
 
           <div class="panel">
+            <h2>新版观察计划</h2>
+            <div class="compact-list">
+              <div class="compact-row">
+                <strong>运行模式</strong>
+                <span class="wrap" id="v2ModeLine">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>动态阈值</strong>
+                <span class="wrap" id="v2ThresholdLine">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>当前方向</strong>
+                <span class="wrap" id="v2SelectedLine">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>币安挂价</strong>
+                <span class="wrap" id="v2OrderLine">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>补仓状态</strong>
+                <span class="wrap" id="v2AddPlanLine">-</span>
+              </div>
+              <div class="compact-row">
+                <strong>风控规则</strong>
+                <span class="wrap" id="v2RiskLine">-</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
             <h2>当前币安限价单</h2>
             <div class="compact-list">
               <div class="compact-row">
@@ -989,9 +1019,11 @@
 
       function render(data) {
         const modeText = data.paper_mode || !data.live_trading ? "模拟模式" : "实盘模式";
+        const observationOnly = Boolean(data.config?.gold_v2_observation_only);
         setStatus($("mode"), modeText, modeText === "实盘模式" ? "bad" : "warn");
         setStatus($("mt4"), data.mt4_connected ? "MT4 已连接" : "MT4 未连接", data.mt4_connected ? "ok" : "bad");
-        $("startLiveBtn").disabled = modeText === "实盘模式";
+        $("startLiveBtn").disabled = modeText === "实盘模式" || observationOnly;
+        $("startLiveBtn").title = observationOnly ? "新版观察阶段锁定只读，暂不允许启动实盘" : "";
         $("stopLiveBtn").disabled = modeText !== "实盘模式";
         $("clearPaperBtn").disabled = modeText === "实盘模式";
         $("resumeBtn").disabled = data.state !== "PAUSED";
@@ -1011,6 +1043,7 @@
         $("mt4Line").textContent = m ? `买 ${fmt(m.bid)} / 卖 ${fmt(m.ask)} / ${age(m.timestamp_ms)}` : "等待报价";
         $("spreadLine").textContent = b && m ? `开仓差 ${fmt(Number(b.ask) - Number(m.ask))} 美元；反向差 ${fmt(Number(m.bid) - Number(b.bid))} 美元` : "-";
         renderAccounts(data);
+        renderV2Plan(data.gold_v2);
         renderLimitOrder(data);
         renderPositions(data);
 
@@ -1027,6 +1060,42 @@
         $("executionPlan").textContent = data.execution_plan?.summary || "-";
         $("followLimit").textContent = data.execution_plan ? `币安成交后 MT4 需要在 ${fmt(data.execution_plan.max_follow_seconds)} 秒内回报；EA 当前建议轮询 0.05 秒。` : "-";
         renderConfig(data.config);
+      }
+
+      function renderV2Plan(plan) {
+        if (!plan) {
+          $("v2ModeLine").textContent = "等待新版观察计划";
+          $("v2ThresholdLine").textContent = "-";
+          $("v2SelectedLine").textContent = "-";
+          $("v2OrderLine").textContent = "-";
+          $("v2AddPlanLine").textContent = "-";
+          $("v2RiskLine").textContent = "-";
+          return;
+        }
+        $("v2ModeLine").textContent = `${plan.mode || "只读观察"}，${plan.reason || "不会自动下单"}`;
+        const shortThreshold = plan.short_entry?.threshold;
+        const longThreshold = plan.long_entry?.threshold;
+        const points = Math.max(Number(plan.short_range?.points || 0), Number(plan.long_range?.points || 0));
+        $("v2ThresholdLine").textContent = `币安高 ${fmt(shortThreshold)} 美元；币安低 ${fmt(longThreshold)} 美元；样本 ${fmt(points)} 根`;
+
+        const selected = plan.selected_entry;
+        if (!selected) {
+          $("v2SelectedLine").textContent = "等待报价";
+          $("v2OrderLine").textContent = "-";
+        } else {
+          const readyText = selected.ready ? "达到观察阈值" : "未达到观察阈值";
+          $("v2SelectedLine").textContent = `${selected.direction_text || "-"}，当前 ${fmt(selected.current_edge)} 美元，${readyText}`;
+          $("v2OrderLine").textContent = `${translateAction(selected.binance_side)} ${fmt(selected.quantity_oz)} XAU，建议挂 ${fmt(selected.binance_price)}，预留价差 ${fmt(selected.expected_locked_edge)} 美元`;
+        }
+
+        const add = plan.add_plan || {};
+        if (add.next_trigger_edge !== undefined && add.next_trigger_edge !== null) {
+          $("v2AddPlanLine").textContent = `已写入但未启动；第 ${fmt(add.next_add_number)} 次触发价差 ${fmt(add.next_trigger_edge)} 美元`;
+        } else {
+          $("v2AddPlanLine").textContent = add.reason || "补仓未启动";
+        }
+        const policy = (plan.partial_fill_policy || []).slice(0, 2).join("；");
+        $("v2RiskLine").textContent = `${policy || "禁止币安市价单"}；MT4滑点预算 ${fmt(plan.mt4_slippage_budget)} 美元`;
       }
 
       function renderLimitOrder(data) {

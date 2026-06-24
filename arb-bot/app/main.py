@@ -16,12 +16,13 @@ from fastapi.responses import FileResponse, HTMLResponse
 from app.binance_client import BinanceBaseClient, BinanceError, BinanceFuturesClient, PaperBinanceClient
 from app.config import Settings, existing_env_paths, load_settings, update_local_config_file, update_mode_file
 from app.logger import setup_logging
-from app.history import build_spread_analysis
+from app.history import build_spread_analysis, fetch_binance_klines
 from app.live_reconcile import is_transient_live_reconcile_error, open_pair_live_reconcile_action
 from app.models import (
     BinancePositionSnapshot,
     EngineStatus,
     ExecutionPlanStatus,
+    HistoryBar,
     MarketQuote,
     Mt4ClosedOrder,
     Mt4HistoryPayload,
@@ -52,6 +53,7 @@ from app.strategy import (
     round_down,
     round_up,
 )
+from app.v2_planner import build_gold_v2_status
 
 
 setup_logging()
@@ -89,6 +91,11 @@ _runtime_state_cache: str | None = None
 _live_pair_reconcile_ms = 0
 _live_pair_reconcile_error_count = 0
 _live_pair_operation_cooldown_until_ms = 0
+_gold_v2_binance_bars_cache: list[HistoryBar] = []
+_gold_v2_binance_bars_cache_ms = 0
+_gold_v2_binance_bars_failure_ms = 0
+GOLD_V2_BAR_CACHE_TTL_MS = 60_000
+GOLD_V2_BAR_FAILURE_RETRY_MS = 30_000
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 MT4_DIR = Path(__file__).resolve().parents[1] / "mt4"
 RUNTIME_STATE_PATH = settings.sqlite_path.parent / "runtime_state.json"
@@ -294,11 +301,14 @@ async def download_ea() -> FileResponse:
 @app.get("/status", response_model=EngineStatus)
 async def status() -> EngineStatus:
     metrics = await _position_metrics()
+    binance_quote = binance_client.latest_quote()
+    mt4_quote = mt4_bridge.latest_quote()
+    gold_v2 = await _gold_v2_status(metrics, binance_quote, mt4_quote)
     return EngineStatus(
         state=strategy.state,
         live_trading=settings.live_trading,
         paper_mode=settings.paper_mode,
-        binance_connected=binance_client.latest_quote() is not None,
+        binance_connected=binance_quote is not None,
         mt4_connected=mt4_bridge.connected(),
         binance_symbol=settings.binance_symbol,
         mt4_symbol=settings.mt4_symbol,
@@ -308,10 +318,11 @@ async def status() -> EngineStatus:
         mt4_account=mt4_bridge.account_snapshot(),
         binance_position_qty=await _binance_position_quantity(),
         mt4_positions=mt4_bridge.positions(),
-        binance_quote=binance_client.latest_quote(),
-        mt4_quote=mt4_bridge.latest_quote(),
+        binance_quote=binance_quote,
+        mt4_quote=mt4_quote,
         open_pair=strategy.open_pair,
         position_metrics=metrics,
+        gold_v2=gold_v2,
         execution_plan=_execution_plan(metrics),
         last_error=strategy.last_error,
         config=_runtime_config(),
@@ -363,6 +374,55 @@ async def _binance_position_snapshot(force: bool = False) -> BinancePositionSnap
 
 def _now_ms() -> int:
     return int(asyncio.get_running_loop().time() * 1000)
+
+
+async def _gold_v2_status(
+    metrics: PositionMetrics,
+    binance_quote: MarketQuote | None,
+    mt4_quote: MarketQuote | None,
+) -> dict:
+    try:
+        binance_bars = await _gold_v2_recent_binance_bars()
+        return build_gold_v2_status(
+            settings=settings,
+            storage=storage,
+            filters=binance_client.filters,
+            binance_quote=binance_quote,
+            mt4_quote=mt4_quote,
+            binance_bars=binance_bars,
+            open_pair=strategy.open_pair,
+            metrics=metrics,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("gold v2 status unavailable: %s", str(exc)[:160])
+        return {
+            "mode": "只读观察",
+            "auto_trade_enabled": False,
+            "execution_enabled": False,
+            "add_enabled": False,
+            "reason": f"新版观察计划暂时不可用：{str(exc)[:120]}",
+        }
+
+
+async def _gold_v2_recent_binance_bars() -> list[HistoryBar]:
+    global _gold_v2_binance_bars_cache, _gold_v2_binance_bars_cache_ms, _gold_v2_binance_bars_failure_ms
+    now = _now_ms()
+    if now - _gold_v2_binance_bars_cache_ms <= GOLD_V2_BAR_CACHE_TTL_MS:
+        return _gold_v2_binance_bars_cache
+    if now - _gold_v2_binance_bars_failure_ms <= GOLD_V2_BAR_FAILURE_RETRY_MS:
+        return _gold_v2_binance_bars_cache
+    end_ms = utc_now_ms()
+    start_ms = end_ms - 30 * 60 * 1000
+    try:
+        bars = await asyncio.wait_for(fetch_binance_klines(settings, "1m", start_ms, end_ms), timeout=5)
+    except Exception as exc:  # noqa: BLE001
+        _gold_v2_binance_bars_failure_ms = now
+        logger.warning("gold v2 Binance bars unavailable: %s", str(exc)[:160])
+        return _gold_v2_binance_bars_cache
+    _gold_v2_binance_bars_cache = bars
+    _gold_v2_binance_bars_cache_ms = now
+    _gold_v2_binance_bars_failure_ms = 0
+    return _gold_v2_binance_bars_cache
 
 
 @app.put("/config", response_model=RuntimeConfig)
@@ -1165,6 +1225,8 @@ def _int_field(data: dict | None, key: str) -> int | None:
 
 
 def _assert_live_preflight() -> None:
+    if settings.gold_v2_observation_only:
+        raise HTTPException(status_code=400, detail="新版七步观察阶段已锁定只读，暂不允许启动实盘")
     if not settings.binance_api_key or not settings.binance_api_secret:
         raise HTTPException(status_code=400, detail="币安密钥未配置")
     if not mt4_bridge.connected():
@@ -1452,6 +1514,7 @@ def _runtime_config() -> RuntimeConfig:
         binance_api_configured=bool(settings.binance_api_key and settings.binance_api_secret),
         config_files=[str(path) for path in existing_env_paths()],
         mt4_script_path=str((MT4_DIR / "ArbBridgeEA.mq4").resolve()),
+        gold_v2_observation_only=settings.gold_v2_observation_only,
         binance_leverage=settings.binance_leverage,
         binance_entry_offset_usd=settings.binance_entry_offset_usd,
         open_min_edge=settings.open_min_edge,

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
@@ -357,6 +357,7 @@ class RuntimeConfig(BaseModel):
     binance_api_configured: bool
     config_files: list[str]
     mt4_script_path: str
+    gold_v2_observation_only: bool
     binance_leverage: int
     binance_entry_offset_usd: Decimal
     open_min_edge: Decimal
@@ -509,6 +510,7 @@ class EngineStatus(BaseModel):
     mt4_quote: MarketQuote | None = None
     open_pair: OpenPair | None = None
     position_metrics: PositionMetrics | None = None
+    gold_v2: dict[str, Any] | None = None
     execution_plan: ExecutionPlanStatus
     last_error: str | None = None
     config: RuntimeConfig
