@@ -1628,6 +1628,59 @@ async def test_add_position_trigger_recalculates_legacy_pair_actual_spread(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_add_position_trigger_uses_binance_break_even_snapshot(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        AddBreakEvenSnapshotPaperClient,
+        settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 2},
+    )
+    engine.open_pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("2003.5"),
+        mt4_entry_price=Decimal("2000.5"),
+        binance_order_id="legacy-high-local-entry",
+        mt4_ticket=111111,
+        mt4_tickets=[111111],
+        opened_ms=utc_now_ms() - MIN_ADD_AFTER_OPEN_MS,
+        base_edge=Decimal("3"),
+        last_add_edge=Decimal("3"),
+        add_count=0,
+    )
+    engine.state = StrategyState.PAIR_OPEN
+    client._orders.clear()
+    client._orders["legacy-high-local-entry"] = OrderUpdate(
+        order_id="legacy-high-local-entry",
+        client_order_id="legacy-high-local-entry",
+        symbol="XAUUSDT",
+        side=Side.SELL,
+        status=OrderStatus.FILLED,
+        price=Decimal("2003.5"),
+        orig_qty=Decimal("1"),
+        executed_qty=Decimal("1"),
+        avg_price=Decimal("2003.5"),
+    )
+    client.set_quote(Decimal("2001.1"), Decimal("2002.1"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999.7"),
+            ask=Decimal("2000"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000.5")),
+            ],
+            account_margin=Decimal("4.34"),
+        )
+    )
+
+    await engine.step()
+
+    assert engine.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert engine.active_plan is not None
+    assert engine.active_plan.edge == Decimal("2.1")
+
+
+@pytest.mark.asyncio
 async def test_add_position_records_actual_add_fill_spread(tmp_path):
     engine, client, mt4 = await make_engine(
         tmp_path,
@@ -1730,7 +1783,7 @@ async def test_exit_repair_does_not_move_add_ladder_anchor_after_add(tmp_path):
 
     assert engine.open_pair is not None
     assert engine.open_pair.last_add_edge == Decimal("2.13")
-    assert engine._next_add_trigger_edge() == Decimal("3.13")
+    assert await engine._next_add_trigger_edge() == Decimal("3.13")
 
 
 @pytest.mark.asyncio
@@ -2140,6 +2193,16 @@ class PositionTrackingPaperClient(PaperBinanceClient):
 class BreakEvenSnapshotPaperClient(PaperBinanceClient):
     async def position_snapshot(self) -> BinancePositionSnapshot | None:
         raise AssertionError("close trigger calculation must not poll Binance position snapshot")
+
+
+class AddBreakEvenSnapshotPaperClient(PositionTrackingPaperClient):
+    async def position_snapshot(self) -> BinancePositionSnapshot | None:
+        return BinancePositionSnapshot(
+            symbol=self.settings.binance_symbol,
+            position_amt=Decimal("-1"),
+            entry_price=Decimal("2003.5"),
+            break_even_price=Decimal("2001.5"),
+        )
 
 
 async def open_live_pair(

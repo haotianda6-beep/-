@@ -6,6 +6,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from app.binance_client import BinanceBaseClient, BinanceError
 from app.config import Settings
 from app.models import (
+    BinancePositionSnapshot,
     EntryPlan,
     ExchangeFilters,
     MarketQuote,
@@ -134,6 +135,8 @@ FUNDING_INCOME_CACHE_TTL_MS = 60_000
 FUNDING_INCOME_FAILURE_RETRY_MS = 60_000
 MT4_ROLLOVER_AFTER_BLOCK_MS = 5 * 60_000
 NEGATIVE_SWAP_EVENT_THROTTLE_MS = 60_000
+POSITION_SNAPSHOT_CACHE_TTL_MS = 10_000
+POSITION_SNAPSHOT_FAILURE_RETRY_MS = 30_000
 
 
 class StrategyEngine:
@@ -176,6 +179,9 @@ class StrategyEngine:
         self.last_pair_closed_ms = 0
         self._last_negative_swap_event_ms = 0
         self._last_rollover_block_event_ms = 0
+        self._position_snapshot_cache: BinancePositionSnapshot | None = None
+        self._position_snapshot_cache_ms = 0
+        self._position_snapshot_failure_ms = 0
 
     async def step(self) -> None:
         await self._handle_mt4_reports()
@@ -333,7 +339,7 @@ class StrategyEngine:
             self._clear_entry()
             return
         if order.status in {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED} and self.active_plan:
-            if not self._entry_plan_still_valid() and self._entry_order_can_cancel_for_spread():
+            if not await self._entry_plan_still_valid() and self._entry_order_can_cancel_for_spread():
                 order = await self._cancel_entry_order(order)
                 if order is None:
                     return
@@ -359,7 +365,7 @@ class StrategyEngine:
         if order.status == OrderStatus.CANCELED and order.executed_qty == self.hedged_qty:
             self._clear_entry()
 
-    def _entry_plan_still_valid(self) -> bool:
+    async def _entry_plan_still_valid(self) -> bool:
         if not self.active_plan:
             return False
         binance_quote = self.binance.latest_quote()
@@ -367,7 +373,7 @@ class StrategyEngine:
         if not binance_quote or not mt4_quote:
             return False
         if self.adding_to_pair and self.open_pair:
-            min_edge = self._next_add_trigger_edge()
+            min_edge = await self._next_add_trigger_edge()
             if min_edge is None:
                 return False
             return self._current_edge(self.active_plan.direction, binance_quote, mt4_quote) >= min_edge
@@ -817,7 +823,7 @@ class StrategyEngine:
             return False
         if utc_now_ms() - self.open_pair.opened_ms < MIN_ADD_AFTER_OPEN_MS:
             return False
-        trigger_edge = self._next_add_trigger_edge()
+        trigger_edge = await self._next_add_trigger_edge()
         if trigger_edge is None:
             return False
         plan = build_directional_entry_plan(
@@ -879,18 +885,18 @@ class StrategyEngine:
         self.state = StrategyState.QUOTING_BINANCE_ENTRY
         return True
 
-    def _next_add_trigger_edge(self) -> Decimal | None:
-        anchor = self._add_anchor_edge()
+    async def _next_add_trigger_edge(self) -> Decimal | None:
+        anchor = await self._add_anchor_edge()
         if anchor is None:
             return None
         return anchor + self.settings.add_edge_growth_usd
 
-    def _add_anchor_edge(self) -> Decimal | None:
+    async def _add_anchor_edge(self) -> Decimal | None:
         if not self.open_pair:
             return None
         if self.open_pair.add_count == 0:
             base = self.open_pair.base_edge
-            actual = self._current_pair_entry_spread()
+            actual = await self._current_pair_entry_spread()
             if actual is not None:
                 return actual
             return base
@@ -901,11 +907,47 @@ class StrategyEngine:
             return binance_entry - mt4_entry
         return mt4_entry - binance_entry
 
-    def _current_pair_entry_spread(self) -> Decimal | None:
+    async def _current_pair_entry_spread(self) -> Decimal | None:
         if not self.open_pair:
             return None
+        binance_entry = await self._current_binance_entry_price()
         mt4_entry = self._mt4_average_entry_price() or self.open_pair.mt4_entry_price
-        return self._entry_spread(self.open_pair.direction, self.open_pair.binance_entry_price, mt4_entry)
+        return self._entry_spread(self.open_pair.direction, binance_entry, mt4_entry)
+
+    async def _current_binance_entry_price(self) -> Decimal:
+        if not self.open_pair:
+            return Decimal("0")
+        snapshot = await self._binance_position_snapshot_cached()
+        if snapshot and self._snapshot_matches_open_pair(snapshot):
+            if snapshot.break_even_price is not None and snapshot.break_even_price > 0:
+                return snapshot.break_even_price
+            if snapshot.entry_price is not None and snapshot.entry_price > 0:
+                return snapshot.entry_price
+        return self.open_pair.binance_entry_price
+
+    def _snapshot_matches_open_pair(self, snapshot: BinancePositionSnapshot) -> bool:
+        if not self.open_pair or snapshot.position_amt == 0:
+            return False
+        if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            return snapshot.position_amt < 0
+        return snapshot.position_amt > 0
+
+    async def _binance_position_snapshot_cached(self) -> BinancePositionSnapshot | None:
+        now = utc_now_ms()
+        if self._position_snapshot_cache and now - self._position_snapshot_cache_ms <= POSITION_SNAPSHOT_CACHE_TTL_MS:
+            return self._position_snapshot_cache
+        if now - self._position_snapshot_failure_ms <= POSITION_SNAPSHOT_FAILURE_RETRY_MS:
+            return self._position_snapshot_cache
+        try:
+            snapshot = await self.binance.position_snapshot()
+        except Exception as exc:  # noqa: BLE001
+            self._position_snapshot_failure_ms = now
+            logger.warning("Binance position snapshot unavailable for add ladder: %s", str(exc)[:160])
+            return self._position_snapshot_cache
+        self._position_snapshot_cache = snapshot
+        self._position_snapshot_cache_ms = now
+        self._position_snapshot_failure_ms = 0
+        return snapshot
 
     def _current_edge(self, direction: PairDirection, binance_quote: MarketQuote, mt4_quote: MarketQuote) -> Decimal:
         if direction == PairDirection.BINANCE_SHORT_MT4_LONG:
