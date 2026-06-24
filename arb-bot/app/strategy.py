@@ -132,6 +132,8 @@ def _binance_post_only_rejected(exc: BinanceError) -> bool:
 MIN_ADD_AFTER_OPEN_MS = 30_000
 FUNDING_INCOME_CACHE_TTL_MS = 60_000
 FUNDING_INCOME_FAILURE_RETRY_MS = 60_000
+MT4_ROLLOVER_AFTER_BLOCK_MS = 5 * 60_000
+NEGATIVE_SWAP_EVENT_THROTTLE_MS = 60_000
 
 
 class StrategyEngine:
@@ -172,6 +174,8 @@ class StrategyEngine:
         self._funding_income_cache_ms = 0
         self._funding_income_failure_ms = 0
         self.last_pair_closed_ms = 0
+        self._last_negative_swap_event_ms = 0
+        self._last_rollover_block_event_ms = 0
 
     async def step(self) -> None:
         await self._handle_mt4_reports()
@@ -198,7 +202,7 @@ class StrategyEngine:
         elif self.state == StrategyState.PAIR_OPEN:
             if not self._quotes_fresh(binance_quote, mt4_quote):
                 return
-            force_exit_reason = self._negative_swap_exit_reason()
+            force_exit_reason = await self._negative_swap_exit_reason(binance_quote, mt4_quote)
             if force_exit_reason:
                 await self._maybe_exit(binance_quote, mt4_quote, force=True, reason=force_exit_reason)
                 return
@@ -250,6 +254,9 @@ class StrategyEngine:
 
     async def _maybe_enter(self, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> None:
         if not binance_quote or not mt4_quote:
+            return
+        if self._mt4_rollover_trade_blocked("开仓"):
+            self._clear_entry_candidate()
             return
         if (
             self.last_pair_closed_ms
@@ -804,6 +811,8 @@ class StrategyEngine:
     async def _maybe_add_position(self, binance_quote: MarketQuote | None, mt4_quote: MarketQuote | None) -> bool:
         if not self.open_pair or not binance_quote or not mt4_quote:
             return False
+        if self._mt4_rollover_trade_blocked("补仓"):
+            return False
         if self.settings.max_add_count <= 0 or self.open_pair.add_count >= self.settings.max_add_count:
             return False
         if utc_now_ms() - self.open_pair.opened_ms < MIN_ADD_AFTER_OPEN_MS:
@@ -1004,7 +1013,7 @@ class StrategyEngine:
             if order is None:
                 return
         if not order or order.status != OrderStatus.FILLED:
-            if order and order.status == OrderStatus.NEW and not self.exit_force_reason and not await self._exit_order_follow_still_profitable(order):
+            if order and order.status == OrderStatus.NEW and not await self._exit_order_follow_still_profitable(order):
                 checked, cancel_or_query_missing = await self._cancel_or_refresh_unprofitable_exit_order(order)
                 if checked and checked.status == OrderStatus.FILLED:
                     await self._handle_exit_cancel_race_fill(checked)
@@ -1022,7 +1031,7 @@ class StrategyEngine:
                 await self._mark_exit_order_canceled_unprofitable_follow(order)
             return
         self.active_order = order
-        if not self.exit_force_reason and not await self._exit_fill_follow_ok(order):
+        if not await self._exit_fill_follow_ok(order):
             self.storage.record_event(
                 "exit_follow_would_lose_repairing_binance",
                 {
@@ -1040,6 +1049,7 @@ class StrategyEngine:
 
     async def _mark_exit_order_canceled_unprofitable_follow(self, order: OrderUpdate) -> None:
         self.active_order = None
+        self.exit_force_reason = None
         self.state = StrategyState.PAIR_OPEN
         self.storage.record_event(
             "exit_order_canceled_unprofitable_follow",
@@ -1136,11 +1146,12 @@ class StrategyEngine:
             return True
         return projected_spread <= threshold
 
-    async def _exit_order_profit_threshold(self) -> Decimal | None:
+    async def _exit_order_profit_threshold(self, include_close_profit: bool = True) -> Decimal | None:
         break_even = await self._break_even_spread()
         if break_even is None:
             return None
-        return break_even - self._effective_close_profit_usd_per_oz() - self._exit_follow_buffer_usd_per_oz()
+        close_profit = self._effective_close_profit_usd_per_oz() if include_close_profit else Decimal("0")
+        return break_even - close_profit - self._exit_follow_buffer_usd_per_oz()
 
     def _exit_order_projected_spread(self, order: OrderUpdate) -> Decimal | None:
         if not self.open_pair:
@@ -1356,8 +1367,15 @@ class StrategyEngine:
         lots_by_ticket = self._mt4_close_lots_by_ticket(tickets)
         self.pending_close_tickets = set(tickets)
         self.pending_close_commands = {}
+        max_price, min_price = await self._mt4_close_price_limits(order)
         for ticket in tickets:
-            command = self.mt4.queue_close(ticket, lots_by_ticket[ticket], "exit hedge")
+            command = self.mt4.queue_close(
+                ticket,
+                lots_by_ticket[ticket],
+                "exit hedge",
+                max_price=max_price,
+                min_price=min_price,
+            )
             self.pending_close_commands[command.command_id] = ticket
         self.storage.record_event(
             "mt4_close_queued",
@@ -1365,9 +1383,19 @@ class StrategyEngine:
                 "pair_id": self.open_pair.pair_id,
                 "tickets": tickets,
                 "lots_by_ticket": {str(ticket): str(lots) for ticket, lots in lots_by_ticket.items()},
+                "max_price": str(max_price) if max_price is not None else None,
+                "min_price": str(min_price) if min_price is not None else None,
             },
         )
         self.state = StrategyState.CLOSING_MT4
+
+    async def _mt4_close_price_limits(self, order: OrderUpdate) -> tuple[Decimal | None, Decimal | None]:
+        threshold = await self._exit_order_profit_threshold()
+        if not self.open_pair or threshold is None:
+            return None, None
+        if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            return None, order.avg_price - threshold
+        return order.avg_price + threshold, None
 
     def queue_mt4_close_after_binance_flat_mismatch(self, mt4_positions: list) -> bool:
         if not self.open_pair:
@@ -1420,52 +1448,17 @@ class StrategyEngine:
                 self.storage.record_event("partial_exit_cancel_not_visible", {"order_id": order.order_id, "error": str(exc)[:160]})
         if checked.status == OrderStatus.FILLED:
             return checked
-        remaining_qty = max(Decimal("0"), self.open_pair.quantity_oz - checked.executed_qty)
-        if remaining_qty <= 0:
-            return checked.model_copy(update={"status": OrderStatus.FILLED})
-        position_side = "SHORT" if self.open_pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else "LONG"
-        market = await self.binance.place_market_order(
-            OrderRequest(
-                symbol=self.settings.binance_symbol,
-                side=checked.side,
-                quantity=remaining_qty,
-                post_only=False,
-                reduce_only=True,
-                position_side=position_side,
-            )
-        )
-        if market.executed_qty < remaining_qty:
-            self.state = StrategyState.PAUSED
-            self.last_error = "币安剩余平仓市价单未完全成交，已暂停，不能继续平 MT4"
-            self.storage.record_event(
-                "partial_exit_market_incomplete",
-                {
-                    "order_id": checked.order_id,
-                    "remaining_qty": str(remaining_qty),
-                    "market_order_id": market.order_id,
-                    "market_status": market.status.value,
-                    "market_executed_qty": str(market.executed_qty),
-                },
-            )
-            return None
-        total_qty = checked.executed_qty + market.executed_qty
-        if total_qty > 0:
-            avg_price = ((checked.avg_price * checked.executed_qty) + (market.avg_price * market.executed_qty)) / total_qty
-        else:
-            avg_price = checked.avg_price
-        completed = checked.model_copy(update={"status": OrderStatus.FILLED, "executed_qty": total_qty, "avg_price": avg_price})
         self.storage.record_event(
-            "partial_exit_completed_with_market",
+            "partial_forced_exit_rolled_back",
             {
                 "order_id": checked.order_id,
                 "executed_qty": str(checked.executed_qty),
-                "remaining_qty": str(remaining_qty),
-                "market_order_id": market.order_id,
-                "market_executed_qty": str(market.executed_qty),
-                "avg_price": str(avg_price),
+                "status": checked.status.value,
+                "reason": "强制平仓也不使用币安市价补完，部分成交先限价补回",
             },
         )
-        return completed
+        await self._place_exit_repair_order(checked)
+        return None
 
     async def _cancel_or_refresh_expired_exit_order(self, order: OrderUpdate) -> OrderUpdate | None:
         if order.status in TERMINAL_ORDER_STATUSES:
@@ -1488,7 +1481,7 @@ class StrategyEngine:
             self.storage.record_event("exit_order_missing_after_cancel", {"order_id": order.order_id, "error": str(exc)[:160]})
         return None
 
-    def _negative_swap_exit_reason(self) -> str | None:
+    async def _negative_swap_exit_reason(self, binance_quote: MarketQuote, mt4_quote: MarketQuote) -> str | None:
         if not self.open_pair or self.settings.negative_swap_close_before_minutes <= 0:
             return None
         swap_info = self.mt4.latest_swap_info()
@@ -1504,7 +1497,7 @@ class StrategyEngine:
             return None
         projected_net = self._convergence_net_after_next_mt4_swap(estimate)
         if projected_net is not None and projected_net > 0:
-            self.storage.record_event(
+            self._record_negative_swap_event(
                 "negative_swap_hold_allowed",
                 {
                     "mt4_swap_estimate": str(estimate),
@@ -1513,9 +1506,56 @@ class StrategyEngine:
                 },
             )
             return None
+        current_spread = self._current_exit_spread(binance_quote, mt4_quote)
+        safe_threshold = await self._exit_order_profit_threshold(include_close_profit=False)
+        if current_spread is None or safe_threshold is None or current_spread > safe_threshold:
+            self._record_negative_swap_event(
+                "negative_swap_exit_waiting_for_safe_spread",
+                {
+                    "mt4_swap_estimate": str(estimate),
+                    "projected_convergence_net": str(projected_net) if projected_net is not None else None,
+                    "current_spread": str(current_spread) if current_spread is not None else None,
+                    "safe_threshold": str(safe_threshold) if safe_threshold is not None else None,
+                    "next_rollover_time_ms": next_rollover,
+                },
+            )
+            return None
         minutes_left = max(0, ms_left // 60000)
         net_text = f"，扣后回归净利预估 {projected_net}" if projected_net is not None else ""
-        return f"MT4 隔夜费预估为亏损 {estimate}{net_text}，距离结算约 {minutes_left} 分钟，提前平仓"
+        return f"MT4 隔夜费预估为亏损 {estimate}{net_text}，距离结算约 {minutes_left} 分钟，且当前价差满足不亏平仓，提前平仓"
+
+    def _record_negative_swap_event(self, kind: str, payload: dict) -> None:
+        now = utc_now_ms()
+        if now - self._last_negative_swap_event_ms < NEGATIVE_SWAP_EVENT_THROTTLE_MS:
+            return
+        self._last_negative_swap_event_ms = now
+        self.storage.record_event(kind, payload)
+
+    def _mt4_rollover_trade_blocked(self, action: str) -> bool:
+        if self.settings.negative_swap_close_before_minutes <= 0:
+            return False
+        swap_info = self.mt4.latest_swap_info()
+        next_rollover = swap_info.next_rollover_time_ms
+        if next_rollover is None:
+            return False
+        ms_left = next_rollover - utc_now_ms()
+        before_ms = self.settings.negative_swap_close_before_minutes * 60 * 1000
+        if ms_left < -MT4_ROLLOVER_AFTER_BLOCK_MS or ms_left > before_ms:
+            return False
+        minutes_left = ms_left // 60000
+        self.last_error = f"MT4 结算窗口内禁止{action}，避免 OrderSend 失败；距离结算约 {minutes_left} 分钟"
+        now = utc_now_ms()
+        if now - self._last_rollover_block_event_ms >= NEGATIVE_SWAP_EVENT_THROTTLE_MS:
+            self._last_rollover_block_event_ms = now
+            self.storage.record_event(
+                "mt4_rollover_trade_blocked",
+                {
+                    "action": action,
+                    "next_rollover_time_ms": next_rollover,
+                    "ms_left": ms_left,
+                },
+            )
+        return True
 
     def _mt4_swap_estimate(self) -> Decimal | None:
         if not self.open_pair:
@@ -1626,7 +1666,7 @@ class StrategyEngine:
 
     def _exit_follow_buffer_usd_per_oz(self) -> Decimal:
         point = self.mt4.latest_swap_info().point or Decimal("0.01")
-        return Decimal(self.settings.mt4_slippage_points) * point
+        return (Decimal(self.settings.mt4_slippage_points) * point) + self.settings.mt4_close_extra_buffer_usd
 
     def _effective_close_profit_usd_per_oz(self) -> Decimal:
         if not self.open_pair or self.settings.max_pair_age_minutes <= 0:

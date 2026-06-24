@@ -37,6 +37,7 @@ def settings(tmp_path, **kwargs) -> Settings:
         "CANCEL_MIN_EDGE": Decimal("1.20"),
         "TARGET_OZ": Decimal("1"),
         "MT4_LOT_SIZE_OZ": Decimal("100"),
+        "MT4_CLOSE_EXTRA_BUFFER_USD": Decimal("0"),
         **kwargs,
     }
     return Settings(_env_file=None, **values)
@@ -716,8 +717,8 @@ async def test_partial_exit_rolls_back_binance_without_mt4_close(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_partial_exit_market_incomplete_pauses_before_mt4_close(tmp_path):
-    engine, client, mt4 = await make_engine(tmp_path, IncompleteMarketClosePaperClient)
+async def test_forced_partial_exit_rolls_back_without_market_order(tmp_path):
+    engine, client, mt4 = await make_engine(tmp_path)
     await open_live_pair(engine, client, mt4, ticket=123456)
 
     client.set_quote(Decimal("2000.0"), Decimal("2000.1"))
@@ -730,8 +731,10 @@ async def test_partial_exit_market_incomplete_pauses_before_mt4_close(tmp_path):
 
     await engine.step()
 
-    assert engine.state == StrategyState.PAUSED
-    assert engine.last_error == "币安剩余平仓市价单未完全成交，已暂停，不能继续平 MT4"
+    assert engine.state == StrategyState.REPAIRING_BINANCE_EXIT
+    assert engine.active_order is not None
+    assert engine.active_order.reduce_only is False
+    assert engine.active_order.side == Side.SELL
     assert mt4.next_command() == {"command": "NONE"}
 
 
@@ -1020,7 +1023,41 @@ async def test_negative_mt4_swap_forces_exit_before_rollover(tmp_path):
         settings_kwargs={"NEGATIVE_SWAP_CLOSE_BEFORE_MINUTES": 30},
     )
     await open_live_pair(engine, client, mt4, ticket=111111)
-    client.set_quote(Decimal("2002"), Decimal("2003"))
+    client.set_quote(Decimal("2000"), Decimal("2001"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999.5"),
+            ask=Decimal("2000"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+            swap_long_per_lot=Decimal("-300"),
+            swap_short_per_lot=Decimal("20"),
+            swap_type=1,
+            next_rollover_time_ms=utc_now_ms() + 20 * 60 * 1000,
+        )
+    )
+
+    await engine.step()
+
+    assert engine.state == StrategyState.QUOTING_BINANCE_EXIT
+    assert engine.active_order is not None
+    assert engine.active_order.reduce_only is True
+    assert engine.active_order.side == Side.BUY
+    assert engine.exit_force_reason is not None
+    assert "隔夜费" in engine.exit_force_reason
+
+
+@pytest.mark.asyncio
+async def test_negative_mt4_swap_waits_when_immediate_exit_would_lose(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        PositionTrackingPaperClient,
+        settings_kwargs={"NEGATIVE_SWAP_CLOSE_BEFORE_MINUTES": 30, "MAX_ADD_COUNT": 0},
+    )
+    await open_live_pair(engine, client, mt4, ticket=111111)
+    client.set_quote(Decimal("2004"), Decimal("2004.5"))
     mt4.update_tick(
         Mt4Tick(
             symbol="XAUUSD",
@@ -1038,12 +1075,8 @@ async def test_negative_mt4_swap_forces_exit_before_rollover(tmp_path):
 
     await engine.step()
 
-    assert engine.state == StrategyState.QUOTING_BINANCE_EXIT
-    assert engine.active_order is not None
-    assert engine.active_order.reduce_only is True
-    assert engine.active_order.side == Side.BUY
-    assert engine.exit_force_reason is not None
-    assert "隔夜费" in engine.exit_force_reason
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.active_order is None
 
 
 @pytest.mark.asyncio
@@ -1137,6 +1170,35 @@ async def test_add_position_waits_after_initial_open(tmp_path):
 
     assert engine.active_order is not None
     assert engine.adding_to_pair is True
+
+
+@pytest.mark.asyncio
+async def test_add_position_blocked_during_mt4_rollover_window(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        PositionTrackingPaperClient,
+        settings_kwargs={"ADD_EDGE_GROWTH_USD": Decimal("1"), "MAX_ADD_COUNT": 2, "NEGATIVE_SWAP_CLOSE_BEFORE_MINUTES": 30},
+    )
+    await open_live_pair(engine, client, mt4, ticket=111111)
+    age_open_pair_for_add(engine)
+    client.set_quote(Decimal("2002"), Decimal("2003"))
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("1999"),
+            ask=Decimal("2000"),
+            positions=[
+                Mt4Position(ticket=111111, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("2000")),
+            ],
+            account_margin=Decimal("4.34"),
+            next_rollover_time_ms=utc_now_ms() + 20 * 60 * 1000,
+        )
+    )
+
+    await engine.step()
+
+    assert engine.state == StrategyState.PAIR_OPEN
+    assert engine.active_order is None
 
 
 @pytest.mark.asyncio
@@ -1858,6 +1920,80 @@ async def test_close_trigger_reserves_mt4_follow_slippage_buffer(tmp_path):
     trigger = await engine._close_trigger_spread()
 
     assert trigger == Decimal("1.12")
+
+
+@pytest.mark.asyncio
+async def test_close_trigger_reserves_extra_mt4_close_buffer(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        settings_kwargs={
+            "CLOSE_PROFIT_USD_PER_OZ": Decimal("0.8"),
+            "MT4_SLIPPAGE_POINTS": 30,
+            "MT4_CLOSE_EXTRA_BUFFER_USD": Decimal("3"),
+        },
+    )
+    client.maker_fee_rate = Decimal("0")
+    engine.open_pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("4178.59"),
+        mt4_entry_price=Decimal("4176.67"),
+        binance_order_id="entry-1",
+        mt4_ticket=76804334,
+        mt4_tickets=[76804334],
+    )
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("4175"),
+            ask=Decimal("4175.3"),
+            point=Decimal("0.01"),
+            positions=[
+                Mt4Position(
+                    ticket=76804334,
+                    symbol="XAUUSD",
+                    side=Side.BUY,
+                    lots=Decimal("0.01"),
+                    open_price=Decimal("4176.67"),
+                )
+            ],
+        )
+    )
+
+    trigger = await engine._close_trigger_spread()
+
+    assert trigger == Decimal("-2.18")
+
+
+@pytest.mark.asyncio
+async def test_mt4_close_command_includes_profit_price_limit(tmp_path):
+    engine, client, mt4 = await make_engine(
+        tmp_path,
+        settings_kwargs={"CLOSE_PROFIT_USD_PER_OZ": Decimal("0.8"), "MT4_SLIPPAGE_POINTS": 30},
+    )
+    client.maker_fee_rate = Decimal("0")
+    await open_live_pair(engine, client, mt4, ticket=123456, binance_fill_price=Decimal("2002"), mt4_fill_price=Decimal("2000"))
+
+    exit_order = OrderUpdate(
+        order_id="exit-1",
+        client_order_id="arb_exit",
+        symbol="XAUUSDT",
+        side=Side.BUY,
+        status=OrderStatus.FILLED,
+        price=Decimal("2000"),
+        orig_qty=Decimal("1"),
+        executed_qty=Decimal("1"),
+        avg_price=Decimal("2000"),
+        reduce_only=True,
+    )
+
+    await engine._queue_mt4_close_after_exit_order(exit_order)
+    command = mt4.next_command()
+
+    assert command["action"] == "CLOSE"
+    assert command["ticket"] == 123456
+    assert Decimal(command["min_price"]) == Decimal("1999.1")
+    assert command["max_price"] is None
 
 
 @pytest.mark.asyncio

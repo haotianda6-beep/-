@@ -29,7 +29,7 @@ void PrepareHistoryUpload();
 bool UploadHistoryChunk();
 bool UploadClosedOrderHistory();
 void ExecuteMarket(string commandId, string symbol, int type, double lots, int slippage, double maxPrice, double minPrice);
-void ExecuteClose(string commandId, int ticket, double lots, int slippage);
+void ExecuteClose(string commandId, int ticket, double lots, int slippage, double maxPrice, double minPrice);
 void PostReport(string commandId, string status, string action, int ticket, double fillPrice, double lots, int errorCode, string message);
 string PositionsJson();
 string HttpGet(string path);
@@ -99,7 +99,7 @@ void OnTimer()
    if (symbol == "") symbol = TradeSymbol;
    if (action == "BUY") ExecuteMarket(commandId, symbol, OP_BUY, lots, slippage, maxPrice, minPrice);
    else if (action == "SELL") ExecuteMarket(commandId, symbol, OP_SELL, lots, slippage, maxPrice, minPrice);
-   else if (action == "CLOSE") ExecuteClose(commandId, ticket, lots, slippage);
+   else if (action == "CLOSE") ExecuteClose(commandId, ticket, lots, slippage, maxPrice, minPrice);
 }
 
 void PostTick()
@@ -286,7 +286,7 @@ void ExecuteMarket(string commandId, string symbol, int type, double lots, int s
    PostReport(commandId, "ok", OrderActionName(type), ticket, price, lots, 0, "filled");
 }
 
-void ExecuteClose(string commandId, int ticket, double lots, int slippage)
+void ExecuteClose(string commandId, int ticket, double lots, int slippage, double maxPrice, double minPrice)
 {
    if (!OrderSelect(ticket, SELECT_BY_TICKET))
    {
@@ -298,6 +298,16 @@ void ExecuteClose(string commandId, int ticket, double lots, int slippage)
    int type = OrderType();
    double closeLots = lots > 0 ? MathMin(lots, OrderLots()) : OrderLots();
    double price = (type == OP_BUY) ? MarketInfo(OrderSymbol(), MODE_BID) : MarketInfo(OrderSymbol(), MODE_ASK);
+   if (maxPrice > 0 && price > maxPrice)
+   {
+      PostReport(commandId, "error", "CLOSE", ticket, price, closeLots, 9003, "close max price exceeded");
+      return;
+   }
+   if (minPrice > 0 && price < minPrice)
+   {
+      PostReport(commandId, "error", "CLOSE", ticket, price, closeLots, 9004, "close min price exceeded");
+      return;
+   }
    bool ok = OrderClose(ticket, closeLots, price, slippage, clrTomato);
    if (!ok)
    {

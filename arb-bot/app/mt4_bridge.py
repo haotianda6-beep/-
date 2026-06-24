@@ -108,12 +108,21 @@ class Mt4Bridge:
             self._pending[command.command_id] = command
         return command
 
-    def queue_close(self, ticket: int, lots: Decimal, reason: str) -> Mt4Command:
+    def queue_close(
+        self,
+        ticket: int,
+        lots: Decimal,
+        reason: str,
+        max_price: Decimal | None = None,
+        min_price: Decimal | None = None,
+    ) -> Mt4Command:
         command = Mt4Command(
             action="CLOSE",
             symbol=self.settings.mt4_symbol,
             lots=lots,
             slippage_points=self.settings.mt4_slippage_points,
+            max_price=max_price,
+            min_price=min_price,
             ticket=ticket,
             reason=reason,
         )

@@ -1392,6 +1392,7 @@ def _runtime_config() -> RuntimeConfig:
         mt4_min_lot=settings.mt4_min_lot,
         mt4_lot_step=settings.mt4_lot_step,
         mt4_slippage_points=settings.mt4_slippage_points,
+        mt4_close_extra_buffer_usd=settings.mt4_close_extra_buffer_usd,
         loop_interval_ms=settings.loop_interval_ms,
         paper_auto_fill=settings.paper_auto_fill,
         paper_fill_delay_ms=settings.paper_fill_delay_ms,
@@ -1584,7 +1585,7 @@ def _effective_close_profit_usd_per_oz(pair) -> Decimal:
 
 def _exit_follow_buffer_usd_per_oz(swap_info) -> Decimal:
     point = swap_info.point or Decimal("0.01")
-    return Decimal(settings.mt4_slippage_points) * point
+    return (Decimal(settings.mt4_slippage_points) * point) + settings.mt4_close_extra_buffer_usd
 
 
 def _estimate_binance_funding(pair, qty: Decimal, funding, quote: MarketQuote | None) -> Decimal | None:

@@ -383,6 +383,7 @@ class RuntimeConfig(BaseModel):
     mt4_min_lot: Decimal
     mt4_lot_step: Decimal
     mt4_slippage_points: int
+    mt4_close_extra_buffer_usd: Decimal
     loop_interval_ms: int
     paper_auto_fill: bool
     paper_fill_delay_ms: int
@@ -415,6 +416,7 @@ class RuntimeConfigUpdate(BaseModel):
     mt4_min_lot: Decimal | None = None
     mt4_lot_step: Decimal | None = None
     mt4_slippage_points: int | None = None
+    mt4_close_extra_buffer_usd: Decimal | None = None
     loop_interval_ms: int | None = None
     paper_auto_fill: bool | None = None
     paper_fill_delay_ms: int | None = None
@@ -439,6 +441,13 @@ class RuntimeConfigUpdate(BaseModel):
     def positive_decimal(cls, value: Decimal | None) -> Decimal | None:
         if value is not None and value <= 0:
             raise ValueError("必须大于 0")
+        return value
+
+    @field_validator("mt4_close_extra_buffer_usd")
+    @classmethod
+    def non_negative_decimal(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and value < 0:
+            raise ValueError("不能小于 0")
         return value
 
     @field_validator(

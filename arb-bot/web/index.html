@@ -791,6 +791,10 @@
                   <td><div class="input-row"><input id="cfgMt4Slippage" inputmode="numeric" /><small>点</small></div></td>
                 </tr>
                 <tr>
+                  <th>MT4 平仓保护缓冲</th>
+                  <td><div class="input-row"><input id="cfgMt4CloseExtraBuffer" inputmode="decimal" /><small>美元/盎司</small></div></td>
+                </tr>
+                <tr>
                   <th>循环间隔</th>
                   <td><div class="input-row"><input id="cfgLoopInterval" inputmode="numeric" /><small>毫秒</small></div></td>
                 </tr>
@@ -841,6 +845,7 @@
         ["cfgMaxUnhedgedLoss", "max_unhedged_loss_usd_per_oz", "number"],
         ["cfgDailyLossLimit", "daily_loss_limit_usdt", "number"],
         ["cfgMt4Slippage", "mt4_slippage_points", "number"],
+        ["cfgMt4CloseExtraBuffer", "mt4_close_extra_buffer_usd", "number"],
         ["cfgLoopInterval", "loop_interval_ms", "number"],
       ];
 
