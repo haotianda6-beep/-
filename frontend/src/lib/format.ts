@@ -10,6 +10,7 @@ export function money(value: string | number, digits = 2): string {
 export function pct(value: string | number, digits = 4): string {
   const number = Number(value);
   if (!Number.isFinite(number)) return "-";
+  if (Math.abs(number) > 200) return "异常";
   return `${number.toFixed(digits)}%`;
 }
 

@@ -70,3 +70,31 @@ def test_alpha_alert_duplicate_symbol_is_blocked_for_manual_identity_check():
 
     assert row is not None
     assert "Alpha 同名多链/多个 AlphaId，需人工确认不是同名不同币" in row.blocked_reasons
+
+
+def test_alpha_alert_extreme_basis_is_filtered_as_bad_symbol_match():
+    scanner = BinanceAlphaScanner()
+    settings = BotSettings(alpha_alert_min_volume_usdt=Decimal("1000"))
+
+    row = scanner._row(
+        AlphaToken(
+            base="SLX",
+            symbol="SLX",
+            alpha_id="ALPHA_417",
+            alpha_trade_symbol="ALPHA_417USDT",
+            name="Slimex",
+            chain_name="BSC",
+            contract_address="0xabc",
+            price=Decimal("0.00118"),
+            volume_24h=Decimal("5000"),
+            offline=False,
+            fully_delisted=False,
+            offsell=False,
+            duplicate=True,
+        ),
+        {"symbol": "SLXUSDT", "bid": Decimal("0.27232"), "ask": Decimal("0.27234"), "volume": Decimal("6000"), "funding_rate": Decimal("0.01")},
+        settings,
+        datetime.now(timezone.utc),
+    )
+
+    assert row is None

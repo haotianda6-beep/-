@@ -14,6 +14,7 @@ ALPHA_EXCHANGE_INFO_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-tra
 FUTURES_BOOK_URL = "https://fapi.binance.com/fapi/v1/ticker/bookTicker"
 FUTURES_24H_URL = "https://fapi.binance.com/fapi/v1/ticker/24hr"
 FUTURES_FUNDING_URL = "https://fapi.binance.com/fapi/v1/premiumIndex"
+MAX_REASONABLE_ALPHA_BASIS_PCT = Decimal("200")
 
 
 @dataclass
@@ -169,6 +170,8 @@ class BinanceAlphaScanner:
         if alpha_price <= 0 or perp_bid <= 0:
             return None
         basis_pct = calculate_spread_pct(alpha_price, perp_bid)
+        if basis_pct > MAX_REASONABLE_ALPHA_BASIS_PCT:
+            return None
         funding_rate_pct = decimal_from(future.get("funding_rate"))
         basis_profit = settings.alpha_alert_notional_usdt * basis_pct / Decimal("100")
         funding_income = settings.alpha_alert_notional_usdt * funding_rate_pct / Decimal("100")

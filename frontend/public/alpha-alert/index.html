@@ -248,6 +248,7 @@
       function pct(value, digits = 4) {
         const number = Number(value);
         if (!Number.isFinite(number)) return "-";
+        if (Math.abs(number) > 200) return "异常";
         return `${number.toFixed(digits)}%`;
       }
 
