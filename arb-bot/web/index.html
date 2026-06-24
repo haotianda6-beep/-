@@ -731,7 +731,7 @@
         <aside class="stack hidden" id="paramsAside">
           <div class="panel">
             <div class="panel-head">
-              <h2>参数设置</h2>
+              <h2>常用参数</h2>
               <button class="secondary" id="toggleParamsPanelBtn">隐藏</button>
             </div>
             <table>
@@ -742,6 +742,15 @@
                     <a class="download-link" href="ea/ArbBridgeEA.mq4" download
                       >下载完整脚本</a
                     >
+                  </td>
+                </tr>
+                <tr>
+                  <th>只读观察锁</th>
+                  <td>
+                    <label class="check-row">
+                      <input id="cfgGoldV2ObservationOnly" type="checkbox" />
+                      <span>开启后不自动挂单</span>
+                    </label>
                   </td>
                 </tr>
                 <tr>
@@ -1060,6 +1069,7 @@
       let liveModeRestarting = false;
       let paramsVisible = false;
       const configFields = [
+        ["cfgGoldV2ObservationOnly", "gold_v2_observation_only", "boolean"],
         ["cfgBinanceLeverage", "binance_leverage", "number"],
         ["cfgTargetOz", "target_oz", "number"],
         ["cfgBinanceEntryOffset", "binance_entry_offset_usd", "number"],
@@ -1101,6 +1111,27 @@
         ["cfgMt4CloseExtraBuffer", "mt4_close_extra_buffer_usd", "number"],
         ["cfgLoopInterval", "loop_interval_ms", "number"],
       ];
+      const visibleConfigFieldIds = new Set([
+        "cfgGoldV2ObservationOnly",
+        "cfgBinanceLeverage",
+        "cfgTargetOz",
+        "cfgBinanceEntryOffset",
+        "cfgOpenMinEdge",
+        "cfgMinOrderLiveMs",
+        "cfgPostExitReentryCooldownMs",
+        "cfgCloseProfitUsdPerOz",
+        "cfgMaxOrderAge",
+        "cfgMaxQuoteAge",
+        "cfgMaxHedgeDelay",
+        "cfgDailyLossLimit",
+        "cfgMt4Slippage",
+      ]);
+
+      function simplifyConfigPanel() {
+        document.querySelectorAll("#paramsAside table input").forEach((el) => {
+          if (!visibleConfigFieldIds.has(el.id)) el.closest("tr")?.remove();
+        });
+      }
 
       function api(path, options = {}) {
         return fetch(path, {
@@ -2099,6 +2130,7 @@
       $("resetConfigBtn").addEventListener("click", resetConfigForm);
       $("historyBtn").addEventListener("click", () => loadHistoryAnalysis());
       $("tradeHistoryBtn").addEventListener("click", () => loadTradeHistory());
+      simplifyConfigPanel();
       for (const [id] of configFields) {
         const el = $(id);
         if (el) {
