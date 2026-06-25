@@ -486,30 +486,41 @@ def _add_plan(
     if not binance or not mt4:
         return {**data, "ready": False, "reason": "等待币安和MT4同时返回报价。"}
     qty = data["quantity_oz"]
+    close_profit = metrics.close_profit_usd_per_oz if metrics and metrics.close_profit_usd_per_oz is not None else settings.close_profit_usd_per_oz
+    current_avg_edge = metrics.actual_entry_spread if metrics and metrics.actual_entry_spread is not None else pair.base_edge
+    required_blended_edge = close_profit + exit_follow_budget
+    required_locked_edge = None
+    if current_avg_edge is not None and qty > 0:
+        required_locked_edge = ((required_blended_edge * (pair.quantity_oz + qty)) - (current_avg_edge * pair.quantity_oz)) / qty
+    actionable_trigger = trigger
+    if required_locked_edge is not None:
+        actionable_trigger = max(trigger, required_locked_edge - slippage_budget)
     if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
         edge = binance.ask - mt4.ask
-        price = _round_up(max(binance.ask + settings.binance_entry_offset_usd, mt4.ask + trigger + slippage_budget), filters.tick_size)
+        price = _round_up(max(binance.ask + settings.binance_entry_offset_usd, mt4.ask + actionable_trigger + slippage_budget), filters.tick_size)
         side, mt4_side, locked = Side.SELL, Side.BUY, price - mt4.ask
     else:
         edge = mt4.bid - binance.bid
-        price = _round_down(min(binance.bid - settings.binance_entry_offset_usd, mt4.bid - trigger - slippage_budget), filters.tick_size)
+        price = _round_down(min(binance.bid - settings.binance_entry_offset_usd, mt4.bid - actionable_trigger - slippage_budget), filters.tick_size)
         side, mt4_side, locked = Side.BUY, Side.SELL, mt4.bid - price
-    current_avg_edge = metrics.actual_entry_spread if metrics and metrics.actual_entry_spread is not None else pair.base_edge
     blended_edge = None
     exit_viable = False
     if current_avg_edge is not None:
         blended_edge = ((current_avg_edge * pair.quantity_oz) + (locked * qty)) / (pair.quantity_oz + qty)
-        exit_viable = blended_edge > settings.close_profit_usd_per_oz + exit_follow_budget
-    ready = edge >= trigger and exit_viable
+        exit_viable = blended_edge > required_blended_edge
+    ready = edge >= actionable_trigger and exit_viable
     reason = "达到补仓触发位，可以挂补仓限价单。"
-    if not exit_viable:
+    if edge < actionable_trigger:
+        reason = "当前价差未到补仓安全触发位。"
+    elif not exit_viable:
         reason = "补仓后均价差仍不足以覆盖平仓缓冲和目标利润，暂不补仓。"
-    elif not ready:
-        reason = "当前价差未到补仓触发位。"
     return {**data,
         "ready": ready,
         "reason": reason,
         "current_edge": edge,
+        "next_actionable_trigger_edge": actionable_trigger,
+        "required_blended_edge": required_blended_edge,
+        "required_locked_edge": required_locked_edge,
         "binance_side": side.value,
         "binance_price": price,
         "mt4_follow_side": mt4_side.value,

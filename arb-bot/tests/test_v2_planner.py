@@ -400,9 +400,11 @@ def test_v2_add_plan_blocks_when_blended_edge_cannot_cover_exit_buffer(tmp_path)
     )
 
     assert status["add_plan"]["current_edge"] >= status["add_plan"]["next_trigger_edge"]
-    assert status["add_plan"]["exit_viable"] is False
+    assert status["add_plan"]["current_edge"] < status["add_plan"]["next_actionable_trigger_edge"]
+    assert status["add_plan"]["required_locked_edge"] > status["add_plan"]["next_trigger_edge"]
+    assert status["add_plan"]["exit_viable"] is True
     assert status["add_plan"]["ready"] is False
-    assert "不足以覆盖平仓缓冲" in status["add_plan"]["reason"]
+    assert "安全触发位" in status["add_plan"]["reason"]
 
 
 def test_v2_negative_swap_window_relaxes_exit_to_safe_target(tmp_path):
