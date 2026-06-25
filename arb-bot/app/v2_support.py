@@ -78,10 +78,19 @@ def execution_status(
         )
     if open_pair:
         target = target_exit_spread(open_pair)
+        add_text = _position_add_text(settings, open_pair)
         return ExecutionPlanStatus(
-            summary=f"V2 组合持仓监控中；不补仓。平仓目标价差 {target} 美元以内，币安只挂 Post Only 平仓，成交后 MT4 跟随。",
+            summary=f"V2 组合持仓监控中；{add_text}。平仓目标价差 {target} 美元以内，币安只挂 Post Only 平仓，成交后 MT4 跟随。",
             max_follow_seconds=max_follow,
         )
     if settings.gold_v2_observation_only:
         return ExecutionPlanStatus(summary="V2 只读观察中，不会挂单。", max_follow_seconds=max_follow)
     return ExecutionPlanStatus(summary="V2 等待价差达到开仓条件。", max_follow_seconds=max_follow)
+
+
+def _position_add_text(settings: Settings, pair: OpenPair) -> str:
+    if settings.max_add_count <= 0:
+        return "补仓已关闭"
+    if pair.add_count >= settings.max_add_count:
+        return f"补仓已达上限 {pair.add_count}/{settings.max_add_count}"
+    return f"补仓已开启，已补 {pair.add_count}/{settings.max_add_count} 次，等待价差触发"
