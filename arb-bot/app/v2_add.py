@@ -7,6 +7,8 @@ from app.binance_client import BinanceError
 from app.models import OrderRequest, OrderUpdate, PairDirection, Side, StrategyState, utc_now_ms
 from app.v2_support import lots_from_qty
 
+ADD_CONFIRM_EVENT_INTERVAL_MS = 5_000
+
 
 class V2AddMixin:
     async def _maybe_place_add(self, plan_status: dict[str, Any]) -> bool:
@@ -54,15 +56,18 @@ class V2AddMixin:
         now = utc_now_ms()
         if self.add_ready_since_ms <= 0:
             self.add_ready_since_ms = now
-            self.storage.record_event(
-                "v2_add_trigger_confirming",
-                {
-                    "current": str(plan.get("current_edge")),
-                    "target": str(plan.get("next_trigger_edge")),
-                    "elapsed_ms": 0,
-                    "confirm_ms": confirm_ms,
-                },
-            )
+            last_event_ms = getattr(self, "add_confirm_event_ms", 0)
+            if now - last_event_ms >= ADD_CONFIRM_EVENT_INTERVAL_MS:
+                self.add_confirm_event_ms = now
+                self.storage.record_event(
+                    "v2_add_trigger_confirming",
+                    {
+                        "current": str(plan.get("current_edge")),
+                        "target": str(plan.get("next_trigger_edge")),
+                        "elapsed_ms": 0,
+                        "confirm_ms": confirm_ms,
+                    },
+                )
         elapsed = now - self.add_ready_since_ms
         if elapsed < confirm_ms:
             self.runtime.last_error = f"V2 补仓价差已触发，确认中 {elapsed}/{confirm_ms}ms，避免瞬时跳价假触发"
