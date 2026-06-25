@@ -20,7 +20,8 @@ class MonitorState:
     start_event_id: int
     opened_pairs: set[str]
     closed_pairs: set[str]
-    single_leg_since: float | None = None
+    exposure_issue_since: float | None = None
+    exposure_issue_reason: str | None = None
     last_state: str | None = None
 
 
@@ -70,6 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-minutes", type=float, default=360.0)
     parser.add_argument("--http-timeout", type=float, default=8.0)
     parser.add_argument("--single-leg-grace", type=float, default=20.0)
+    parser.add_argument("--quantity-tolerance-oz", default="0.01")
     return parser.parse_args()
 
 
@@ -90,23 +92,77 @@ def check_status(
         write_log(log_path, {"type": "state_change", **snapshot})
         state.last_state = snapshot["state"]
 
+    exposure_issue = exposure_issue_reason(status, args)
+    if exposure_issue:
+        issue_changed = state.exposure_issue_reason != exposure_issue
+        if state.exposure_issue_since is None or issue_changed:
+            state.exposure_issue_since = now
+            state.exposure_issue_reason = exposure_issue
+            write_log(log_path, {"type": "exposure_issue_seen", "issue": exposure_issue, **snapshot})
+        elif now - state.exposure_issue_since >= args.single_leg_grace:
+            write_log(
+                log_path,
+                {
+                    "type": "exposure_issue_over_grace",
+                    "issue": exposure_issue,
+                    "seconds": round(now - state.exposure_issue_since, 3),
+                    **snapshot,
+                },
+            )
+    else:
+        if state.exposure_issue_since is not None:
+            write_log(log_path, {"type": "exposure_issue_recovered", "issue": state.exposure_issue_reason, **snapshot})
+        state.exposure_issue_since = None
+        state.exposure_issue_reason = None
+
+    write_log(log_path, {"type": "tick", **snapshot})
+
+
+def exposure_issue_reason(status: dict[str, Any], args: argparse.Namespace) -> str | None:
     binance_qty = parse_decimal(status.get("binance_position_qty"))
+    mt4_positions = status.get("mt4_positions") or []
     mt4_oz = mt4_quantity_oz(status)
     has_binance = binance_qty != 0
     has_mt4 = mt4_oz != 0
-    single_leg = has_binance != has_mt4
-    if single_leg:
-        if state.single_leg_since is None:
-            state.single_leg_since = now
-            write_log(log_path, {"type": "single_leg_seen", **snapshot})
-        elif now - state.single_leg_since >= args.single_leg_grace:
-            write_log(log_path, {"type": "single_leg_over_grace", "seconds": round(now - state.single_leg_since, 3), **snapshot})
-    else:
-        if state.single_leg_since is not None:
-            write_log(log_path, {"type": "single_leg_recovered", **snapshot})
-        state.single_leg_since = None
+    if has_binance != has_mt4:
+        return "单腿持仓：币安和 MT4 只有一边有仓位"
+    if not has_binance and not has_mt4:
+        return None
 
-    write_log(log_path, {"type": "tick", **snapshot})
+    open_pair = status.get("open_pair") or {}
+    direction = open_pair.get("direction")
+    if direction == "BINANCE_SHORT_MT4_LONG":
+        if binance_qty >= 0:
+            return f"方向不一致：币安应为空单，实际数量 {binance_qty}"
+        mt4_issue = mt4_side_issue(mt4_positions, "BUY")
+        if mt4_issue:
+            return mt4_issue
+    elif direction == "BINANCE_LONG_MT4_SHORT":
+        if binance_qty <= 0:
+            return f"方向不一致：币安应为多单，实际数量 {binance_qty}"
+        mt4_issue = mt4_side_issue(mt4_positions, "SELL")
+        if mt4_issue:
+            return mt4_issue
+
+    tolerance = parse_decimal(getattr(args, "quantity_tolerance_oz", "0.01"))
+    diff = abs(abs(binance_qty) - mt4_oz)
+    if diff > tolerance:
+        return f"数量不一致：币安 {abs(binance_qty)} XAU，MT4 {mt4_oz} XAU，差额 {diff} > 容忍 {tolerance}"
+    return None
+
+
+def mt4_side_issue(positions: list[dict[str, Any]], expected_side: str) -> str | None:
+    sides = sorted(
+        {
+            str(position.get("side") or "").upper()
+            for position in positions
+            if parse_decimal(position.get("lots")) != 0
+        }
+    )
+    wrong = [side for side in sides if side and side != expected_side]
+    if wrong:
+        return f"方向不一致：MT4 应为 {expected_side}，实际 {','.join(wrong)}"
+    return None
 
 
 def summarize_status(status: dict[str, Any]) -> dict[str, Any]:
