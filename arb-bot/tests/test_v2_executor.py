@@ -26,6 +26,7 @@ def settings(tmp_path, **kwargs) -> Settings:
         "MIN_ORDER_LIVE_MS": 0,
         "MAX_ORDER_AGE_MS": 0,
         "MAX_HEDGE_DELAY_MS": 1000,
+        "ENTRY_CONFIRM_MS": 0,
         "CLOSE_PROFIT_USD_PER_OZ": Decimal("0.5"),
         **kwargs,
     }
@@ -189,6 +190,80 @@ async def test_v2_loss_limit_places_resting_exit_before_spread_recovers(tmp_path
     assert executor.active_order is not None
     assert executor.active_order.side == Side.BUY
     assert executor.active_order.price == Decimal("103")
+
+
+@pytest.mark.asyncio
+async def test_v2_regular_exit_requires_confirm_time_before_order(tmp_path, monkeypatch):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, ENTRY_CONFIRM_MS=1000)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    client.set_quote(Decimal("100"), Decimal("100.1"))
+    mt4_tick(mt4, "99", "99.2")
+    now = {"value": 10_000}
+    monkeypatch.setattr("app.v2_executor.utc_now_ms", lambda: now["value"])
+
+    await executor.step(exit_plan("2"))
+    assert executor.active_order is None
+    assert "确认中" in run.last_error
+
+    now["value"] = 10_500
+    await executor.step(exit_plan("2"))
+    assert executor.active_order is None
+
+    now["value"] = 11_100
+    await executor.step(exit_plan("2"))
+    assert run.state == StrategyState.QUOTING_BINANCE_EXIT
+    assert executor.active_order is not None
+
+
+@pytest.mark.asyncio
+async def test_v2_loss_limit_exit_skips_confirm_time(tmp_path, monkeypatch):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, ENTRY_CONFIRM_MS=1000)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    client.set_quote(Decimal("104"), Decimal("104.2"))
+    mt4_tick(mt4, "100", "100.2")
+    monkeypatch.setattr("app.v2_executor.utc_now_ms", lambda: 10_000)
+
+    await executor.step(
+        {
+            "selected_entry": {"ready": False},
+            "exit_plan": {
+                "enabled": True,
+                "target_exit_spread": "3",
+                "loss_limit": {"active": True},
+            },
+        }
+    )
+
+    assert run.state == StrategyState.QUOTING_BINANCE_EXIT
+    assert executor.active_order is not None
 
 
 @pytest.mark.asyncio

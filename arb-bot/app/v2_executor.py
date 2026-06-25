@@ -36,6 +36,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.carry_exit_notional = Decimal("0")
         self.carry_exit_order_ids: list[str] = []
         self.order_created_ms = 0
+        self.exit_ready_since_ms = 0
         self.hedge_started_ms = 0
         self.close_started_ms = 0
         self.last_closed_ms = 0
@@ -81,6 +82,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.carry_exit_notional = Decimal("0")
         self.carry_exit_order_ids = []
         self.order_created_ms = 0
+        self.exit_ready_since_ms = 0
         self.hedge_started_ms = 0
         self.close_started_ms = 0
         self.exit_target_spread = None
@@ -209,15 +211,19 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             current = quote.ask - mt4_quote.bid
             if current > target and not loss_limit_active:
+                self.exit_ready_since_ms = 0
                 return
             price = round_down(min(quote.bid - self.settings.binance_entry_offset_usd, mt4_quote.bid + target), self.binance.filters.tick_size)
             side = Side.BUY
         else:
             current = mt4_quote.ask - quote.bid
             if current > target and not loss_limit_active:
+                self.exit_ready_since_ms = 0
                 return
             price = round_up(max(quote.ask + self.settings.binance_entry_offset_usd, mt4_quote.ask - target), self.binance.filters.tick_size)
             side = Side.SELL
+        if not loss_limit_active and not self._exit_trigger_confirmed(current, target):
+            return
         try:
             order = await self.binance.place_post_only_order(
                 OrderRequest(symbol=self.settings.binance_symbol, side=side, quantity=pair.quantity_oz, price=price, reduce_only=True, position_side="SHORT" if side == Side.BUY else "LONG")
@@ -228,6 +234,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             return
         self.active_order = order
         self.order_created_ms = utc_now_ms()
+        self.exit_ready_since_ms = 0
         self.runtime.state = StrategyState.QUOTING_BINANCE_EXIT
         self.storage.record_event("v2_exit_order", order.model_dump(mode="json"))
 
@@ -285,6 +292,25 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         exit_plan = (plan_status or {}).get("exit_plan") or {}
         loss_limit = exit_plan.get("loss_limit") or {}
         return bool(loss_limit.get("active"))
+
+    def _exit_trigger_confirmed(self, current: Decimal, target: Decimal) -> bool:
+        confirm_ms = self.settings.entry_confirm_ms
+        if confirm_ms <= 0:
+            return True
+        now = utc_now_ms()
+        if self.exit_ready_since_ms <= 0:
+            self.exit_ready_since_ms = now
+            self.storage.record_event(
+                "v2_exit_trigger_confirming",
+                {"current": str(current), "target": str(target), "elapsed_ms": 0, "confirm_ms": confirm_ms},
+            )
+        elapsed = now - self.exit_ready_since_ms
+        if elapsed < confirm_ms:
+            self.runtime.last_error = f"V2 平仓价差已触发，确认中 {elapsed}/{confirm_ms}ms，避免瞬时跳价假触发"
+            return False
+        if self.runtime.last_error and self.runtime.last_error.startswith("V2 平仓价差已触发，确认中"):
+            self.runtime.last_error = None
+        return True
 
     def _queue_mt4_hedge(self, order: OrderUpdate) -> None:
         if not self.entry_hedge_side or not self.entry_direction:
