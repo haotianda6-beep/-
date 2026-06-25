@@ -54,6 +54,35 @@ def open_pair_live_reconcile_action(
     return None
 
 
+def open_pair_sync_grace_active(
+    open_pair: OpenPair | None,
+    binance_position_qty: Decimal,
+    mt4_positions: list[Mt4Position],
+    mt4_symbol: str,
+    now_ms: int,
+    grace_ms: int,
+    mt4_lot_size_oz: Decimal = Decimal("100"),
+    tolerance: Decimal = Decimal("0.0001"),
+    sync_started_ms: int | None = None,
+) -> bool:
+    started_ms = int(open_pair.opened_ms) if open_pair is not None and sync_started_ms is None else sync_started_ms
+    if open_pair is None or started_ms is None or grace_ms <= 0 or now_ms - int(started_ms) > grace_ms:
+        return False
+    mt4_symbol_positions = [position for position in mt4_positions if position.symbol == mt4_symbol]
+    binance_should_be_short = open_pair.direction.name == "BINANCE_SHORT_MT4_LONG"
+    if binance_should_be_short and binance_position_qty >= 0:
+        return False
+    if not binance_should_be_short and binance_position_qty <= 0:
+        return False
+    if abs(abs(binance_position_qty) - open_pair.quantity_oz) > tolerance:
+        return False
+    expected_mt4_side = "BUY" if binance_should_be_short else "SELL"
+    if any(position.side.value != expected_mt4_side for position in mt4_symbol_positions):
+        return False
+    mt4_qty = sum((position.lots for position in mt4_symbol_positions), Decimal("0")) * mt4_lot_size_oz
+    return mt4_qty < open_pair.quantity_oz - tolerance
+
+
 def open_pair_binance_restore_quantity(
     open_pair: OpenPair | None,
     binance_position_qty: Decimal,

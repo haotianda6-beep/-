@@ -4,6 +4,7 @@ from app.live_reconcile import (
     is_transient_live_reconcile_error,
     open_pair_binance_restore_quantity,
     open_pair_live_reconcile_action,
+    open_pair_sync_grace_active,
     orphan_live_position_action,
 )
 from app.models import Mt4Position, OpenPair, PairDirection, Side
@@ -128,6 +129,77 @@ def test_open_pair_reconcile_allows_matching_live_positions() -> None:
     )
 
     assert action is None
+
+
+def test_open_pair_sync_grace_waits_for_mt4_position_after_entry() -> None:
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("4013.38"),
+        mt4_entry_price=Decimal("4010.96"),
+        binance_order_id="7673962927",
+        mt4_tickets=[77118748],
+        opened_ms=10_000,
+    )
+
+    assert open_pair_sync_grace_active(pair, Decimal("-1"), [], "XAUUSD", now_ms=12_000, grace_ms=5_000)
+
+
+def test_open_pair_sync_grace_expires_and_keeps_real_mismatch_visible() -> None:
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("4013.38"),
+        mt4_entry_price=Decimal("4010.96"),
+        binance_order_id="7673962927",
+        mt4_tickets=[77118748],
+        opened_ms=10_000,
+    )
+
+    assert not open_pair_sync_grace_active(pair, Decimal("-1"), [], "XAUUSD", now_ms=16_000, grace_ms=5_000)
+    assert not open_pair_sync_grace_active(pair, Decimal("0"), [], "XAUUSD", now_ms=12_000, grace_ms=5_000)
+    assert not open_pair_sync_grace_active(
+        pair,
+        Decimal("-1"),
+        [Mt4Position(ticket=1, symbol="XAUUSD", side=Side.SELL, lots=Decimal("0.01"), open_price=Decimal("4010"))],
+        "XAUUSD",
+        now_ms=12_000,
+        grace_ms=5_000,
+    )
+
+
+def test_open_pair_sync_grace_allows_mt4_under_quantity_after_add() -> None:
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("2"),
+        binance_entry_price=Decimal("4015"),
+        mt4_entry_price=Decimal("4011"),
+        binance_order_id="entry / add",
+        mt4_tickets=[1, 2],
+        opened_ms=10_000,
+    )
+
+    assert open_pair_sync_grace_active(
+        pair,
+        Decimal("-2"),
+        [Mt4Position(ticket=1, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4011"))],
+        "XAUUSD",
+        now_ms=30_000,
+        grace_ms=5_000,
+        sync_started_ms=28_000,
+    )
+    assert not open_pair_sync_grace_active(
+        pair,
+        Decimal("-2"),
+        [
+            Mt4Position(ticket=1, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4011")),
+            Mt4Position(ticket=2, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4012")),
+        ],
+        "XAUUSD",
+        now_ms=30_000,
+        grace_ms=5_000,
+        sync_started_ms=28_000,
+    )
 
 
 def test_open_pair_reconcile_ignores_other_mt4_symbols_when_xau_is_flat() -> None:

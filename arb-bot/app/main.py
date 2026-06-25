@@ -22,6 +22,7 @@ from app.live_reconcile import (
     is_transient_live_reconcile_error,
     open_pair_binance_restore_quantity,
     open_pair_live_reconcile_action,
+    open_pair_sync_grace_active,
     orphan_live_position_action,
 )
 from app.models import (
@@ -73,6 +74,7 @@ POSITION_RISK_FAILURE_RETRY_MS = 30_000
 FUNDING_INCOME_CACHE_TTL_MS = 60_000
 FUNDING_INCOME_FAILURE_RETRY_MS = 60_000
 LIVE_PAIR_RECONCILE_INTERVAL_MS = 30_000
+LIVE_PAIR_OPEN_SYNC_GRACE_MS = 5_000
 ORPHAN_LIVE_RECONCILE_INTERVAL_MS = 60_000
 HISTORY_MT4_BATCH_WINDOW_MS = 180_000
 HISTORY_BINANCE_ALIGN_WINDOW_MS = 900_000
@@ -1587,6 +1589,23 @@ async def _reconcile_open_pair_live_state() -> bool:
         settings.mt4_symbol,
         settings.mt4_lot_size_oz,
     )
+    sync_window_ms = max(LIVE_PAIR_OPEN_SYNC_GRACE_MS, max(5000, settings.max_hedge_delay_ms))
+    sync_started_ms = int(strategy.open_pair.opened_ms)
+    if v2_executor.post_add_exit_block_until_ms > 0:
+        sync_started_ms = max(sync_started_ms, v2_executor.post_add_exit_block_until_ms - sync_window_ms)
+    if action == "pause" and open_pair_sync_grace_active(
+        strategy.open_pair,
+        binance_qty,
+        mt4_positions,
+        settings.mt4_symbol,
+        now,
+        sync_window_ms,
+        settings.mt4_lot_size_oz,
+        sync_started_ms=sync_started_ms,
+    ):
+        strategy.state = StrategyState.PAIR_OPEN
+        strategy.last_error = "刚完成开仓，等待 MT4 持仓同步后再做实盘对账"
+        return True
     if action == "clear":
         pair = strategy.open_pair
         storage.record_event(
