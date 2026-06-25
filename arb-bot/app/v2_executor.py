@@ -205,15 +205,16 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if self.runtime.last_error == "等待真实均价、资金费和隔夜费数据后再计算平仓目标，不挂平仓单":
             self.runtime.last_error = None
         self.exit_target_spread = target
+        loss_limit_active = self._loss_limit_active(plan_status)
         if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             current = quote.ask - mt4_quote.bid
-            if current > target:
+            if current > target and not loss_limit_active:
                 return
             price = round_down(min(quote.bid - self.settings.binance_entry_offset_usd, mt4_quote.bid + target), self.binance.filters.tick_size)
             side = Side.BUY
         else:
             current = mt4_quote.ask - quote.bid
-            if current > target:
+            if current > target and not loss_limit_active:
                 return
             price = round_up(max(quote.ask + self.settings.binance_entry_offset_usd, mt4_quote.ask - target), self.binance.filters.tick_size)
             side = Side.SELL
@@ -268,7 +269,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if gap_reason:
             await self.cancel_active_order(f"V2 平仓报价异常，撤销未成交限价单：{gap_reason}")
             return
-        if not exit_spread_ready(pair, binance_quote, mt4_quote, target):
+        if not exit_spread_ready(pair, binance_quote, mt4_quote, target) and not self._loss_limit_active(plan_status):
             await self.cancel_active_order("V2 平仓价差回落，撤销未成交限价单")
             return
         if utc_now_ms() - self.order_created_ms > max(self.settings.min_order_live_ms, self.settings.max_order_age_ms):
@@ -279,6 +280,11 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if not exit_plan.get("enabled") or exit_plan.get("target_exit_spread") is None:
             return None
         return Decimal(str(exit_plan["target_exit_spread"]))
+
+    def _loss_limit_active(self, plan_status: dict[str, Any]) -> bool:
+        exit_plan = (plan_status or {}).get("exit_plan") or {}
+        loss_limit = exit_plan.get("loss_limit") or {}
+        return bool(loss_limit.get("active"))
 
     def _queue_mt4_hedge(self, order: OrderUpdate) -> None:
         if not self.entry_hedge_side or not self.entry_direction:
