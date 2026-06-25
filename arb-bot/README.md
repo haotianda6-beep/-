@@ -182,6 +182,32 @@ MT4_SLIPPAGE_POINTS=30
 
 Binance maker fee 启动时会优先调用 `/fapi/v1/commissionRate`。如果接口不可用，才使用 `.env` 的 `BINANCE_MAKER_FEE_RATE`。日志只会打印脱敏摘要，不会打印密钥或签名。
 
+## 黄金监控邮件告警
+
+`gold-v2-monitor.service` 会持续读取执行器状态和真实事件。默认只写日志，不发邮件。需要邮件通知时，在 `.env` 中填：
+
+```env
+GOLD_ALERT_EMAIL_ENABLED=true
+GOLD_ALERT_EMAIL_TO=收件邮箱
+GOLD_ALERT_EMAIL_FROM=发件邮箱
+GOLD_ALERT_SMTP_HOST=smtp.example.com
+GOLD_ALERT_SMTP_PORT=587
+GOLD_ALERT_SMTP_USER=发件邮箱账号
+GOLD_ALERT_SMTP_PASSWORD=发件邮箱授权码
+GOLD_ALERT_SMTP_TLS=true
+GOLD_ALERT_SMTP_SSL=false
+```
+
+触发范围：
+
+- 黄金 V2 开仓
+- 黄金 V2 平仓
+- 币安和 MT4 单腿、方向不一致或数量不一致超过宽限时间
+- 执行器进入 `UNHEDGED` 或 `PAUSED`
+- 监控完成目标轮数
+
+邮件告警会做去重，同一事件不会反复刷屏；日志只会记录脱敏后的收件邮箱，不会打印 SMTP 密码。
+
 ## Windows 自启动
 
 管理员 PowerShell：

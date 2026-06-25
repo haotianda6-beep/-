@@ -75,6 +75,7 @@ def test_monitor_state_persists_cycle_progress(tmp_path):
         opened_pairs={"pair_a"},
         closed_pairs={"pair_a"},
         target_reached=True,
+        alerted_keys={"open:pair_a"},
     )
 
     monitor.save_monitor_state(state_path, state)
@@ -84,6 +85,7 @@ def test_monitor_state_persists_cycle_progress(tmp_path):
     assert restored.opened_pairs == {"pair_a"}
     assert restored.closed_pairs == {"pair_a"}
     assert restored.target_reached is True
+    assert restored.alerted_keys == {"open:pair_a"}
 
 
 def test_monitor_state_starts_from_current_event_when_no_state_file(tmp_path, monkeypatch):
@@ -94,3 +96,41 @@ def test_monitor_state_starts_from_current_event_when_no_state_file(tmp_path, mo
     assert restored.start_event_id == 123
     assert restored.opened_pairs == set()
     assert restored.closed_pairs == set()
+
+
+def test_alert_config_is_disabled_by_default(monkeypatch):
+    for key in [
+        "GOLD_ALERT_EMAIL_ENABLED",
+        "GOLD_ALERT_EMAIL_TO",
+        "GOLD_ALERT_SMTP_HOST",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    config = monitor.load_alert_config()
+
+    assert config.enabled is False
+    assert config.ready is False
+
+
+def test_send_alert_once_deduplicates(tmp_path, monkeypatch):
+    sent = []
+    config = monitor.AlertConfig(
+        enabled=True,
+        host="smtp.example.test",
+        port=587,
+        username="user",
+        password="secret",
+        recipients=("alert@example.test",),
+        sender="bot@example.test",
+        use_tls=True,
+        use_ssl=False,
+        timeout=1.0,
+    )
+    state = monitor.MonitorState(start_event_id=0, opened_pairs=set(), closed_pairs=set())
+    monkeypatch.setattr(monitor, "send_email", lambda cfg, subject, body: sent.append((subject, body)))
+
+    monitor.send_alert_once(config, state, "open:pair_a", "开仓", "body", tmp_path / "monitor.log")
+    monitor.send_alert_once(config, state, "open:pair_a", "开仓", "body", tmp_path / "monitor.log")
+
+    assert sent == [("开仓", "body")]
+    assert state.alerted_keys == {"open:pair_a"}

@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import argparse
+import os
 import json
+import smtplib
 import sqlite3
 import sys
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
@@ -24,10 +27,31 @@ class MonitorState:
     exposure_issue_reason: str | None = None
     last_state: str | None = None
     target_reached: bool = False
+    alerted_keys: set[str] = field(default_factory=set)
+
+
+@dataclass(frozen=True)
+class AlertConfig:
+    enabled: bool
+    host: str
+    port: int
+    username: str
+    password: str
+    recipients: tuple[str, ...]
+    sender: str
+    use_tls: bool
+    use_ssl: bool
+    timeout: float
+
+    @property
+    def ready(self) -> bool:
+        return self.enabled and bool(self.host) and bool(self.recipients)
 
 
 def main() -> int:
     args = parse_args()
+    load_env_file(Path(args.env_file) if args.env_file else None)
+    alert_config = load_alert_config()
     log_path = Path(args.log_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     state_path = Path(args.state_file) if args.state_file else None
@@ -41,6 +65,8 @@ def main() -> int:
             "cycles_target": args.cycles,
             "closed_cycles": len(state.closed_pairs),
             "state_file": str(state_path) if state_path else None,
+            "email_alert_enabled": alert_config.ready,
+            "email_alert_to": mask_recipients(alert_config.recipients),
         },
     )
     save_monitor_state(state_path, state)
@@ -49,19 +75,33 @@ def main() -> int:
         now = time.monotonic()
         try:
             status = fetch_json(args.status_url, args.http_timeout)
-            check_status(status, state, args, log_path, now)
+            check_status(status, state, args, log_path, now, alert_config)
         except Exception as exc:
             write_log(log_path, {"type": "status_error", "error": short_error(exc)})
+            send_alert_once(
+                alert_config,
+                state,
+                "status_error",
+                "黄金监控读取状态失败",
+                f"黄金执行器状态读取失败：{short_error(exc)}",
+                log_path,
+            )
 
         events = read_events(Path(args.db), state.start_event_id)
         for event in events:
-            handle_event(event, state, log_path)
-        if events:
-            save_monitor_state(state_path, state)
+            handle_event(event, state, log_path, alert_config)
         if len(state.closed_pairs) >= args.cycles and not state.target_reached:
             state.target_reached = True
             write_log(log_path, {"type": "monitor_target_reached", "closed_cycles": len(state.closed_pairs)})
-            save_monitor_state(state_path, state)
+            send_alert_once(
+                alert_config,
+                state,
+                "target_reached",
+                "黄金监控已完成目标轮数",
+                f"黄金 V2 监控已记录 {len(state.closed_pairs)} 轮平仓，达到目标 {args.cycles} 轮。",
+                log_path,
+            )
+        save_monitor_state(state_path, state)
         time.sleep(args.interval)
 
     write_log(
@@ -87,6 +127,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--single-leg-grace", type=float, default=20.0)
     parser.add_argument("--quantity-tolerance-oz", default="0.01")
     parser.add_argument("--state-file", default="/root/perp-arb-bot/arb-bot/data/gold_v2_monitor_state.json")
+    parser.add_argument("--env-file", default="/root/perp-arb-bot/arb-bot/.env")
     return parser.parse_args()
 
 
@@ -99,6 +140,7 @@ def load_monitor_state(state_path: Path | None, db_path: Path) -> MonitorState:
                 opened_pairs=set(data.get("opened_pairs") or []),
                 closed_pairs=set(data.get("closed_pairs") or []),
                 target_reached=bool(data.get("target_reached")),
+                alerted_keys=set(data.get("alerted_keys") or []),
             )
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             pass
@@ -114,6 +156,7 @@ def save_monitor_state(state_path: Path | None, state: MonitorState) -> None:
         "opened_pairs": sorted(state.opened_pairs),
         "closed_pairs": sorted(state.closed_pairs),
         "target_reached": state.target_reached,
+        "alerted_keys": sorted(state.alerted_keys),
     }
     tmp_path = state_path.with_suffix(state_path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
@@ -131,11 +174,21 @@ def check_status(
     args: argparse.Namespace,
     log_path: Path,
     now: float,
+    alert_config: AlertConfig,
 ) -> None:
     snapshot = summarize_status(status)
     if snapshot["state"] != state.last_state:
         write_log(log_path, {"type": "state_change", **snapshot})
         state.last_state = snapshot["state"]
+        if snapshot["state"] in {"UNHEDGED", "PAUSED"}:
+            send_alert_once(
+                alert_config,
+                state,
+                f"state:{snapshot['state']}",
+                f"黄金执行器进入{snapshot['state']}状态",
+                json.dumps(snapshot, ensure_ascii=False, sort_keys=True),
+                log_path,
+            )
 
     exposure_issue = exposure_issue_reason(status, args)
     if exposure_issue:
@@ -154,9 +207,18 @@ def check_status(
                     **snapshot,
                 },
             )
+            send_alert_once(
+                alert_config,
+                state,
+                f"exposure:{exposure_issue}",
+                "黄金持仓对冲异常超过宽限时间",
+                f"{exposure_issue}\n\n当前摘要：{json.dumps(snapshot, ensure_ascii=False, sort_keys=True)}",
+                log_path,
+            )
     else:
         if state.exposure_issue_since is not None:
             write_log(log_path, {"type": "exposure_issue_recovered", "issue": state.exposure_issue_reason, **snapshot})
+            state.alerted_keys.discard(f"exposure:{state.exposure_issue_reason}")
         state.exposure_issue_since = None
         state.exposure_issue_reason = None
 
@@ -261,7 +323,7 @@ def read_events(db_path: Path, after_id: int) -> list[sqlite3.Row]:
         ).fetchall()
 
 
-def handle_event(event: sqlite3.Row, state: MonitorState, log_path: Path) -> None:
+def handle_event(event: sqlite3.Row, state: MonitorState, log_path: Path, alert_config: AlertConfig) -> None:
     state.start_event_id = max(state.start_event_id, int(event["id"]))
     kind = event["kind"]
     payload = parse_payload(event["payload"])
@@ -269,6 +331,14 @@ def handle_event(event: sqlite3.Row, state: MonitorState, log_path: Path) -> Non
     if kind == "v2_pair_open" and pair_id:
         state.opened_pairs.add(pair_id)
         write_log(log_path, {"type": "pair_open", "event_id": event["id"], "ts": event["ts"], "pair_id": pair_id, "payload": payload})
+        send_alert_once(
+            alert_config,
+            state,
+            f"open:{pair_id}",
+            "黄金套利已开仓",
+            f"黄金 V2 已开仓：{pair_id}\n\n{json.dumps(payload, ensure_ascii=False, sort_keys=True)}",
+            log_path,
+        )
     elif kind == "v2_pair_closed" and pair_id:
         state.closed_pairs.add(pair_id)
         write_log(
@@ -281,6 +351,14 @@ def handle_event(event: sqlite3.Row, state: MonitorState, log_path: Path) -> Non
                 "closed_cycles": len(state.closed_pairs),
                 "payload": payload,
             },
+        )
+        send_alert_once(
+            alert_config,
+            state,
+            f"close:{pair_id}",
+            "黄金套利已平仓",
+            f"黄金 V2 已平仓：{pair_id}\n已完成轮数：{len(state.closed_pairs)}\n\n{json.dumps(payload, ensure_ascii=False, sort_keys=True)}",
+            log_path,
         )
     elif kind.startswith("v2_") or kind.startswith("runtime_"):
         write_log(log_path, {"type": "event", "event_id": event["id"], "ts": event["ts"], "kind": kind, "payload": payload})
@@ -315,6 +393,112 @@ def short_error(exc: BaseException) -> str:
     if isinstance(exc, urllib.error.HTTPError):
         return f"HTTP {exc.code}"
     return f"{type(exc).__name__}: {str(exc)[:200]}"
+
+
+def load_env_file(path: Path | None) -> None:
+    if not path or not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        os.environ[key] = value.strip().strip('"').strip("'")
+
+
+def load_alert_config() -> AlertConfig:
+    recipients = tuple(
+        item.strip()
+        for item in os.getenv("GOLD_ALERT_EMAIL_TO", "").replace(";", ",").split(",")
+        if item.strip()
+    )
+    username = os.getenv("GOLD_ALERT_SMTP_USER", "").strip()
+    sender = os.getenv("GOLD_ALERT_EMAIL_FROM", "").strip() or username or "gold-v2-monitor@localhost"
+    return AlertConfig(
+        enabled=env_bool("GOLD_ALERT_EMAIL_ENABLED", default=False),
+        host=os.getenv("GOLD_ALERT_SMTP_HOST", "").strip(),
+        port=env_int("GOLD_ALERT_SMTP_PORT", default=587),
+        username=username,
+        password=os.getenv("GOLD_ALERT_SMTP_PASSWORD", ""),
+        recipients=recipients,
+        sender=sender,
+        use_tls=env_bool("GOLD_ALERT_SMTP_TLS", default=True),
+        use_ssl=env_bool("GOLD_ALERT_SMTP_SSL", default=False),
+        timeout=env_float("GOLD_ALERT_SMTP_TIMEOUT", default=10.0),
+    )
+
+
+def send_alert_once(
+    config: AlertConfig,
+    state: MonitorState,
+    key: str,
+    subject: str,
+    body: str,
+    log_path: Path,
+) -> None:
+    if not config.ready or key in state.alerted_keys:
+        return
+    state.alerted_keys.add(key)
+    try:
+        send_email(config, subject, body)
+        write_log(log_path, {"type": "alert_sent", "key": key, "subject": subject, "to": mask_recipients(config.recipients)})
+    except Exception as exc:  # noqa: BLE001 - alerting must never stop monitoring.
+        write_log(log_path, {"type": "alert_error", "key": key, "subject": subject, "error": short_error(exc)})
+
+
+def send_email(config: AlertConfig, subject: str, body: str) -> None:
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = config.sender
+    message["To"] = ", ".join(config.recipients)
+    message.set_content(body)
+
+    smtp_class = smtplib.SMTP_SSL if config.use_ssl else smtplib.SMTP
+    with smtp_class(config.host, config.port, timeout=config.timeout) as smtp:
+        if config.use_tls and not config.use_ssl:
+            smtp.starttls()
+        if config.username:
+            smtp.login(config.username, config.password)
+        smtp.send_message(message)
+
+
+def env_bool(key: str, default: bool) -> bool:
+    value = os.getenv(key)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_int(key: str, default: int) -> int:
+    try:
+        return int(os.getenv(key, str(default)))
+    except ValueError:
+        return default
+
+
+def env_float(key: str, default: float) -> float:
+    try:
+        return float(os.getenv(key, str(default)))
+    except ValueError:
+        return default
+
+
+def mask_recipients(recipients: tuple[str, ...]) -> list[str]:
+    return [mask_email(item) for item in recipients]
+
+
+def mask_email(value: str) -> str:
+    if "@" not in value:
+        return "***"
+    name, domain = value.split("@", 1)
+    if len(name) <= 2:
+        masked_name = name[:1] + "***"
+    else:
+        masked_name = name[:2] + "***" + name[-1:]
+    return f"{masked_name}@{domain}"
 
 
 def write_log(path: Path, data: dict[str, Any]) -> None:
