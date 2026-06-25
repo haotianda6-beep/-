@@ -69,8 +69,9 @@ Linux systemd 模板：
 
 ```bash
 sudo cp deploy/xau-arb-bot.service /etc/systemd/system/xau-arb-bot.service
+sudo cp deploy/gold-v2-monitor.service /etc/systemd/system/gold-v2-monitor.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now xau-arb-bot
+sudo systemctl enable --now xau-arb-bot gold-v2-monitor
 ```
 
 ## MT4 EA 安装
