@@ -36,6 +36,7 @@ def build_gold_v2_status(
     short_threshold = _entry_threshold(short_range, settings.open_min_edge)
     long_threshold = _entry_threshold(long_range, settings.open_min_edge)
     slippage_budget = _mt4_slippage_budget(settings, mt4_quote, mt4_bars, mt4_tick_move_budget)
+    exit_follow_budget = _mt4_exit_follow_budget(settings)
     move_budget_source = "实时tick" if mt4_tick_move_budget is not None else "1分钟K线"
 
     short_plan = _entry_plan(
@@ -46,6 +47,7 @@ def build_gold_v2_status(
         mt4=mt4_quote,
         threshold=short_threshold,
         slippage_budget=slippage_budget,
+        exit_follow_budget=exit_follow_budget,
         point_count=short_range["points"],
         spread_range=short_range,
         metrics=metrics,
@@ -58,6 +60,7 @@ def build_gold_v2_status(
         mt4=mt4_quote,
         threshold=long_threshold,
         slippage_budget=slippage_budget,
+        exit_follow_budget=exit_follow_budget,
         point_count=long_range["points"],
         spread_range=long_range,
         metrics=metrics,
@@ -73,6 +76,7 @@ def build_gold_v2_status(
         "lookback_minutes": 30,
         "threshold_rule": "最近30分钟价差最低到最高之间取70%位置，并且不能低于手动最小开仓价差。",
         "mt4_slippage_budget": slippage_budget,
+        "mt4_exit_follow_budget": exit_follow_budget,
         "mt4_move_budget_source": move_budget_source,
         "mt4_live_spread_usd_per_oz": live_spread_usd_per_oz(mt4_quote),
         "short_range": short_range,
@@ -81,7 +85,7 @@ def build_gold_v2_status(
         "long_entry": long_plan,
         "selected_entry": selected,
         "exit_plan": _exit_plan(settings, open_pair, metrics),
-        "add_plan": _add_plan(settings, filters, open_pair, metrics, binance_quote, mt4_quote, slippage_budget),
+        "add_plan": _add_plan(settings, filters, open_pair, metrics, binance_quote, mt4_quote, slippage_budget, exit_follow_budget),
         "partial_fill_policy": [
             "币安只允许挂单成交，禁止市价开仓和平仓。",
             "补仓按真实首仓价差加阶梯触发，币安仍只允许挂单成交。",
@@ -133,6 +137,7 @@ def _entry_plan(
     mt4: MarketQuote | None,
     threshold: Decimal,
     slippage_budget: Decimal,
+    exit_follow_budget: Decimal,
     point_count: int,
     spread_range: dict,
     metrics: PositionMetrics | None,
@@ -159,6 +164,7 @@ def _entry_plan(
             limit_price=limit_price,
             mt4_reference_price=mt4.ask,
             slippage_budget=slippage_budget,
+            exit_follow_budget=exit_follow_budget,
             point_count=point_count,
             spread_range=spread_range,
             close_profit=settings.close_profit_usd_per_oz,
@@ -176,6 +182,7 @@ def _entry_plan(
         limit_price=limit_price,
         mt4_reference_price=mt4.bid,
         slippage_budget=slippage_budget,
+        exit_follow_budget=exit_follow_budget,
         point_count=point_count,
         spread_range=spread_range,
         close_profit=settings.close_profit_usd_per_oz,
@@ -208,6 +215,7 @@ def _plan_dict(
     limit_price: Decimal,
     mt4_reference_price: Decimal,
     slippage_budget: Decimal,
+    exit_follow_budget: Decimal,
     point_count: int,
     spread_range: dict,
     close_profit: Decimal,
@@ -219,7 +227,7 @@ def _plan_dict(
     adjustment_value = Decimal("0")
     if settlement_adjustment:
         adjustment_value = Decimal(str(settlement_adjustment["total"]))
-    estimated_exit_target = max(Decimal("0"), locked_edge + (adjustment_value / qty) - slippage_budget - close_profit)
+    estimated_exit_target = max(Decimal("0"), locked_edge + (adjustment_value / qty) - slippage_budget - exit_follow_budget - close_profit)
     recent_low = Decimal(str(spread_range["low"])) if spread_range.get("low") is not None else None
     exit_viable = recent_low is None or recent_low <= estimated_exit_target
     reason = "达到安全入场边际，可以进入小仓验证队列" if ready else f"当前价差未到安全入场边际 {required_edge}"
@@ -247,6 +255,7 @@ def _plan_dict(
         "next_settlement_adjustment": settlement_adjustment,
         "mt4_reference_price": mt4_reference_price,
         "mt4_slippage_budget": slippage_budget,
+        "mt4_exit_follow_budget": exit_follow_budget,
     }
 
 
@@ -443,7 +452,16 @@ def _projected_convergence_net_after_next_swap(
     return net + next_swap
 
 
-def _add_plan(settings: Settings, filters: ExchangeFilters, pair: OpenPair | None, metrics: PositionMetrics | None, binance: MarketQuote | None, mt4: MarketQuote | None, slippage_budget: Decimal) -> dict:
+def _add_plan(
+    settings: Settings,
+    filters: ExchangeFilters,
+    pair: OpenPair | None,
+    metrics: PositionMetrics | None,
+    binance: MarketQuote | None,
+    mt4: MarketQuote | None,
+    slippage_budget: Decimal,
+    exit_follow_budget: Decimal,
+) -> dict:
     if not pair:
         return {"enabled": False, "reason": "无持仓，补仓计划不启动。"}
     if settings.max_add_count <= 0:
@@ -476,16 +494,30 @@ def _add_plan(settings: Settings, filters: ExchangeFilters, pair: OpenPair | Non
         edge = mt4.bid - binance.bid
         price = _round_down(min(binance.bid - settings.binance_entry_offset_usd, mt4.bid - trigger - slippage_budget), filters.tick_size)
         side, mt4_side, locked = Side.BUY, Side.SELL, mt4.bid - price
-    ready = edge >= trigger
+    current_avg_edge = metrics.actual_entry_spread if metrics and metrics.actual_entry_spread is not None else pair.base_edge
+    blended_edge = None
+    exit_viable = False
+    if current_avg_edge is not None:
+        blended_edge = ((current_avg_edge * pair.quantity_oz) + (locked * qty)) / (pair.quantity_oz + qty)
+        exit_viable = blended_edge > settings.close_profit_usd_per_oz + exit_follow_budget
+    ready = edge >= trigger and exit_viable
+    reason = "达到补仓触发位，可以挂补仓限价单。"
+    if not exit_viable:
+        reason = "补仓后均价差仍不足以覆盖平仓缓冲和目标利润，暂不补仓。"
+    elif not ready:
+        reason = "当前价差未到补仓触发位。"
     return {**data,
         "ready": ready,
-        "reason": "达到补仓触发位，可以挂补仓限价单。" if ready else "当前价差未到补仓触发位。",
+        "reason": reason,
         "current_edge": edge,
         "binance_side": side.value,
         "binance_price": price,
         "mt4_follow_side": mt4_side.value,
         "expected_locked_edge": locked,
+        "estimated_blended_edge": blended_edge,
+        "exit_viable": exit_viable,
         "mt4_slippage_budget": slippage_budget,
+        "mt4_exit_follow_budget": exit_follow_budget,
     }
 
 
@@ -505,6 +537,10 @@ def _mt4_slippage_budget(
     base = max(configured, DEFAULT_SLIPPAGE_BUDGET)
     recent = tick_move_budget if tick_move_budget is not None else _mt4_recent_move_budget(mt4_bars or [])
     return base + recent
+
+
+def _mt4_exit_follow_budget(settings: Settings) -> Decimal:
+    return Decimal(settings.mt4_slippage_points) * XAU_POINT_VALUE + settings.mt4_close_extra_buffer_usd
 
 
 def _mt4_recent_move_budget(mt4_bars: list[HistoryBar]) -> Decimal:

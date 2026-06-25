@@ -1472,8 +1472,13 @@
         const moveSource = plan.mt4_move_budget_source
           ? `；预算来源 ${plan.mt4_move_budget_source}`
           : "";
+        const exitBudget =
+          plan.mt4_exit_follow_budget !== null &&
+          plan.mt4_exit_follow_budget !== undefined
+            ? `；平仓跟随预算 ${fmt(plan.mt4_exit_follow_budget)} 美元`
+            : "";
         $("v2RiskLine").textContent =
-          `${policy || "禁止币安市价单"}；MT4滑点预算 ${fmt(plan.mt4_slippage_budget)} 美元${liveSpread}${moveSource}`;
+          `${policy || "禁止币安市价单"}；MT4滑点预算 ${fmt(plan.mt4_slippage_budget)} 美元${liveSpread}${moveSource}${exitBudget}`;
       }
 
       function renderLimitOrder(data) {

@@ -186,10 +186,35 @@ def test_v2_blocks_entry_when_next_triple_swap_makes_exit_unsafe(tmp_path):
 
     assert status["short_entry"]["current_edge"] >= status["short_entry"]["threshold"]
     assert status["short_entry"]["next_settlement_adjustment"]["mt4_swap"] == Decimal("-1.9788")
-    assert status["short_entry"]["estimated_exit_target_spread"] == Decimal("1.0212")
+    assert status["short_entry"]["estimated_exit_target_spread"] == Decimal("0.7212")
     assert status["short_entry"]["exit_viable"] is False
     assert status["short_entry"]["ready"] is False
     assert "隔夜费" in status["short_entry"]["reason"]
+
+
+def test_v2_blocks_entry_when_exit_buffer_exceeds_locked_edge(tmp_path):
+    cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.0"), MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("5.0"))
+    store = Storage(cfg.sqlite_path)
+    mt4_bars, binance_bars = recent_bars([Decimal("2.0"), Decimal("2.2"), Decimal("2.4")] * 4)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.8"), ask=Decimal("4004.0")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("4000.8"), ask=Decimal("4001.0")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+        mt4_tick_move_budget=Decimal("0.1"),
+    )
+
+    assert status["short_entry"]["current_edge"] >= status["short_entry"]["threshold"]
+    assert status["short_entry"]["estimated_exit_target_spread"] == Decimal("0")
+    assert status["short_entry"]["exit_viable"] is False
+    assert status["short_entry"]["ready"] is False
+    assert "安全平仓" in status["short_entry"]["reason"]
 
 
 def test_v2_blocks_entry_when_mt4_rollover_time_is_stale(tmp_path):
@@ -348,6 +373,36 @@ def test_v2_add_plan_uses_real_first_edge_plus_step(tmp_path):
     assert status["add_plan"]["next_add_number"] == 3
     assert status["add_plan"]["next_trigger_edge"] == Decimal("4.8")
     assert status["add_plan"]["ready"] is False
+
+
+def test_v2_add_plan_blocks_when_blended_edge_cannot_cover_exit_buffer(tmp_path):
+    cfg = settings(tmp_path, ADD_EDGE_GROWTH_USD=Decimal("1"), MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("5.0"))
+    store = Storage(cfg.sqlite_path)
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("4013.38"),
+        mt4_entry_price=Decimal("4010.96"),
+        binance_order_id="entry",
+        base_edge=Decimal("2.42"),
+    )
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4020.5"), ask=Decimal("4020.7")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("4017.0"), ask=Decimal("4017.2")),
+        binance_bars=[],
+        open_pair=pair,
+        metrics=PositionMetrics(actual_entry_spread=Decimal("2.42")),
+        mt4_tick_move_budget=Decimal("0.1"),
+    )
+
+    assert status["add_plan"]["current_edge"] >= status["add_plan"]["next_trigger_edge"]
+    assert status["add_plan"]["exit_viable"] is False
+    assert status["add_plan"]["ready"] is False
+    assert "不足以覆盖平仓缓冲" in status["add_plan"]["reason"]
 
 
 def test_v2_negative_swap_window_relaxes_exit_to_safe_target(tmp_path):
