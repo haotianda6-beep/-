@@ -73,7 +73,7 @@ POSITION_RISK_FAILURE_RETRY_MS = 30_000
 FUNDING_INCOME_CACHE_TTL_MS = 60_000
 FUNDING_INCOME_FAILURE_RETRY_MS = 60_000
 LIVE_PAIR_RECONCILE_INTERVAL_MS = 30_000
-ORPHAN_LIVE_RECONCILE_INTERVAL_MS = 5_000
+ORPHAN_LIVE_RECONCILE_INTERVAL_MS = 60_000
 HISTORY_MT4_BATCH_WINDOW_MS = 180_000
 HISTORY_BINANCE_ALIGN_WINDOW_MS = 900_000
 HISTORY_EVENT_EXIT_LINK_WINDOW_MS = 600_000
@@ -1758,8 +1758,8 @@ async def _reconcile_orphan_live_state() -> bool:
         strategy.last_error = f"币安空仓检查冷却中，约 {seconds_left} 秒后重试，期间禁止 V2 新开仓"
         _orphan_live_guard_active = True
         return True
-    if _orphan_live_guard_active and now - _orphan_live_reconcile_ms < ORPHAN_LIVE_RECONCILE_INTERVAL_MS:
-        return True
+    if now - _orphan_live_reconcile_ms < ORPHAN_LIVE_RECONCILE_INTERVAL_MS:
+        return _orphan_live_guard_active
     _orphan_live_reconcile_ms = now
     if not mt4_bridge.connected():
         strategy.state = StrategyState.IDLE
