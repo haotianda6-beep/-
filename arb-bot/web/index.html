@@ -1448,6 +1448,11 @@
         const add = plan.add_plan || {};
         const maxAddCount = Number(config?.max_add_count || 0);
         const addConfigured = maxAddCount > 0;
+        const addStateText = !addConfigured
+          ? "补仓已关闭"
+          : add.ready
+            ? "补仓已开启，已达到触发位"
+            : "补仓已开启，等待触发";
         const addPrefix = addConfigured
           ? `补仓配置已开启，最多 ${fmt(maxAddCount)} 次`
           : "补仓配置已关闭";
@@ -1462,10 +1467,10 @@
               ? `；安全可执行价差 ${fmt(add.next_actionable_trigger_edge)} 美元`
               : "";
           $("v2AddPlanLine").textContent =
-            `${addPrefix}；已补 ${fmt(add.add_count || 0)}/${fmt(add.max_add_count || maxAddCount)} 次，第 ${fmt(add.next_add_number)} 次阶梯价差 ${fmt(add.next_trigger_edge)} 美元${actionableText}，${add.reason || "等待触发"}`;
+            `${addStateText}；${addPrefix}；已补 ${fmt(add.add_count || 0)}/${fmt(add.max_add_count || maxAddCount)} 次，第 ${fmt(add.next_add_number)} 次阶梯价差 ${fmt(add.next_trigger_edge)} 美元${actionableText}，${add.reason || "等待触发"}`;
         } else if (addConfigured) {
           $("v2AddPlanLine").textContent =
-            `${addPrefix}；${add.reason || "等待持仓后计算补仓"}`;
+            `${addStateText}；${addPrefix}；${add.reason || "等待持仓后计算补仓"}`;
         } else {
           $("v2AddPlanLine").textContent = add.reason || "补仓未启动";
         }
@@ -1732,7 +1737,9 @@
           Number.isFinite(actionable) && actionable > trigger
             ? `，安全可执行 ${fmt(actionable)} 美元`
             : "";
-        return `已补 ${count}/${maxCount} 次，下次补仓阶梯 ${fmt(trigger)} 美元（${baseLabel} ${fmt(baseEdge)} + 增加 ${fmt(addGrowth)}）${safeText}${actualAddText}${actualEntryText}${currentText}`;
+        const ready = addPlan?.ready === true;
+        const enabledText = ready ? "补仓已开启，已到触发位" : "补仓已开启，等待触发";
+        return `${enabledText}，已补 ${count}/${maxCount} 次，下次补仓阶梯 ${fmt(trigger)} 美元（${baseLabel} ${fmt(baseEdge)} + 增加 ${fmt(addGrowth)}）${safeText}${actualAddText}${actualEntryText}${currentText}`;
       }
 
       function renderMt4Positions(positions) {
