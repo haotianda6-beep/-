@@ -799,6 +799,43 @@ async def test_v2_add_position_merges_pair_after_binance_fill_and_mt4_follow(tmp
 
 
 @pytest.mark.asyncio
+async def test_v2_add_position_waits_for_confirm_before_order(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", MAX_ADD_COUNT=1, ENTRY_CONFIRM_MS=1500)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("103"),
+        mt4_entry_price=Decimal("100"),
+        binance_order_id="entry",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("3"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+
+    client.set_quote(Decimal("104"), Decimal("104.2"))
+    mt4_tick(mt4, "100.8", "101")
+    await executor.step(add_plan("105"))
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    assert executor.add_ready_since_ms > 0
+    assert run.last_error.startswith("V2 补仓价差已触发，确认中")
+
+    executor.add_ready_since_ms = utc_now_ms() - cfg.entry_confirm_ms
+    await executor.step(add_plan("105"))
+
+    assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert executor.active_order is not None
+    assert executor.adding_to_pair is True
+    assert run.last_error is None
+
+
+@pytest.mark.asyncio
 async def test_v2_exit_closes_all_mt4_tickets_before_clearing_pair(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", MAX_ADD_COUNT=1)
     client = PaperBinanceClient(cfg)

@@ -39,6 +39,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.carry_exit_order_ids: list[str] = []
         self.order_created_ms = 0
         self.exit_ready_since_ms = 0
+        self.add_ready_since_ms = 0
         self.hedge_started_ms = 0
         self.close_started_ms = 0
         self.last_closed_ms = 0
@@ -89,6 +90,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.carry_exit_order_ids = []
         self.order_created_ms = 0
         self.exit_ready_since_ms = 0
+        self.add_ready_since_ms = 0
         self.hedge_started_ms = 0
         self.close_started_ms = 0
         self.exit_target_spread = None

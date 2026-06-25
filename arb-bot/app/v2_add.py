@@ -13,6 +13,13 @@ class V2AddMixin:
         pair = self.runtime.open_pair
         plan = plan_status.get("add_plan") or {}
         if not pair or not plan.get("ready"):
+            self.add_ready_since_ms = 0
+            self._clear_add_confirm_message()
+            if not pair:
+                self.active_add_base_edge = None
+                self.active_add_trigger_edge = None
+            return False
+        if not self._add_trigger_confirmed(plan):
             return False
         side = Side(plan["binance_side"])
         qty = Decimal(str(plan["quantity_oz"]))
@@ -32,10 +39,38 @@ class V2AddMixin:
         self.adding_to_pair = True
         self.active_add_base_edge = Decimal(str(plan["base_edge"]))
         self.active_add_trigger_edge = Decimal(str(plan["next_trigger_edge"]))
+        self.add_ready_since_ms = 0
         self.runtime.state = StrategyState.QUOTING_BINANCE_ENTRY
         self.runtime.last_error = None
         self.storage.record_event("v2_add_order", {**order.model_dump(mode="json"), "add_plan": plan})
         return True
+
+    def _add_trigger_confirmed(self, plan: dict[str, Any]) -> bool:
+        confirm_ms = self.settings.entry_confirm_ms
+        if confirm_ms <= 0:
+            return True
+        now = utc_now_ms()
+        if self.add_ready_since_ms <= 0:
+            self.add_ready_since_ms = now
+            self.storage.record_event(
+                "v2_add_trigger_confirming",
+                {
+                    "current": str(plan.get("current_edge")),
+                    "target": str(plan.get("next_trigger_edge")),
+                    "elapsed_ms": 0,
+                    "confirm_ms": confirm_ms,
+                },
+            )
+        elapsed = now - self.add_ready_since_ms
+        if elapsed < confirm_ms:
+            self.runtime.last_error = f"V2 补仓价差已触发，确认中 {elapsed}/{confirm_ms}ms，避免瞬时跳价假触发"
+            return False
+        self._clear_add_confirm_message()
+        return True
+
+    def _clear_add_confirm_message(self) -> None:
+        if self.runtime.last_error and self.runtime.last_error.startswith("V2 补仓价差已触发，确认中"):
+            self.runtime.last_error = None
 
     def _active_entry_plan(self, plan_status: dict[str, Any]) -> dict:
         return (plan_status.get("add_plan") if self.adding_to_pair else plan_status.get("selected_entry")) or {}
