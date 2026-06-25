@@ -15,6 +15,10 @@ from app.v2_common import V2CommonMixin
 from app.v2_support import TERMINAL, execution_status, exit_spread_ready, lots_from_qty, target_exit_spread
 
 
+MT4_MARKET_CLOSED_ERROR_CODES = {132}
+MT4_EXIT_BLOCK_MS = 30 * 60 * 1000
+
+
 class GoldV2Executor(V2AddMixin, V2CommonMixin):
     def __init__(self, settings: Settings, binance: BinanceBaseClient, mt4: Mt4Bridge, storage: Storage, runtime: Any) -> None:
         self.settings = settings
@@ -56,6 +60,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.entry_requote_until_ms = 0
         self.repairing_binance_only = False
         self.repair_existing_qty = Decimal("0")
+        self.mt4_exit_block_until_ms = 0
+        self.mt4_exit_block_seeded_from_last_error = False
 
     async def step(self, plan_status: dict[str, Any]) -> None:
         if self._process_mt4_reports():
@@ -112,6 +118,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.entry_requote_until_ms = 0
         self.repairing_binance_only = False
         self.repair_existing_qty = Decimal("0")
+        self.mt4_exit_block_until_ms = 0
+        self.mt4_exit_block_seeded_from_last_error = False
 
     async def cancel_active_order(self, reason: str) -> None:
         if not self.active_order:
@@ -154,6 +162,10 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         )
 
     async def _maybe_place_entry(self, plan_status: dict[str, Any]) -> None:
+        mt4_block_reason = self._mt4_trade_block_reason("开仓")
+        if mt4_block_reason:
+            self.runtime.last_error = mt4_block_reason
+            return
         if self.last_closed_ms and utc_now_ms() - self.last_closed_ms < self.settings.post_exit_reentry_cooldown_ms:
             self.runtime.last_error = "V2 平仓后冷却中，暂不重新开仓"
             return
@@ -235,6 +247,11 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         gap_reason = xau_quote_gap_reason(quote, mt4_quote)
         if gap_reason:
             self.runtime.last_error = f"报价异常，暂停本轮平仓挂单：{gap_reason}"
+            return
+        mt4_block_reason = self._mt4_trade_block_reason("平仓")
+        if mt4_block_reason:
+            self.exit_ready_since_ms = 0
+            self.runtime.last_error = mt4_block_reason
             return
         post_add_message = "开仓或补仓刚完成，等待仓位和 MT4 报价稳定后再允许平仓挂单"
         post_add_messages = (post_add_message, "补仓刚完成，等待币安仓位快照稳定后再允许平仓挂单")
@@ -639,6 +656,9 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if report.status != "ok":
             ticket = report.ticket or self.close_command_tickets.get(report.command_id)
             self.close_command_tickets.pop(report.command_id, None)
+            if report.error_code in MT4_MARKET_CLOSED_ERROR_CODES:
+                self._handle_mt4_close_market_closed(ticket, f"MT4 平仓失败：{report.message or report.error_code}")
+                return
             self._retry_mt4_close_ticket(ticket, f"MT4 平仓跟随失败：{report.message or report.error_code}")
             return
         ticket = report.ticket or self.close_command_tickets.get(report.command_id)
@@ -674,6 +694,96 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.last_closed_ms = utc_now_ms()
         self.runtime.state = StrategyState.IDLE
         self.runtime.last_error = None
+
+    def _handle_mt4_close_market_closed(self, ticket: int | None, reason: str) -> None:
+        pair = self.runtime.open_pair
+        if pair and self.active_order and self.active_order.executed_qty > 0:
+            self._record_binance_exit_without_mt4(pair, self.active_order, reason)
+        self.mt4_exit_block_until_ms = utc_now_ms() + MT4_EXIT_BLOCK_MS
+        self.close_command_id = None
+        self.close_command_tickets = {}
+        self.pending_close_tickets = set()
+        self.close_mt4_qty = Decimal("0")
+        self.close_mt4_notional = Decimal("0")
+        self.close_mt4_report_ms = None
+        self.active_order = None
+        self.runtime.state = StrategyState.PAIR_OPEN if self.runtime.open_pair else StrategyState.IDLE
+        self.runtime.last_error = self._mt4_exit_block_message()
+        self.storage.record_event(
+            "v2_mt4_market_closed_exit_blocked",
+            {
+                "ticket": ticket,
+                "reason": reason,
+                "block_until_ms": self.mt4_exit_block_until_ms,
+            },
+        )
+
+    def _record_binance_exit_without_mt4(self, pair: OpenPair, order: OrderUpdate, reason: str) -> None:
+        qty = order.executed_qty
+        if qty <= 0 or order.avg_price <= 0:
+            return
+        if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            binance_pnl = (pair.binance_entry_price - order.avg_price) * qty
+        else:
+            binance_pnl = (order.avg_price - pair.binance_entry_price) * qty
+        realized = pair.realized_pnl + binance_pnl
+        self.runtime.open_pair = pair.model_copy(update={"realized_pnl": realized})
+        self.storage.record_event(
+            "v2_binance_exit_without_mt4_recorded",
+            {
+                "pair_id": pair.pair_id,
+                "reason": reason,
+                "order_id": order.order_id,
+                "qty": str(qty),
+                "binance_entry_price": str(pair.binance_entry_price),
+                "binance_exit_price": str(order.avg_price),
+                "binance_pnl": str(binance_pnl),
+                "realized_pnl": str(realized),
+            },
+        )
+
+    def _mt4_exit_block_reason(self) -> str | None:
+        now = utc_now_ms()
+        if self.mt4_exit_block_until_ms > now:
+            return self._mt4_exit_block_message()
+        if self.mt4_exit_block_until_ms > 0:
+            self.mt4_exit_block_until_ms = 0
+            if self._last_error_is_mt4_close_failure():
+                self.runtime.last_error = None
+            return None
+        if not self.mt4_exit_block_seeded_from_last_error and self._last_error_is_mt4_close_failure():
+            self.mt4_exit_block_seeded_from_last_error = True
+            self.mt4_exit_block_until_ms = now + MT4_EXIT_BLOCK_MS
+            self.storage.record_event(
+                "v2_mt4_exit_block_seeded_from_last_error",
+                {"last_error": self.runtime.last_error, "block_until_ms": self.mt4_exit_block_until_ms},
+            )
+            return self._mt4_exit_block_message()
+        return None
+
+    def _last_error_is_mt4_close_failure(self) -> bool:
+        text = self.runtime.last_error or ""
+        return (
+            "MT4 平仓跟随失败" in text
+            or "MT4 平仓失败" in text
+            or "OrderClose failed" in text
+            or "MT4 暂不可平仓" in text
+            or "MT4 暂不可交易" in text
+        )
+
+    def _mt4_trade_block_reason(self, action: str) -> str | None:
+        if not self.settings.is_dry_run:
+            trade_allowed = self.mt4.trade_allowed()
+            if trade_allowed is not True:
+                return f"MT4 交易状态未确认可交易，已禁止币安{action}挂单并保持当前对冲。"
+            if self.mt4.trade_context_busy():
+                return f"MT4 交易通道忙，已禁止币安{action}挂单并保持当前对冲。"
+        if self._mt4_exit_block_reason():
+            return f"MT4 暂不可交易，已禁止币安{action}挂单并保持当前对冲。"
+        return None
+
+    def _mt4_exit_block_message(self) -> str:
+        return "MT4 暂不可平仓，已禁止币安平仓挂单并保持对冲，等待 MT4 恢复交易后再尝试离场。"
 
     def _record_closed_pair_pnl(self, pair: OpenPair, exit_order: OrderUpdate | None) -> None:
         if not exit_order or exit_order.executed_qty <= 0 or exit_order.avg_price <= 0 or self.close_mt4_qty <= 0:

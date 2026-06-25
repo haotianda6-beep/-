@@ -347,6 +347,8 @@ async def status() -> EngineStatus:
         paper_mode=settings.paper_mode,
         binance_connected=binance_quote is not None,
         mt4_connected=mt4_bridge.connected(),
+        mt4_trade_allowed=mt4_bridge.trade_allowed(),
+        mt4_trade_context_busy=mt4_bridge.trade_context_busy(),
         binance_symbol=settings.binance_symbol,
         mt4_symbol=settings.mt4_symbol,
         maker_fee_rate=binance_client.maker_fee_rate,
@@ -420,7 +422,7 @@ async def _gold_v2_status(
 ) -> dict:
     try:
         binance_bars = await _gold_v2_recent_binance_bars()
-        return build_gold_v2_status(
+        status = build_gold_v2_status(
             settings=settings,
             storage=storage,
             filters=binance_client.filters,
@@ -435,6 +437,7 @@ async def _gold_v2_status(
                 min_points=4,
             ),
         )
+        return _apply_gold_v2_runtime_blocks(status)
     except Exception as exc:  # noqa: BLE001
         logger.warning("gold v2 status unavailable: %s", str(exc)[:160])
         return {
@@ -505,8 +508,30 @@ async def mt4_tick(payload: Mt4Tick, x_mt4_token: str | None = Header(default=No
     if not mt4_bridge.token_ok(x_mt4_token or payload.token):
         raise HTTPException(status_code=403, detail="invalid MT4 token")
     quote = mt4_bridge.update_tick(payload)
+    _sync_mt4_trade_guard_from_tick(payload)
     _record_mt4_tick_bar(quote)
     return {"status": "ok", "symbol": quote.symbol, "timestamp_ms": quote.timestamp_ms}
+
+
+def _sync_mt4_trade_guard_from_tick(payload: Mt4Tick) -> None:
+    if payload.symbol != settings.mt4_symbol or payload.trade_allowed is None:
+        return
+    now = utc_now_ms()
+    if payload.trade_allowed:
+        if v2_executor.mt4_exit_block_until_ms > 0:
+            v2_executor.mt4_exit_block_until_ms = 0
+            if strategy.last_error and ("MT4 暂不可交易" in strategy.last_error or "MT4 暂不可平仓" in strategy.last_error):
+                strategy.last_error = None
+            storage.record_event("mt4_trade_allowed_recovered", {"symbol": payload.symbol})
+            _persist_runtime_state()
+        return
+    if strategy.open_pair is None:
+        return
+    if v2_executor.mt4_exit_block_until_ms <= now:
+        storage.record_event("mt4_trade_disallowed_blocked_binance", {"symbol": payload.symbol})
+    v2_executor.mt4_exit_block_until_ms = max(v2_executor.mt4_exit_block_until_ms, now + 5 * 60_000)
+    strategy.last_error = "MT4 暂不可交易，已禁止币安开仓、补仓、平仓挂单并保持当前对冲。"
+    _persist_runtime_state()
 
 
 @app.post("/mt4/history")
@@ -1734,11 +1759,11 @@ async def _queue_binance_restore_after_live_mismatch(binance_qty: Decimal, resto
         return True
     if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
         side = Side.SELL
-        price = round_up(quote.ask + settings.binance_entry_offset_usd, binance_client.filters.tick_size)
+        price = round_up(max(quote.ask, quote.bid + binance_client.filters.tick_size), binance_client.filters.tick_size)
         position_side = "SHORT"
     else:
         side = Side.BUY
-        price = round_down(quote.bid - settings.binance_entry_offset_usd, binance_client.filters.tick_size)
+        price = round_down(min(quote.bid, quote.ask - binance_client.filters.tick_size), binance_client.filters.tick_size)
         position_side = "LONG"
     try:
         order = await binance_client.place_post_only_order(
@@ -1957,6 +1982,7 @@ def _load_runtime_state() -> None:
                 restored_state = StrategyState.PAUSED
             strategy.state = restored_state if restored_state in {StrategyState.PAIR_OPEN, StrategyState.PAUSED} else StrategyState.PAIR_OPEN
             strategy.last_error = data.get("last_error")
+            v2_executor.mt4_exit_block_until_ms = int(data.get("mt4_exit_block_until_ms") or 0)
             if strategy.state == StrategyState.PAUSED and not _paused_for_transient_reconcile():
                 strategy.state = StrategyState.PAIR_OPEN
                 strategy.last_error = "上次为暂停状态，已恢复组合持仓监控并等待自动对账"
@@ -1988,6 +2014,7 @@ def _persist_runtime_state() -> None:
     payload = {
         "state": strategy.state.value,
         "last_error": strategy.last_error,
+        "mt4_exit_block_until_ms": v2_executor.mt4_exit_block_until_ms,
         "open_pair": strategy.open_pair.model_dump(mode="json"),
     }
     text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -2363,7 +2390,49 @@ def _estimate_binance_fees(
 
 
 def _execution_plan(metrics: PositionMetrics | None = None) -> ExecutionPlanStatus:
+    block_reason = _mt4_trade_block_display_reason("交易")
+    if block_reason and strategy.open_pair and v2_executor.active_order is None:
+        return ExecutionPlanStatus(
+            summary=f"{block_reason} 当前只保持已对冲仓位，Binance 不会挂开仓、补仓或平仓单。",
+            max_follow_seconds=Decimal(settings.max_hedge_delay_ms) / Decimal("1000"),
+        )
     return v2_executor.execution_plan_status()
+
+
+def _apply_gold_v2_runtime_blocks(status: dict) -> dict:
+    block_reason = _mt4_trade_block_display_reason("补仓")
+    if not block_reason:
+        return status
+    blocked = dict(status)
+    add_plan = dict(blocked.get("add_plan") or {})
+    if add_plan:
+        add_plan.update({"ready": False, "blocked": True, "reason": block_reason})
+        blocked["add_plan"] = add_plan
+    selected_entry = dict(blocked.get("selected_entry") or {})
+    if selected_entry:
+        selected_entry.update({"ready": False, "blocked": True, "reason": _mt4_trade_block_display_reason("开仓")})
+        blocked["selected_entry"] = selected_entry
+    exit_plan = dict(blocked.get("exit_plan") or {})
+    if exit_plan:
+        exit_plan.update({"blocked": True, "block_reason": _mt4_trade_block_display_reason("平仓")})
+        blocked["exit_plan"] = exit_plan
+    blocked["execution_blocked"] = True
+    blocked["reason"] = _mt4_trade_block_display_reason("交易")
+    return blocked
+
+
+def _mt4_trade_block_display_reason(action: str) -> str | None:
+    if not settings.is_dry_run:
+        if mt4_bridge.trade_allowed() is not True:
+            return f"MT4 交易状态未确认可交易，已禁止币安{action}挂单并保持当前对冲。"
+        if mt4_bridge.trade_context_busy():
+            return f"MT4 交易通道忙，已禁止币安{action}挂单并保持当前对冲。"
+    if v2_executor.mt4_exit_block_until_ms > utc_now_ms():
+        return f"MT4 暂不可交易，已禁止币安{action}挂单并保持当前对冲。"
+    text = strategy.last_error or ""
+    if "MT4 暂不可交易" in text or "MT4 暂不可平仓" in text:
+        return f"MT4 暂不可交易，已禁止币安{action}挂单并保持当前对冲。"
+    return None
 
 
 def _pair_add_plan(pair, binance_quote: MarketQuote, mt4_quote: MarketQuote, metrics: PositionMetrics | None = None):

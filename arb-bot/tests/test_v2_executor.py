@@ -302,6 +302,131 @@ async def test_v2_regular_exit_does_not_subtract_mt4_close_buffer_twice(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_v2_mt4_market_closed_blocks_repeated_exit_and_records_binance_pnl(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, EXIT_CONFIRM_MS=0)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.CLOSING_MT4
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    executor.active_order = OrderUpdate(
+        order_id="exit_order",
+        client_order_id="exit_client",
+        symbol="XAUUSDT",
+        side=Side.BUY,
+        status=OrderStatus.FILLED,
+        price=Decimal("102"),
+        orig_qty=Decimal("1"),
+        executed_qty=Decimal("1"),
+        avg_price=Decimal("102"),
+        reduce_only=True,
+    )
+    executor.close_command_tickets = {"close_cmd": 7}
+    executor.pending_close_tickets = {7}
+    mt4.submit_report(
+        Mt4Report(
+            command_id="close_cmd",
+            status="error",
+            action="CLOSE",
+            ticket=7,
+            error_code=132,
+            message="OrderClose failed",
+        )
+    )
+
+    await executor.step({})
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    assert executor.pending_close_tickets == set()
+    assert mt4.next_command() == {"command": "NONE"}
+    assert run.open_pair.realized_pnl == Decimal("-1")
+    assert "MT4 暂不可平仓" in run.last_error
+
+    client.set_quote(Decimal("100"), Decimal("100.1"))
+    mt4_tick(mt4, "99", "99.2")
+    await executor.step(exit_plan("2"))
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    assert "禁止币安平仓" in run.last_error
+
+
+@pytest.mark.asyncio
+async def test_v2_mt4_trade_block_prevents_add_order(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, MAX_ADD_COUNT=2)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    executor.mt4_exit_block_until_ms = utc_now_ms() + 60_000
+    client.set_quote(Decimal("104"), Decimal("104.2"))
+    mt4_tick(mt4, "100", "100.2")
+
+    await executor.step(add_plan("105"))
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    assert "禁止币安补仓" in run.last_error
+
+
+@pytest.mark.asyncio
+async def test_v2_live_requires_mt4_trade_allowed_before_add_order(tmp_path):
+    cfg = settings(
+        tmp_path,
+        SQLITE_PATH=tmp_path / "test.sqlite3",
+        PAPER_MODE=False,
+        LIVE_TRADING=True,
+        PAPER_AUTO_FILL=False,
+        MAX_ADD_COUNT=2,
+    )
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    client.set_quote(Decimal("104"), Decimal("104.2"))
+    mt4_tick(mt4, "100", "100.2")
+
+    await executor.step(add_plan("105"))
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    assert "交易状态未确认可交易" in run.last_error
+
+
+@pytest.mark.asyncio
 async def test_v2_exit_order_is_canceled_when_limit_net_falls_below_min_profit(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, EXIT_CONFIRM_MS=0)
     client = PaperBinanceClient(cfg)

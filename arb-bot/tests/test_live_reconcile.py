@@ -88,6 +88,29 @@ def test_open_pair_restore_quantity_when_binance_is_underfilled_but_mt4_matches(
     assert restore_qty == Decimal("0.316")
 
 
+def test_open_pair_restore_quantity_when_binance_is_flat_but_mt4_matches() -> None:
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("2"),
+        binance_entry_price=Decimal("4025.20"),
+        mt4_entry_price=Decimal("4022.49"),
+        binance_order_id="7673962927",
+        mt4_tickets=[77118748, 77133027],
+    )
+
+    restore_qty = open_pair_binance_restore_quantity(
+        pair,
+        Decimal("0"),
+        [
+            Mt4Position(ticket=77118748, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4010.96")),
+            Mt4Position(ticket=77133027, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4034.02")),
+        ],
+        "XAUUSD",
+    )
+
+    assert restore_qty == Decimal("2")
+
+
 def test_open_pair_reconcile_pauses_when_mt4_quantity_mismatches() -> None:
     pair = OpenPair(
         direction=PairDirection.BINANCE_SHORT_MT4_LONG,

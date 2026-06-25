@@ -91,15 +91,15 @@ def open_pair_binance_restore_quantity(
     mt4_lot_size_oz: Decimal = Decimal("100"),
     tolerance: Decimal = Decimal("0.0001"),
 ) -> Decimal | None:
-    if open_pair is None or binance_position_qty == 0:
+    if open_pair is None:
         return None
     mt4_symbol_positions = [position for position in mt4_positions if position.symbol == mt4_symbol]
     if not mt4_symbol_positions:
         return None
     binance_should_be_short = open_pair.direction.name == "BINANCE_SHORT_MT4_LONG"
-    if binance_should_be_short and binance_position_qty >= 0:
+    if binance_should_be_short and binance_position_qty > 0:
         return None
-    if not binance_should_be_short and binance_position_qty <= 0:
+    if not binance_should_be_short and binance_position_qty < 0:
         return None
     expected_mt4_side = "BUY" if binance_should_be_short else "SELL"
     if any(position.side.value != expected_mt4_side for position in mt4_symbol_positions):

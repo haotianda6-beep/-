@@ -20,6 +20,8 @@ class Mt4Bridge:
         self._positions = []
         self._swap_info = Mt4SwapInfo()
         self._account: AccountSnapshot | None = None
+        self._trade_allowed: bool | None = None
+        self._trade_context_busy: bool | None = None
         self.last_seen_ms = 0
 
     def token_ok(self, token: str | None) -> bool:
@@ -65,6 +67,8 @@ class Mt4Bridge:
                 if any(value is not None for value in account_values)
                 else None
             )
+            self._trade_allowed = tick.trade_allowed
+            self._trade_context_busy = tick.trade_context_busy
             self.last_seen_ms = received_ms
         return quote
 
@@ -99,6 +103,14 @@ class Mt4Bridge:
     def account_snapshot(self) -> AccountSnapshot | None:
         with self._lock:
             return self._account
+
+    def trade_allowed(self) -> bool | None:
+        with self._lock:
+            return self._trade_allowed
+
+    def trade_context_busy(self) -> bool | None:
+        with self._lock:
+            return self._trade_context_busy
 
     def connected(self, max_age_ms: int = 3000) -> bool:
         with self._lock:

@@ -170,6 +170,8 @@ class Mt4Tick(BaseModel):
     account_margin: Decimal | None = None
     account_profit: Decimal | None = None
     account_currency: str | None = None
+    trade_allowed: bool | None = None
+    trade_context_busy: bool | None = None
 
 
 class Mt4Command(BaseModel):
@@ -531,6 +533,8 @@ class EngineStatus(BaseModel):
     paper_mode: bool
     binance_connected: bool
     mt4_connected: bool
+    mt4_trade_allowed: bool | None = None
+    mt4_trade_context_busy: bool | None = None
     binance_symbol: str
     mt4_symbol: str
     maker_fee_rate: Decimal | None = None

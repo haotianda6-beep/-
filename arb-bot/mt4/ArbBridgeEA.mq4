@@ -121,6 +121,8 @@ void PostTick()
    json += "\"tick_size\":" + DoubleToString(MarketInfo(TradeSymbol, MODE_TICKSIZE), 8) + ",";
    json += "\"point\":" + DoubleToString(MarketInfo(TradeSymbol, MODE_POINT), 8) + ",";
    json += "\"next_rollover_time_ms\":" + IntegerToString(NextRolloverMs()) + ",";
+   json += "\"trade_allowed\":" + (MarketInfo(TradeSymbol, MODE_TRADEALLOWED) > 0 ? "true" : "false") + ",";
+   json += "\"trade_context_busy\":" + (IsTradeContextBusy() ? "true" : "false") + ",";
    json += "\"account_balance\":" + DoubleToString(AccountBalance(), 2) + ",";
    json += "\"account_equity\":" + DoubleToString(AccountEquity(), 2) + ",";
    json += "\"account_free_margin\":" + DoubleToString(AccountFreeMargin(), 2) + ",";

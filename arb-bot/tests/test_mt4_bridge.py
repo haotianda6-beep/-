@@ -53,6 +53,24 @@ def test_mt4_tick_without_account_fields_keeps_account_empty(tmp_path):
     assert bridge.account_snapshot() is None
 
 
+def test_mt4_tick_updates_trade_status(tmp_path):
+    cfg = Settings(_env_file=None, SQLITE_PATH=tmp_path / "test.sqlite3")
+    bridge = Mt4Bridge(cfg)
+
+    bridge.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("4177"),
+            ask=Decimal("4178"),
+            trade_allowed=True,
+            trade_context_busy=False,
+        )
+    )
+
+    assert bridge.trade_allowed() is True
+    assert bridge.trade_context_busy() is False
+
+
 def test_mt4_recent_move_budget_uses_in_memory_quote_window(tmp_path, monkeypatch):
     cfg = Settings(_env_file=None, SQLITE_PATH=tmp_path / "test.sqlite3")
     bridge = Mt4Bridge(cfg)

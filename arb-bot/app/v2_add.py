@@ -24,6 +24,11 @@ class V2AddMixin:
             return False
         if self._entry_requote_blocked():
             return False
+        mt4_block_reason = getattr(self, "_mt4_trade_block_reason", lambda action: None)("补仓")
+        if mt4_block_reason:
+            self.add_ready_since_ms = 0
+            self.runtime.last_error = mt4_block_reason
+            return False
         if not self._add_trigger_confirmed(plan):
             return False
         if not plan.get("ready"):

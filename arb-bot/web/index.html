@@ -1337,10 +1337,11 @@
           modeText,
           modeText === "实盘模式" ? "bad" : "warn",
         );
+        const mt4Trade = mt4TradeStatus(data);
         setStatus(
           $("mt4"),
-          data.mt4_connected ? "MT4 已连接" : "MT4 未连接",
-          data.mt4_connected ? "ok" : "bad",
+          data.mt4_connected ? `MT4 已连接 · ${mt4Trade.label}` : "MT4 未连接",
+          data.mt4_connected ? mt4Trade.className : "bad",
         );
         $("startLiveBtn").disabled = modeText === "实盘模式" || observationOnly;
         $("startLiveBtn").title = observationOnly
@@ -1371,7 +1372,7 @@
           ? `延迟 ${age(b.timestamp_ms)}`
           : "等待报价";
         $("mt4Meta").textContent = m
-          ? `延迟 ${age(m.timestamp_ms)}，实时点差 ${fmt(Number(m.ask) - Number(m.bid))} 美元`
+          ? `延迟 ${age(m.timestamp_ms)}，实时点差 ${fmt(Number(m.ask) - Number(m.bid))} 美元，${mt4Trade.detail}`
           : "等待报价";
         $("binanceLine").textContent = b
           ? `买 ${fmt(b.bid)} / 卖 ${fmt(b.ask)} / ${age(b.timestamp_ms)}`
@@ -1406,6 +1407,31 @@
           ? `币安成交后 MT4 需要在 ${fmt(data.execution_plan.max_follow_seconds)} 秒内回报；EA 当前建议轮询 0.05 秒。`
           : "-";
         renderConfig(data.config);
+      }
+
+      function mt4TradeStatus(data) {
+        if (data.mt4_trade_allowed === true && data.mt4_trade_context_busy) {
+          return {
+            label: "交易通道忙",
+            detail: "MT4 可交易但交易通道忙",
+            className: "warn",
+          };
+        }
+        if (data.mt4_trade_allowed === true) {
+          return { label: "可交易", detail: "MT4 可交易", className: "ok" };
+        }
+        if (data.mt4_trade_allowed === false) {
+          return {
+            label: "不可交易",
+            detail: "MT4 当前不可交易",
+            className: "warn",
+          };
+        }
+        return {
+          label: "交易状态未上报",
+          detail: "EA 需要更新后才会上报可交易状态",
+          className: "warn",
+        };
       }
 
       function renderV2Plan(plan, config = null) {
