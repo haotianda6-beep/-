@@ -23,16 +23,27 @@ class MonitorState:
     exposure_issue_since: float | None = None
     exposure_issue_reason: str | None = None
     last_state: str | None = None
+    target_reached: bool = False
 
 
 def main() -> int:
     args = parse_args()
     log_path = Path(args.log_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    start_id = max_event_id(Path(args.db))
-    state = MonitorState(start_event_id=start_id, opened_pairs=set(), closed_pairs=set())
+    state_path = Path(args.state_file) if args.state_file else None
+    state = load_monitor_state(state_path, Path(args.db))
     deadline = time.monotonic() + args.max_minutes * 60
-    write_log(log_path, {"type": "monitor_start", "start_event_id": start_id, "cycles_target": args.cycles})
+    write_log(
+        log_path,
+        {
+            "type": "monitor_start",
+            "start_event_id": state.start_event_id,
+            "cycles_target": args.cycles,
+            "closed_cycles": len(state.closed_pairs),
+            "state_file": str(state_path) if state_path else None,
+        },
+    )
+    save_monitor_state(state_path, state)
 
     while time.monotonic() < deadline:
         now = time.monotonic()
@@ -45,9 +56,12 @@ def main() -> int:
         events = read_events(Path(args.db), state.start_event_id)
         for event in events:
             handle_event(event, state, log_path)
-        if len(state.closed_pairs) >= args.cycles:
-            write_log(log_path, {"type": "monitor_done", "closed_cycles": len(state.closed_pairs)})
-            return 0
+        if events:
+            save_monitor_state(state_path, state)
+        if len(state.closed_pairs) >= args.cycles and not state.target_reached:
+            state.target_reached = True
+            write_log(log_path, {"type": "monitor_target_reached", "closed_cycles": len(state.closed_pairs)})
+            save_monitor_state(state_path, state)
         time.sleep(args.interval)
 
     write_log(
@@ -72,7 +86,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--http-timeout", type=float, default=8.0)
     parser.add_argument("--single-leg-grace", type=float, default=20.0)
     parser.add_argument("--quantity-tolerance-oz", default="0.01")
+    parser.add_argument("--state-file", default="/root/perp-arb-bot/arb-bot/data/gold_v2_monitor_state.json")
     return parser.parse_args()
+
+
+def load_monitor_state(state_path: Path | None, db_path: Path) -> MonitorState:
+    if state_path and state_path.exists():
+        try:
+            data = json.loads(state_path.read_text(encoding="utf-8"))
+            return MonitorState(
+                start_event_id=int(data.get("start_event_id") or 0),
+                opened_pairs=set(data.get("opened_pairs") or []),
+                closed_pairs=set(data.get("closed_pairs") or []),
+                target_reached=bool(data.get("target_reached")),
+            )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+    return MonitorState(start_event_id=max_event_id(db_path), opened_pairs=set(), closed_pairs=set())
+
+
+def save_monitor_state(state_path: Path | None, state: MonitorState) -> None:
+    if not state_path:
+        return
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "start_event_id": state.start_event_id,
+        "opened_pairs": sorted(state.opened_pairs),
+        "closed_pairs": sorted(state.closed_pairs),
+        "target_reached": state.target_reached,
+    }
+    tmp_path = state_path.with_suffix(state_path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.replace(state_path)
 
 
 def fetch_json(url: str, timeout: float) -> dict[str, Any]:

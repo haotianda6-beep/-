@@ -8,7 +8,7 @@ StartLimitIntervalSec=0
 Type=simple
 WorkingDirectory=/root/perp-arb-bot/arb-bot
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 -u scripts/monitor_gold_v2.py --cycles 3 --interval 3 --max-minutes 1440 --log-file /root/perp-arb-bot/arb-bot/data/gold_v2_monitor_systemd.log
+ExecStart=/usr/bin/python3 -u scripts/monitor_gold_v2.py --cycles 3 --interval 3 --max-minutes 1440 --log-file /root/perp-arb-bot/arb-bot/data/gold_v2_monitor_systemd.log --state-file /root/perp-arb-bot/arb-bot/data/gold_v2_monitor_state.json
 Restart=always
 RestartSec=3
 NoNewPrivileges=true
