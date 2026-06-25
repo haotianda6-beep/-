@@ -31,6 +31,10 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.pending_close_tickets: set[int] = set()
         self.close_mt4_qty = Decimal("0")
         self.close_mt4_notional = Decimal("0")
+        self.close_mt4_quote_bid: Decimal | None = None
+        self.close_mt4_quote_ask: Decimal | None = None
+        self.close_mt4_quote_ms: int | None = None
+        self.close_mt4_report_ms: int | None = None
         self.carry_entry_qty = Decimal("0")
         self.carry_entry_notional = Decimal("0")
         self.carry_entry_order_ids: list[str] = []
@@ -84,6 +88,10 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.pending_close_tickets = set()
         self.close_mt4_qty = Decimal("0")
         self.close_mt4_notional = Decimal("0")
+        self.close_mt4_quote_bid = None
+        self.close_mt4_quote_ask = None
+        self.close_mt4_quote_ms = None
+        self.close_mt4_report_ms = None
         self.carry_entry_qty = Decimal("0")
         self.carry_entry_notional = Decimal("0")
         self.carry_entry_order_ids = []
@@ -499,6 +507,11 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             return
         self.close_mt4_qty = Decimal("0")
         self.close_mt4_notional = Decimal("0")
+        mt4_quote = self.mt4.latest_quote()
+        self.close_mt4_quote_bid = mt4_quote.bid if mt4_quote else None
+        self.close_mt4_quote_ask = mt4_quote.ask if mt4_quote else None
+        self.close_mt4_quote_ms = mt4_quote.timestamp_ms if mt4_quote else None
+        self.close_mt4_report_ms = None
         self.close_started_ms = utc_now_ms()
         self.runtime.state = StrategyState.CLOSING_MT4
         self.storage.record_event(
@@ -508,6 +521,11 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
                 "command_ids": list(self.close_command_tickets.keys()),
                 "tickets": list(self.pending_close_tickets),
                 "lots_by_ticket": {str(ticket): str(lots_by_ticket[ticket]) for ticket in self.pending_close_tickets},
+                "mt4_quote_at_command": {
+                    "bid": str(self.close_mt4_quote_bid) if self.close_mt4_quote_bid is not None else None,
+                    "ask": str(self.close_mt4_quote_ask) if self.close_mt4_quote_ask is not None else None,
+                    "timestamp_ms": self.close_mt4_quote_ms,
+                },
             },
         )
 
@@ -633,6 +651,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             closed_qty = report.lots * self.settings.mt4_lot_size_oz
             self.close_mt4_qty += closed_qty
             self.close_mt4_notional += report.fill_price * closed_qty
+            self.close_mt4_report_ms = report.timestamp_ms
         self.close_command_tickets.pop(report.command_id, None)
         self.storage.record_event("v2_pair_close_ticket", {"pair_id": pair_id, "ticket": ticket})
         if self.pending_close_tickets:
@@ -649,6 +668,10 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.pending_close_tickets = set()
         self.close_mt4_qty = Decimal("0")
         self.close_mt4_notional = Decimal("0")
+        self.close_mt4_quote_bid = None
+        self.close_mt4_quote_ask = None
+        self.close_mt4_quote_ms = None
+        self.close_mt4_report_ms = None
         self._clear_exit_carry()
         self.last_closed_ms = utc_now_ms()
         self.runtime.state = StrategyState.IDLE
@@ -671,10 +694,24 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             binance_pnl = (pair.binance_entry_price - exit_order.avg_price) * qty
             mt4_pnl = (mt4_exit_price - pair.mt4_entry_price) * qty
+            entry_spread = pair.binance_entry_price - pair.mt4_entry_price
+            actual_exit_spread = exit_order.avg_price - mt4_exit_price
+            mt4_close_quote = self.close_mt4_quote_bid
+            mt4_adverse_slippage = (self.close_mt4_quote_bid - mt4_exit_price) if self.close_mt4_quote_bid is not None else None
         else:
             binance_pnl = (exit_order.avg_price - pair.binance_entry_price) * qty
             mt4_pnl = (pair.mt4_entry_price - mt4_exit_price) * qty
+            entry_spread = pair.mt4_entry_price - pair.binance_entry_price
+            actual_exit_spread = mt4_exit_price - exit_order.avg_price
+            mt4_close_quote = self.close_mt4_quote_ask
+            mt4_adverse_slippage = (mt4_exit_price - self.close_mt4_quote_ask) if self.close_mt4_quote_ask is not None else None
         realized = pair.realized_pnl + binance_pnl + mt4_pnl
+        binance_to_mt4_latency_ms = None
+        if self.close_mt4_report_ms is not None and exit_order.timestamp_ms:
+            binance_to_mt4_latency_ms = max(0, self.close_mt4_report_ms - exit_order.timestamp_ms)
+        command_to_report_latency_ms = None
+        if self.close_mt4_report_ms is not None and self.close_started_ms:
+            command_to_report_latency_ms = max(0, self.close_mt4_report_ms - self.close_started_ms)
         self.storage.record_pnl(pair.pair_id, realized)
         self.storage.record_event(
             "v2_pair_pnl_recorded",
@@ -684,8 +721,18 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
                 "binance_pnl": str(binance_pnl),
                 "mt4_pnl": str(mt4_pnl),
                 "qty": str(qty),
+                "entry_spread": str(entry_spread),
+                "actual_exit_spread": str(actual_exit_spread),
                 "binance_exit_price": str(exit_order.avg_price),
                 "mt4_exit_price": str(mt4_exit_price),
+                "mt4_close_quote": str(mt4_close_quote) if mt4_close_quote is not None else None,
+                "mt4_close_adverse_slippage": str(mt4_adverse_slippage) if mt4_adverse_slippage is not None else None,
+                "binance_exit_timestamp_ms": exit_order.timestamp_ms,
+                "mt4_close_command_timestamp_ms": self.close_started_ms or None,
+                "mt4_close_quote_timestamp_ms": self.close_mt4_quote_ms,
+                "mt4_close_report_timestamp_ms": self.close_mt4_report_ms,
+                "binance_to_mt4_latency_ms": binance_to_mt4_latency_ms,
+                "mt4_command_to_report_latency_ms": command_to_report_latency_ms,
             },
         )
 

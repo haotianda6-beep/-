@@ -128,6 +128,15 @@ async def test_v2_entry_and_exit_use_binance_post_only_then_mt4_follow(tmp_path)
     assert run.open_pair is None
     assert all(order.is_maker for order in client._orders.values())
     assert store.daily_pnl() == Decimal("1.3")
+    pnl_events = [event for event in store.get_events(0, utc_now_ms() + 1_000, limit=100) if event["kind"] == "v2_pair_pnl_recorded"]
+    assert pnl_events
+    pnl_payload = pnl_events[-1]["payload"]
+    assert pnl_payload["entry_spread"] == "2"
+    assert pnl_payload["actual_exit_spread"] == "0.7"
+    assert pnl_payload["mt4_close_quote"] == "99"
+    assert pnl_payload["mt4_close_adverse_slippage"] == "-0.2"
+    assert pnl_payload["binance_to_mt4_latency_ms"] is not None
+    assert pnl_payload["mt4_command_to_report_latency_ms"] is not None
 
 
 @pytest.mark.asyncio
