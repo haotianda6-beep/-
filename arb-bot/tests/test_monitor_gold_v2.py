@@ -146,6 +146,31 @@ def test_summarize_status_includes_add_plan_fields():
     assert summary["add_next_trigger"] == "3.42"
 
 
+def test_write_log_rotates_when_size_limit_is_reached(tmp_path):
+    log_path = tmp_path / "monitor.log"
+    log_path.write_text("x" * 128, encoding="utf-8")
+    monitor.configure_log_rotation(max_log_mb=0.00001, backups=2)
+
+    monitor.write_log(log_path, {"type": "tick"})
+
+    assert log_path.exists()
+    assert (tmp_path / "monitor.log.1").exists()
+    assert '"type": "tick"' in log_path.read_text(encoding="utf-8")
+
+
+def test_write_log_respects_backup_count(tmp_path):
+    log_path = tmp_path / "monitor.log"
+    log_path.write_text("new", encoding="utf-8")
+    (tmp_path / "monitor.log.1").write_text("old1", encoding="utf-8")
+    (tmp_path / "monitor.log.2").write_text("old2", encoding="utf-8")
+    monitor.configure_log_rotation(max_log_mb=0.000001, backups=2)
+
+    monitor.write_log(log_path, {"type": "tick"})
+
+    assert (tmp_path / "monitor.log.1").read_text(encoding="utf-8") == "new"
+    assert (tmp_path / "monitor.log.2").read_text(encoding="utf-8") == "old1"
+
+
 def test_monitor_state_persists_cycle_progress(tmp_path):
     state_path = tmp_path / "monitor_state.json"
     state = monitor.MonitorState(

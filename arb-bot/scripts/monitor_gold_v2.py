@@ -18,6 +18,10 @@ from pathlib import Path
 from typing import Any
 
 
+LOG_MAX_BYTES = 0
+LOG_BACKUPS = 3
+
+
 @dataclass
 class MonitorState:
     start_event_id: int
@@ -58,6 +62,7 @@ def main() -> int:
     alert_config = load_alert_config()
     log_path = Path(args.log_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    configure_log_rotation(args.max_log_mb, args.log_backups)
     state_path = Path(args.state_file) if args.state_file else None
     state = load_monitor_state(state_path, Path(args.db))
     deadline = time.monotonic() + args.max_minutes * 60
@@ -133,6 +138,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--loss-warning-ratio", type=float, default=0.70)
     parser.add_argument("--profit-window-min-usdt", default="0.50")
     parser.add_argument("--profit-window-grace", type=float, default=30.0)
+    parser.add_argument("--max-log-mb", type=float, default=20.0)
+    parser.add_argument("--log-backups", type=int, default=3)
     parser.add_argument("--state-file", default="/root/perp-arb-bot/arb-bot/data/gold_v2_monitor_state.json")
     parser.add_argument("--env-file", default="/root/perp-arb-bot/arb-bot/.env")
     return parser.parse_args()
@@ -603,7 +610,43 @@ def mask_email(value: str) -> str:
     return f"{masked_name}@{domain}"
 
 
+def configure_log_rotation(max_log_mb: float, backups: int) -> None:
+    global LOG_MAX_BYTES
+    global LOG_BACKUPS
+    LOG_MAX_BYTES = max(0, int(max_log_mb * 1024 * 1024))
+    LOG_BACKUPS = max(0, int(backups))
+
+
+def rotate_log_if_needed(path: Path) -> None:
+    if LOG_MAX_BYTES <= 0 or not path.exists():
+        return
+    try:
+        if path.stat().st_size < LOG_MAX_BYTES:
+            return
+    except OSError:
+        return
+    if LOG_BACKUPS <= 0:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+    oldest = rotated_log_path(path, LOG_BACKUPS)
+    if oldest.exists():
+        oldest.unlink()
+    for index in range(LOG_BACKUPS - 1, 0, -1):
+        src = rotated_log_path(path, index)
+        if src.exists():
+            src.replace(rotated_log_path(path, index + 1))
+    path.replace(rotated_log_path(path, 1))
+
+
+def rotated_log_path(path: Path, index: int) -> Path:
+    return path.with_name(f"{path.name}.{index}")
+
+
 def write_log(path: Path, data: dict[str, Any]) -> None:
+    rotate_log_if_needed(path)
     data = {"ts": datetime.now(timezone.utc).isoformat(), **data}
     line = json.dumps(data, ensure_ascii=False, sort_keys=True)
     with path.open("a", encoding="utf-8") as handle:
