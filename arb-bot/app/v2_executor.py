@@ -48,6 +48,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.active_add_base_edge: Decimal | None = None
         self.active_add_trigger_edge: Decimal | None = None
         self.post_add_exit_block_until_ms = 0
+        self.entry_requote_until_ms = 0
         self.repairing_binance_only = False
         self.repair_existing_qty = Decimal("0")
 
@@ -98,6 +99,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.active_add_base_edge = None
         self.active_add_trigger_edge = None
         self.post_add_exit_block_until_ms = 0
+        self.entry_requote_until_ms = 0
         self.repairing_binance_only = False
         self.repair_existing_qty = Decimal("0")
 
@@ -125,9 +127,12 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             self.runtime.state = StrategyState.QUOTING_BINANCE_EXIT if self.active_order.reduce_only else StrategyState.QUOTING_BINANCE_ENTRY
             return
         try:
+            was_entry_order = not self.active_order.reduce_only
             canceled = await self.binance.cancel_order(self.active_order.order_id)
             self.active_order = canceled or self.active_order
             self.storage.record_event("v2_order_canceled", {"reason": reason, "order_id": self.active_order.order_id})
+            if was_entry_order:
+                self.entry_requote_until_ms = utc_now_ms() + max(0, self.settings.requote_cooldown_ms)
         except Exception as exc:  # noqa: BLE001
             self.storage.record_event("v2_order_cancel_failed", {"reason": reason, "error": str(exc)[:160]})
         self.active_order = None
@@ -141,6 +146,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
     async def _maybe_place_entry(self, plan_status: dict[str, Any]) -> None:
         if self.last_closed_ms and utc_now_ms() - self.last_closed_ms < self.settings.post_exit_reentry_cooldown_ms:
             self.runtime.last_error = "V2 平仓后冷却中，暂不重新开仓"
+            return
+        if self._entry_requote_blocked():
             return
         plan = plan_status.get("selected_entry") or {}
         if not plan.get("ready"):
@@ -164,6 +171,19 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.runtime.state = StrategyState.QUOTING_BINANCE_ENTRY
         self.runtime.last_error = None
         self.storage.record_event("v2_entry_order", order.model_dump(mode="json"))
+
+    def _entry_requote_blocked(self) -> bool:
+        if self.entry_requote_until_ms <= 0:
+            return False
+        now = utc_now_ms()
+        if now >= self.entry_requote_until_ms:
+            self.entry_requote_until_ms = 0
+            if self.runtime.last_error and self.runtime.last_error.startswith("V2 开仓撤单冷却中"):
+                self.runtime.last_error = None
+            return False
+        seconds_left = max(1, (self.entry_requote_until_ms - now) // 1000)
+        self.runtime.last_error = f"V2 开仓撤单冷却中，约 {seconds_left} 秒后再允许重新挂单"
+        return True
 
     async def _check_entry_order(self, plan_status: dict[str, Any]) -> None:
         if self.repairing_binance_only:

@@ -19,6 +19,8 @@ class V2AddMixin:
                 self.active_add_base_edge = None
                 self.active_add_trigger_edge = None
             return False
+        if self._entry_requote_blocked():
+            return False
         if not self._add_trigger_confirmed(plan):
             return False
         side = Side(plan["binance_side"])

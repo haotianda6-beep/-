@@ -158,6 +158,33 @@ async def test_v2_entry_sets_short_exit_cooldown_after_mt4_follow(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_v2_entry_cancel_sets_requote_cooldown(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, REQUOTE_COOLDOWN_MS=5000)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+
+    await executor.step(short_plan("101"))
+    assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+
+    await executor.step({"selected_entry": {"ready": False, "reason": "价差回落"}})
+    assert run.state == StrategyState.IDLE
+    assert executor.active_order is None
+
+    await executor.step(short_plan("101"))
+    assert executor.active_order is None
+    assert "开仓撤单冷却中" in run.last_error
+
+    executor.entry_requote_until_ms = utc_now_ms() - 1
+    await executor.step(short_plan("101"))
+    assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert executor.active_order is not None
+
+
+@pytest.mark.asyncio
 async def test_v2_does_not_place_exit_until_real_exit_plan_is_ready(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
     client = PaperBinanceClient(cfg)
