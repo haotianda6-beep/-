@@ -223,6 +223,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             current = quote.ask - mt4_quote.bid
             if current > target and not loss_limit_active:
                 self.exit_ready_since_ms = 0
+                self._clear_exit_confirm_message()
                 return
             price = round_down(min(quote.bid - self.settings.binance_entry_offset_usd, mt4_quote.bid + target), self.binance.filters.tick_size)
             side = Side.BUY
@@ -230,6 +231,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             current = mt4_quote.ask - quote.bid
             if current > target and not loss_limit_active:
                 self.exit_ready_since_ms = 0
+                self._clear_exit_confirm_message()
                 return
             price = round_up(max(quote.ask + self.settings.binance_entry_offset_usd, mt4_quote.ask - target), self.binance.filters.tick_size)
             side = Side.SELL
@@ -322,6 +324,10 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if self.runtime.last_error and self.runtime.last_error.startswith("V2 平仓价差已触发，确认中"):
             self.runtime.last_error = None
         return True
+
+    def _clear_exit_confirm_message(self) -> None:
+        if self.runtime.last_error and self.runtime.last_error.startswith("V2 平仓价差已触发，确认中"):
+            self.runtime.last_error = None
 
     def _queue_mt4_hedge(self, order: OrderUpdate) -> None:
         if not self.entry_hedge_side or not self.entry_direction:

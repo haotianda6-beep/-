@@ -268,6 +268,35 @@ async def test_v2_loss_limit_exit_skips_confirm_time(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_v2_exit_confirm_message_clears_when_spread_no_longer_ready(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, ENTRY_CONFIRM_MS=1000)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.last_error = "V2 平仓价差已触发，确认中 784/1500ms，避免瞬时跳价假触发"
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    client.set_quote(Decimal("104"), Decimal("104.2"))
+    mt4_tick(mt4, "100", "100.2")
+
+    await executor.step(exit_plan("1"))
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    assert run.last_error is None
+
+
+@pytest.mark.asyncio
 async def test_v2_missing_exit_order_is_treated_as_canceled(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False)
     client = MissingOrderBinanceClient(cfg)
