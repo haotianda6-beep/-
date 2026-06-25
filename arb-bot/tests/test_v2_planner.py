@@ -407,6 +407,41 @@ def test_v2_add_plan_blocks_when_blended_edge_cannot_cover_exit_buffer(tmp_path)
     assert "安全触发位" in status["add_plan"]["reason"]
 
 
+def test_v2_add_plan_accepts_exact_required_blended_edge(tmp_path):
+    cfg = settings(
+        tmp_path,
+        ADD_EDGE_GROWTH_USD=Decimal("1"),
+        CLOSE_PROFIT_USD_PER_OZ=Decimal("0.30"),
+        MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("5.0"),
+        MT4_SLIPPAGE_POINTS=0,
+    )
+    store = Storage(cfg.sqlite_path)
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("4013.38"),
+        mt4_entry_price=Decimal("4010.96"),
+        binance_order_id="entry",
+        base_edge=Decimal("2.42"),
+    )
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=ExchangeFilters(tick_size=Decimal("0.01"), qty_step=Decimal("0.001"), min_qty=Decimal("0.001")),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4020.50"), ask=Decimal("4020.70")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("4017.00"), ask=Decimal("4017.20")),
+        binance_bars=[],
+        open_pair=pair,
+        metrics=PositionMetrics(actual_entry_spread=Decimal("2.42"), close_profit_usd_per_oz=Decimal("0.30")),
+        mt4_tick_move_budget=Decimal("0.38"),
+    )
+
+    assert status["add_plan"]["expected_locked_edge"] == Decimal("8.18")
+    assert status["add_plan"]["estimated_blended_edge"] == status["add_plan"]["required_blended_edge"]
+    assert status["add_plan"]["exit_viable"] is True
+
+
 def test_v2_negative_swap_window_relaxes_exit_to_safe_target(tmp_path):
     cfg = settings(
         tmp_path,

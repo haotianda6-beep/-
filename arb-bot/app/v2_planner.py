@@ -507,7 +507,7 @@ def _add_plan(
     exit_viable = False
     if current_avg_edge is not None:
         blended_edge = ((current_avg_edge * pair.quantity_oz) + (locked * qty)) / (pair.quantity_oz + qty)
-        exit_viable = blended_edge > required_blended_edge
+        exit_viable = blended_edge >= required_blended_edge
     ready = edge >= actionable_trigger and exit_viable
     reason = "达到补仓触发位，可以挂补仓限价单。"
     if edge < actionable_trigger:
