@@ -210,7 +210,8 @@ def _plan_dict(
     close_profit: Decimal,
     settlement_adjustment: dict | None = None,
 ) -> dict:
-    ready = current_edge >= threshold
+    required_edge = threshold + slippage_budget
+    ready = current_edge >= required_edge
     locked_edge = limit_price - mt4_reference_price if binance_side == Side.SELL else mt4_reference_price - limit_price
     adjustment_value = Decimal("0")
     if settlement_adjustment:
@@ -218,7 +219,7 @@ def _plan_dict(
     estimated_exit_target = max(Decimal("0"), locked_edge + (adjustment_value / qty) - slippage_budget - close_profit)
     recent_low = Decimal(str(spread_range["low"])) if spread_range.get("low") is not None else None
     exit_viable = recent_low is None or recent_low <= estimated_exit_target
-    reason = "达到观察阈值，可以进入小仓验证队列" if ready else "当前价差未到观察阈值"
+    reason = "达到安全入场边际，可以进入小仓验证队列" if ready else f"当前价差未到安全入场边际 {required_edge}"
     if ready and not exit_viable:
         ready = False
         reason = f"达到入场阈值，但最近30分钟最低价差 {recent_low} > 扣除下次资金费和隔夜费后的安全平仓价差 {estimated_exit_target}，暂不开仓"
@@ -231,6 +232,7 @@ def _plan_dict(
         "reason": reason,
         "current_edge": current_edge,
         "threshold": threshold,
+        "required_edge": required_edge,
         "quantity_oz": qty,
         "binance_side": binance_side.value,
         "binance_price": limit_price,

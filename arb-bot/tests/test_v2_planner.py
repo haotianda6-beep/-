@@ -51,7 +51,7 @@ def test_v2_uses_upper_range_threshold_from_recent_spreads(tmp_path):
         settings=cfg,
         storage=store,
         filters=filters(),
-        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4007"), ask=Decimal("4007.5")),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4007.8"), ask=Decimal("4008.0")),
         mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("4000"), ask=Decimal("4000.2")),
         binance_bars=binance_bars,
         open_pair=None,
@@ -84,6 +84,30 @@ def test_v2_blocks_entry_when_recent_range_has_no_safe_exit(tmp_path):
     assert status["short_entry"]["exit_viable"] is False
     assert status["short_entry"]["ready"] is False
     assert "安全平仓" in status["short_entry"]["reason"]
+
+
+def test_v2_blocks_entry_until_current_edge_covers_slippage_budget(tmp_path):
+    cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.0"), MT4_SLIPPAGE_POINTS=0, MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("5.0"))
+    store = Storage(cfg.sqlite_path)
+    mt4_bars, binance_bars = recent_bars([Decimal("2.0")] * 10)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4002.8"), ask=Decimal("4003.0")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("4000.0"), ask=Decimal("4000.2")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+    )
+
+    assert status["short_entry"]["current_edge"] == Decimal("2.8")
+    assert status["short_entry"]["threshold"] == Decimal("2.0")
+    assert status["short_entry"]["required_edge"] == Decimal("7.300")
+    assert status["short_entry"]["ready"] is False
+    assert "安全入场边际" in status["short_entry"]["reason"]
 
 
 def test_v2_blocks_entry_when_quote_gap_is_unreasonable(tmp_path):
@@ -146,7 +170,7 @@ def test_v2_blocks_entry_when_next_triple_swap_makes_exit_unsafe(tmp_path):
         settings=cfg,
         storage=store,
         filters=filters(),
-        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.0"), ask=Decimal("4003.2")),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.4"), ask=Decimal("4003.6")),
         mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
         binance_bars=binance_bars,
         open_pair=None,
@@ -161,7 +185,7 @@ def test_v2_blocks_entry_when_next_triple_swap_makes_exit_unsafe(tmp_path):
 
     assert status["short_entry"]["current_edge"] >= status["short_entry"]["threshold"]
     assert status["short_entry"]["next_settlement_adjustment"]["mt4_swap"] == Decimal("-1.9788")
-    assert status["short_entry"]["estimated_exit_target_spread"] == Decimal("0.7212")
+    assert status["short_entry"]["estimated_exit_target_spread"] == Decimal("1.0212")
     assert status["short_entry"]["exit_viable"] is False
     assert status["short_entry"]["ready"] is False
     assert "隔夜费" in status["short_entry"]["reason"]
