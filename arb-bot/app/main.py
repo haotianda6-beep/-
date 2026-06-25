@@ -1912,6 +1912,8 @@ def _binance_transient_cooldown_ms(error_text: str) -> int:
     if match:
         wait_ms = int(match.group(1)) - utc_now_ms() + 5_000
         return max(30_000, min(wait_ms, 300_000))
+    if "-1003" in error_text or "Too many requests" in error_text:
+        return 300_000
     return 60_000
 
 

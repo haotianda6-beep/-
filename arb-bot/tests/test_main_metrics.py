@@ -6,6 +6,7 @@ import app.main as main
 import app.mt4_rollover as mt4_rollover
 from app.models import OpenPair, PairDirection
 from app.main import (
+    _binance_transient_cooldown_ms,
     _dynamic_close_spread,
     _effective_close_profit_usd_per_oz,
     _exit_follow_buffer_usd_per_oz,
@@ -30,6 +31,10 @@ def test_immediate_close_net_excludes_future_funding_and_swap():
         funding_estimate=Decimal("0.40"),
         mt4_swap_estimate=Decimal("-0.60"),
     ) == Decimal("0.55")
+
+
+def test_binance_too_many_requests_uses_long_cooldown():
+    assert _binance_transient_cooldown_ms('{"code":-1003,"msg":"Too many requests"}') == 300_000
 
 
 def test_dynamic_close_spread_does_not_go_negative_when_buffer_is_large():
