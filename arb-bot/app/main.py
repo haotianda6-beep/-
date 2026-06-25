@@ -2093,7 +2093,7 @@ def _effective_close_profit_usd_per_oz(pair) -> Decimal:
         return settings.close_profit_usd_per_oz
     age_ms = utc_now_ms() - int(pair.opened_ms)
     if age_ms >= settings.max_pair_age_minutes * 60_000:
-        return min(settings.close_profit_usd_per_oz, settings.aged_close_profit_usd_per_oz)
+        return max(settings.close_profit_usd_per_oz, settings.aged_close_profit_usd_per_oz)
     return settings.close_profit_usd_per_oz
 
 
