@@ -39,7 +39,7 @@ def test_dynamic_close_spread_does_not_go_negative_when_buffer_is_large():
     ) == Decimal("0")
 
 
-def test_effective_close_profit_keeps_profit_floor_after_timeout(monkeypatch):
+def test_effective_close_profit_relaxes_positive_target_after_timeout(monkeypatch):
     now_ms = 1_000_000
     monkeypatch.setattr(main, "utc_now_ms", lambda: now_ms)
     monkeypatch.setattr(main.settings, "max_pair_age_minutes", 10)
@@ -54,7 +54,7 @@ def test_effective_close_profit_keeps_profit_floor_after_timeout(monkeypatch):
         opened_ms=now_ms - 11 * 60_000,
     )
 
-    assert _effective_close_profit_usd_per_oz(pair) == Decimal("0.20")
+    assert _effective_close_profit_usd_per_oz(pair) == Decimal("0.01")
 
 
 def test_mt4_swap_estimate_uses_triple_swap_weekday(monkeypatch):
