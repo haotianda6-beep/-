@@ -374,10 +374,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         projected = self._projected_exit_net_at_limit(pair, binance_exit_price, mt4_quote)
         if projected is None:
             return "V2 平仓利润保护：等待 MT4 可成交价后再评估平仓"
-        buffer = self._mt4_exit_guard_buffer_usd_per_oz()
-        projected -= buffer * pair.quantity_oz
         if projected < min_net:
-            return f"V2 平仓利润保护：扣除 MT4 平仓缓冲 {buffer} 后复算净利 {projected} 低于最低 {min_net}，不平仓"
+            return f"V2 平仓利润保护：限价复算净利 {projected} 低于最低 {min_net}，不平仓"
         return None
 
     def _planned_exit_net(self, plan_status: dict[str, Any]) -> Decimal | None:

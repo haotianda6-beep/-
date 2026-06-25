@@ -268,7 +268,7 @@ async def test_v2_regular_exit_blocks_limit_price_that_would_not_meet_min_profit
 
 
 @pytest.mark.asyncio
-async def test_v2_regular_exit_subtracts_mt4_close_buffer_before_order(tmp_path):
+async def test_v2_regular_exit_does_not_subtract_mt4_close_buffer_twice(tmp_path):
     cfg = settings(
         tmp_path,
         SQLITE_PATH=tmp_path / "test.sqlite3",
@@ -296,9 +296,9 @@ async def test_v2_regular_exit_subtracts_mt4_close_buffer_before_order(tmp_path)
 
     await executor.step(exit_plan("3.2"))
 
-    assert run.state == StrategyState.PAIR_OPEN
-    assert executor.active_order is None
-    assert "MT4 平仓缓冲" in run.last_error
+    assert run.state == StrategyState.QUOTING_BINANCE_EXIT
+    assert executor.active_order is not None
+    assert run.last_error is None
 
 
 @pytest.mark.asyncio

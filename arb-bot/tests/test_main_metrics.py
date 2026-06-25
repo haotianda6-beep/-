@@ -37,12 +37,20 @@ def test_binance_too_many_requests_uses_long_cooldown():
     assert _binance_transient_cooldown_ms('{"code":-1003,"msg":"Too many requests"}') == 300_000
 
 
-def test_dynamic_close_spread_does_not_subtract_exit_buffer_twice():
+def test_dynamic_close_spread_subtracts_exit_buffer_once():
     assert _dynamic_close_spread(
         profitable_spread_threshold=Decimal("2.52"),
         exit_follow_buffer=Decimal("2.70"),
         close_profit=Decimal("0.20"),
-    ) == Decimal("2.32")
+    ) == Decimal("0")
+
+
+def test_dynamic_close_spread_keeps_positive_target_after_one_buffer():
+    assert _dynamic_close_spread(
+        profitable_spread_threshold=Decimal("2.52"),
+        exit_follow_buffer=Decimal("0.60"),
+        close_profit=Decimal("0.20"),
+    ) == Decimal("1.72")
 
 
 def test_dynamic_close_spread_does_not_go_negative_when_profit_exceeds_threshold():

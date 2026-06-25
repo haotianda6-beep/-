@@ -2222,7 +2222,7 @@ def _dynamic_close_spread(
 ) -> Decimal | None:
     if profitable_spread_threshold is None:
         return None
-    target = profitable_spread_threshold - (close_profit or settings.close_profit_usd_per_oz)
+    target = profitable_spread_threshold - (close_profit or settings.close_profit_usd_per_oz) - (exit_follow_buffer or Decimal("0"))
     return max(Decimal("0"), target)
 
 
