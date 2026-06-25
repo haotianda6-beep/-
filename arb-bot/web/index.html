@@ -1393,7 +1393,7 @@
           : "-";
         $("pairQty").textContent = pair ? `${fmt(pair.quantity_oz)} XAU` : "-";
         $("pairAddLine").textContent = pair
-          ? renderPairAddLine(pair, data.config, b, m, metrics)
+          ? renderPairAddLine(pair, data.config, b, m, metrics, data.gold_v2?.add_plan)
           : "-";
         $("pairEntryLine").textContent = renderPairEntry(pair, metrics);
         $("binanceFundingLine").textContent = renderFunding(metrics, pair);
@@ -1455,8 +1455,14 @@
           add.next_trigger_edge !== undefined &&
           add.next_trigger_edge !== null
         ) {
+          const actionableText =
+            add.next_actionable_trigger_edge !== undefined &&
+            add.next_actionable_trigger_edge !== null &&
+            Number(add.next_actionable_trigger_edge) > Number(add.next_trigger_edge)
+              ? `；安全可执行价差 ${fmt(add.next_actionable_trigger_edge)} 美元`
+              : "";
           $("v2AddPlanLine").textContent =
-            `${addPrefix}；已补 ${fmt(add.add_count || 0)}/${fmt(add.max_add_count || maxAddCount)} 次，第 ${fmt(add.next_add_number)} 次触发价差 ${fmt(add.next_trigger_edge)} 美元，${add.reason || "等待触发"}`;
+            `${addPrefix}；已补 ${fmt(add.add_count || 0)}/${fmt(add.max_add_count || maxAddCount)} 次，第 ${fmt(add.next_add_number)} 次阶梯价差 ${fmt(add.next_trigger_edge)} 美元${actionableText}，${add.reason || "等待触发"}`;
         } else if (addConfigured) {
           $("v2AddPlanLine").textContent =
             `${addPrefix}；${add.reason || "等待持仓后计算补仓"}`;
@@ -1680,6 +1686,7 @@
         binanceQuote,
         mt4Quote,
         metrics = {},
+        addPlan = {},
       ) {
         if (!pair || !config) return "-";
         const count = Number(pair.add_count || 0);
@@ -1720,7 +1727,12 @@
         const currentText = Number.isFinite(current)
           ? `，当前同向价差 ${fmt(current)} 美元`
           : "";
-        return `已补 ${count}/${maxCount} 次，下次补仓基差 ${fmt(trigger)} 美元（${baseLabel} ${fmt(baseEdge)} + 增加 ${fmt(addGrowth)}）${actualAddText}${actualEntryText}${currentText}`;
+        const actionable = Number(addPlan?.next_actionable_trigger_edge);
+        const safeText =
+          Number.isFinite(actionable) && actionable > trigger
+            ? `，安全可执行 ${fmt(actionable)} 美元`
+            : "";
+        return `已补 ${count}/${maxCount} 次，下次补仓阶梯 ${fmt(trigger)} 美元（${baseLabel} ${fmt(baseEdge)} + 增加 ${fmt(addGrowth)}）${safeText}${actualAddText}${actualEntryText}${currentText}`;
       }
 
       function renderMt4Positions(positions) {

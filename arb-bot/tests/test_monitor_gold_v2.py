@@ -132,6 +132,9 @@ def test_summarize_status_includes_add_plan_fields():
                 "reason": "补仓后仍不安全",
                 "current_edge": "3.1",
                 "next_trigger_edge": "3.42",
+                "next_actionable_trigger_edge": "7.84",
+                "required_locked_edge": "8.18",
+                "required_blended_edge": "5.30",
                 "add_count": 0,
                 "exit_viable": False,
             },
@@ -144,6 +147,9 @@ def test_summarize_status_includes_add_plan_fields():
     assert summary["add_reason"] == "补仓后仍不安全"
     assert summary["add_current_edge"] == "3.1"
     assert summary["add_next_trigger"] == "3.42"
+    assert summary["add_actionable_trigger"] == "7.84"
+    assert summary["add_required_locked"] == "8.18"
+    assert summary["add_required_blended"] == "5.30"
 
 
 def test_write_log_rotates_when_size_limit_is_reached(tmp_path):
