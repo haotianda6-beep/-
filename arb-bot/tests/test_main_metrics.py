@@ -75,6 +75,16 @@ def test_exit_follow_buffer_uses_normal_follow_window_not_timeout(monkeypatch):
     assert calls[0][0] == 1000
 
 
+def test_exit_follow_buffer_does_not_fallback_to_slow_bar_move(monkeypatch):
+    monkeypatch.setattr(main.settings, "max_hedge_delay_ms", 10_000)
+    monkeypatch.setattr(main.settings, "mt4_slippage_points", 0)
+    monkeypatch.setattr(main.settings, "mt4_close_extra_buffer_usd", Decimal("0.80"))
+    monkeypatch.setattr(main.mt4_bridge, "recent_move_budget", lambda *args, **kwargs: None)
+    swap_info = SimpleNamespace(point=Decimal("0.01"))
+
+    assert _exit_follow_buffer_usd_per_oz(swap_info, mt4_bars=[]) == Decimal("0.80")
+
+
 def test_mt4_swap_estimate_uses_triple_swap_weekday(monkeypatch):
     monkeypatch.setattr(main.settings, "mt4_lot_size_oz", Decimal("100"))
     monkeypatch.setattr(main.settings, "mt4_triple_swap_weekday", 2)

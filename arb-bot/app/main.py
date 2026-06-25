@@ -2205,11 +2205,7 @@ def _exit_follow_buffer_usd_per_oz(swap_info, mt4_bars: list[HistoryBar] | None 
         min_points=GOLD_V2_EXIT_BUFFER_MIN_POINTS,
     )
     if recent_move is None:
-        recent_move = recent_move_budget_usd_per_oz(
-        mt4_bars or [],
-        percentile=GOLD_V2_EXIT_BUFFER_MOVE_PERCENTILE,
-        min_points=GOLD_V2_EXIT_BUFFER_MIN_POINTS,
-        )
+        recent_move = Decimal("0")
     return configured + recent_move
 
 
