@@ -1,5 +1,7 @@
 #property strict
 
+#define EA_VERSION "20260626-trade-guard"
+
 input string BridgeBaseUrl = "http://127.0.0.1:8011";
 input string BridgeToken = "";
 input string TradeSymbol = "XAUUSD";
@@ -112,6 +114,7 @@ void PostTick()
    string positions = PositionsJson();
    string json = "{";
    json += "\"symbol\":\"" + JsonEscape(TradeSymbol) + "\",";
+   json += "\"ea_version\":\"" + EA_VERSION + "\",";
    json += "\"bid\":" + DoubleToString(bid, digits) + ",";
    json += "\"ask\":" + DoubleToString(ask, digits) + ",";
    json += "\"swap_long_per_lot\":" + DoubleToString(MarketInfo(TradeSymbol, MODE_SWAPLONG), 8) + ",";

@@ -153,6 +153,7 @@ class AccountSnapshot(BaseModel):
 class Mt4Tick(BaseModel):
     token: str | None = None
     symbol: str
+    ea_version: str | None = None
     bid: Decimal
     ask: Decimal
     timestamp_ms: int = Field(default_factory=utc_now_ms)
@@ -533,6 +534,7 @@ class EngineStatus(BaseModel):
     paper_mode: bool
     binance_connected: bool
     mt4_connected: bool
+    mt4_ea_version: str | None = None
     mt4_trade_allowed: bool | None = None
     mt4_trade_context_busy: bool | None = None
     binance_symbol: str

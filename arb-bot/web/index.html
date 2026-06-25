@@ -1371,8 +1371,11 @@
         $("binanceMeta").textContent = b
           ? `延迟 ${age(b.timestamp_ms)}`
           : "等待报价";
+        const mt4EaVersion = data.mt4_ea_version
+          ? `EA版本 ${data.mt4_ea_version}`
+          : "EA版本未上报";
         $("mt4Meta").textContent = m
-          ? `延迟 ${age(m.timestamp_ms)}，实时点差 ${fmt(Number(m.ask) - Number(m.bid))} 美元，${mt4Trade.detail}`
+          ? `延迟 ${age(m.timestamp_ms)}，实时点差 ${fmt(Number(m.ask) - Number(m.bid))} 美元，${mt4Trade.detail}，${mt4EaVersion}`
           : "等待报价";
         $("binanceLine").textContent = b
           ? `买 ${fmt(b.bid)} / 卖 ${fmt(b.ask)} / ${age(b.timestamp_ms)}`
@@ -1429,7 +1432,7 @@
         }
         return {
           label: "交易状态未上报",
-          detail: "EA 需要更新后才会上报可交易状态",
+          detail: "EA 需要更新并重新加载后才会上报可交易状态",
           className: "warn",
         };
       }

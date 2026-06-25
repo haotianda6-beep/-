@@ -347,6 +347,7 @@ async def status() -> EngineStatus:
         paper_mode=settings.paper_mode,
         binance_connected=binance_quote is not None,
         mt4_connected=mt4_bridge.connected(),
+        mt4_ea_version=mt4_bridge.ea_version(),
         mt4_trade_allowed=mt4_bridge.trade_allowed(),
         mt4_trade_context_busy=mt4_bridge.trade_context_busy(),
         binance_symbol=settings.binance_symbol,

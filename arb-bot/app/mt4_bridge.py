@@ -20,6 +20,7 @@ class Mt4Bridge:
         self._positions = []
         self._swap_info = Mt4SwapInfo()
         self._account: AccountSnapshot | None = None
+        self._ea_version: str | None = None
         self._trade_allowed: bool | None = None
         self._trade_context_busy: bool | None = None
         self.last_seen_ms = 0
@@ -37,6 +38,7 @@ class Mt4Bridge:
             self._quote = quote
             self._quote_history.append(quote)
             self._positions = list(tick.positions)
+            self._ea_version = tick.ea_version
             self._swap_info = Mt4SwapInfo(
                 swap_long_per_lot=tick.swap_long_per_lot,
                 swap_short_per_lot=tick.swap_short_per_lot,
@@ -103,6 +105,10 @@ class Mt4Bridge:
     def account_snapshot(self) -> AccountSnapshot | None:
         with self._lock:
             return self._account
+
+    def ea_version(self) -> str | None:
+        with self._lock:
+            return self._ea_version
 
     def trade_allowed(self) -> bool | None:
         with self._lock:
