@@ -243,10 +243,10 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if self.runtime.last_error == "等待真实均价、资金费和隔夜费数据后再计算平仓目标，不挂平仓单":
             self.runtime.last_error = None
         self.exit_target_spread = target
-        loss_limit_active = self._loss_limit_active(plan_status)
+        risk_exit_active = self._risk_exit_active(plan_status)
         if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             current = quote.ask - mt4_quote.bid
-            if current > target and not loss_limit_active:
+            if current > target and not risk_exit_active:
                 self.exit_ready_since_ms = 0
                 self._clear_exit_confirm_message()
                 return
@@ -254,18 +254,18 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             side = Side.BUY
         else:
             current = mt4_quote.ask - quote.bid
-            if current > target and not loss_limit_active:
+            if current > target and not risk_exit_active:
                 self.exit_ready_since_ms = 0
                 self._clear_exit_confirm_message()
                 return
             price = round_up(max(quote.ask + self.settings.binance_entry_offset_usd, mt4_quote.ask - target), self.binance.filters.tick_size)
             side = Side.SELL
-        guard_reason = self._exit_profit_guard_reason(pair, price, mt4_quote, plan_status, loss_limit_active)
+        guard_reason = self._exit_profit_guard_reason(pair, price, mt4_quote, plan_status, risk_exit_active)
         if guard_reason:
             self.exit_ready_since_ms = 0
             self.runtime.last_error = guard_reason
             return
-        if not loss_limit_active and not self._exit_trigger_confirmed(current, target):
+        if not risk_exit_active and not self._exit_trigger_confirmed(current, target):
             return
         try:
             order = await self.binance.place_post_only_order(
@@ -319,12 +319,12 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if gap_reason:
             await self.cancel_active_order(f"V2 平仓报价异常，撤销未成交限价单：{gap_reason}")
             return
-        loss_limit_active = self._loss_limit_active(plan_status)
-        guard_reason = self._exit_profit_guard_reason(pair, self.active_order.price, mt4_quote, plan_status, loss_limit_active)
+        risk_exit_active = self._risk_exit_active(plan_status)
+        guard_reason = self._exit_profit_guard_reason(pair, self.active_order.price, mt4_quote, plan_status, risk_exit_active)
         if guard_reason:
             await self.cancel_active_order(guard_reason)
             return
-        if not exit_spread_ready(pair, binance_quote, mt4_quote, target) and not loss_limit_active:
+        if not exit_spread_ready(pair, binance_quote, mt4_quote, target) and not risk_exit_active:
             await self.cancel_active_order("V2 平仓价差回落，撤销未成交限价单")
             return
         if utc_now_ms() - self.order_created_ms > max(self.settings.min_order_live_ms, self.settings.max_order_age_ms):
@@ -341,15 +341,23 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         loss_limit = exit_plan.get("loss_limit") or {}
         return bool(loss_limit.get("active"))
 
+    def _negative_swap_exit_active(self, plan_status: dict[str, Any]) -> bool:
+        exit_plan = (plan_status or {}).get("exit_plan") or {}
+        negative_swap = exit_plan.get("negative_swap") or {}
+        return bool(negative_swap.get("active"))
+
+    def _risk_exit_active(self, plan_status: dict[str, Any]) -> bool:
+        return self._loss_limit_active(plan_status) or self._negative_swap_exit_active(plan_status)
+
     def _exit_profit_guard_reason(
         self,
         pair: OpenPair,
         binance_exit_price: Decimal,
         mt4_quote,
         plan_status: dict[str, Any],
-        loss_limit_active: bool,
+        risk_exit_active: bool,
     ) -> str | None:
-        if loss_limit_active:
+        if risk_exit_active:
             return None
         min_net = self._minimum_exit_net(pair)
         plan_net = self._planned_exit_net(plan_status)
