@@ -28,6 +28,8 @@ def settings(tmp_path, **kwargs) -> Settings:
         "MAX_HEDGE_DELAY_MS": 1000,
         "ENTRY_CONFIRM_MS": 0,
         "CLOSE_PROFIT_USD_PER_OZ": Decimal("0.5"),
+        "MT4_SLIPPAGE_POINTS": 0,
+        "MT4_CLOSE_EXTRA_BUFFER_USD": Decimal("0"),
         **kwargs,
     }
     return Settings(_env_file=None, **values)
@@ -104,6 +106,7 @@ async def test_v2_entry_and_exit_use_binance_post_only_then_mt4_follow(tmp_path)
     assert run.state == StrategyState.PAIR_OPEN
     assert run.open_pair is not None
     assert run.open_pair.base_edge == Decimal("2")
+    executor.post_add_exit_block_until_ms = 0
 
     client.set_quote(Decimal("100"), Decimal("100.1"))
     mt4_tick(mt4, "99", "99.3")
@@ -125,6 +128,33 @@ async def test_v2_entry_and_exit_use_binance_post_only_then_mt4_follow(tmp_path)
     assert run.open_pair is None
     assert all(order.is_maker for order in client._orders.values())
     assert store.daily_pnl() == Decimal("1.3")
+
+
+@pytest.mark.asyncio
+async def test_v2_entry_sets_short_exit_cooldown_after_mt4_follow(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
+    store = Storage(cfg.sqlite_path)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(short_plan("101"))
+    client.set_quote(Decimal("101"), Decimal("101.2"))
+    await executor.step(short_plan("101"))
+    command = mt4.next_command()
+    mt4.submit_report(Mt4Report(command_id=command["command_id"], status="ok", action="BUY", ticket=7, fill_price=Decimal("99"), lots=Decimal("0.01")))
+    await executor.step(short_plan("101"))
+
+    client.set_quote(Decimal("100"), Decimal("100.1"))
+    mt4_tick(mt4, "99", "99.3")
+    await executor.step(exit_plan("2"))
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    assert "等待仓位和 MT4 报价稳定" in run.last_error
 
 
 @pytest.mark.asyncio
@@ -181,6 +211,40 @@ async def test_v2_regular_exit_blocks_limit_price_that_would_not_meet_min_profit
     assert run.state == StrategyState.PAIR_OPEN
     assert executor.active_order is None
     assert "平仓利润保护" in run.last_error
+
+
+@pytest.mark.asyncio
+async def test_v2_regular_exit_subtracts_mt4_close_buffer_before_order(tmp_path):
+    cfg = settings(
+        tmp_path,
+        SQLITE_PATH=tmp_path / "test.sqlite3",
+        PAPER_AUTO_FILL=False,
+        EXIT_CONFIRM_MS=0,
+        MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("2"),
+    )
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    client.set_quote(Decimal("100"), Decimal("100.1"))
+    mt4_tick(mt4, "99", "99.2")
+
+    await executor.step(exit_plan("3.2"))
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    assert "MT4 平仓缓冲" in run.last_error
 
 
 @pytest.mark.asyncio

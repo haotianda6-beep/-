@@ -206,11 +206,12 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if gap_reason:
             self.runtime.last_error = f"报价异常，暂停本轮平仓挂单：{gap_reason}"
             return
-        post_add_message = "补仓刚完成，等待币安仓位快照稳定后再允许平仓挂单"
+        post_add_message = "开仓或补仓刚完成，等待仓位和 MT4 报价稳定后再允许平仓挂单"
+        post_add_messages = (post_add_message, "补仓刚完成，等待币安仓位快照稳定后再允许平仓挂单")
         if utc_now_ms() < self.post_add_exit_block_until_ms:
             self.runtime.last_error = post_add_message
             return
-        if self.runtime.last_error == post_add_message:
+        if self.runtime.last_error in post_add_messages:
             self.runtime.last_error = None
         target = self._planned_exit_target(plan_status)
         if target is None:
@@ -335,8 +336,10 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         projected = self._projected_exit_net_at_limit(pair, binance_exit_price, mt4_quote)
         if projected is None:
             return "V2 平仓利润保护：等待 MT4 可成交价后再评估平仓"
+        buffer = self._mt4_exit_guard_buffer_usd_per_oz()
+        projected -= buffer * pair.quantity_oz
         if projected < min_net:
-            return f"V2 平仓利润保护：按币安挂单价和 MT4 当前价复算净利 {projected} 低于最低 {min_net}，不平仓"
+            return f"V2 平仓利润保护：扣除 MT4 平仓缓冲 {buffer} 后复算净利 {projected} 低于最低 {min_net}，不平仓"
         return None
 
     def _planned_exit_net(self, plan_status: dict[str, Any]) -> Decimal | None:
@@ -356,6 +359,12 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if age_ms >= self.settings.max_pair_age_minutes * 60_000:
             return max(Decimal("0"), min(self.settings.close_profit_usd_per_oz, self.settings.aged_close_profit_usd_per_oz))
         return self.settings.close_profit_usd_per_oz
+
+    def _mt4_exit_guard_buffer_usd_per_oz(self) -> Decimal:
+        point = self.mt4.latest_swap_info().point or Decimal("0.01")
+        configured = Decimal(self.settings.mt4_slippage_points) * point + self.settings.mt4_close_extra_buffer_usd
+        recent = self.mt4.recent_move_budget(min(self.settings.max_hedge_delay_ms, 1000), percentile=90, min_points=4)
+        return configured + (recent or Decimal("0"))
 
     def _projected_exit_net_at_limit(self, pair: OpenPair, binance_exit_price: Decimal, mt4_quote) -> Decimal | None:
         if not mt4_quote:
@@ -573,6 +582,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         edge = self.active_order.avg_price - report.fill_price if self.entry_direction == PairDirection.BINANCE_SHORT_MT4_LONG else report.fill_price - self.active_order.avg_price
         self.runtime.open_pair = OpenPair(direction=self.entry_direction, quantity_oz=self.active_order.executed_qty, binance_entry_price=self.active_order.avg_price, mt4_entry_price=report.fill_price, binance_order_id=self.active_order.order_id, mt4_ticket=report.ticket, mt4_tickets=[report.ticket] if report.ticket else [], base_edge=edge)
         self.storage.record_event("v2_pair_open", self.runtime.open_pair.model_dump(mode="json"))
+        self.post_add_exit_block_until_ms = utc_now_ms() + max(5000, self.settings.max_hedge_delay_ms)
         self.active_order = None
         self.hedge_command_id = None
         self._clear_entry_carry()

@@ -25,6 +25,8 @@ def make_settings(tmp_path, **kwargs) -> Settings:
         "MIN_ORDER_LIVE_MS": 0,
         "MAX_ORDER_AGE_MS": 0,
         "EXIT_CONFIRM_MS": 0,
+        "MT4_SLIPPAGE_POINTS": 0,
+        "MT4_CLOSE_EXTRA_BUFFER_USD": Decimal("0"),
         **kwargs,
     }
     return Settings(_env_file=None, **values)
