@@ -15,7 +15,7 @@ def load_monitor_module():
 
 
 monitor = load_monitor_module()
-args = SimpleNamespace(quantity_tolerance_oz="0.01")
+args = SimpleNamespace(quantity_tolerance_oz="0.01", loss_warning_ratio=0.70, profit_window_min_usdt="0.50")
 
 
 def test_exposure_issue_accepts_matched_short_pair():
@@ -66,6 +66,58 @@ def test_exposure_issue_detects_mt4_direction_mismatch():
     }
 
     assert "MT4 应为 BUY" in monitor.exposure_issue_reason(status, args)
+
+
+def test_risk_warning_detects_near_max_loss():
+    status = {
+        "position_metrics": {
+            "estimated_close_net": "-3.6",
+            "max_pair_loss_usdt": "5",
+        }
+    }
+
+    assert "接近最大亏损" in monitor.risk_warning_reason(status, args)
+
+
+def test_risk_warning_ignores_small_drawdown():
+    status = {
+        "position_metrics": {
+            "estimated_close_net": "-2.0",
+            "max_pair_loss_usdt": "5",
+        }
+    }
+
+    assert monitor.risk_warning_reason(status, args) is None
+
+
+def test_profit_window_detects_positive_net_blocked_by_zero_target():
+    status = {
+        "state": "PAIR_OPEN",
+        "execution_plan": {"active_binance_order": False},
+        "gold_v2": {
+            "exit_plan": {
+                "target_exit_spread": "0",
+                "current_exit_spread": "1.8",
+            }
+        },
+        "position_metrics": {
+            "estimated_close_net": "0.80",
+            "exit_follow_buffer_usd_per_oz": "5.00",
+        },
+    }
+
+    assert "预估净值 0.80U 已为正" in monitor.profit_window_reason(status, args)
+
+
+def test_profit_window_ignores_active_order():
+    status = {
+        "state": "PAIR_OPEN",
+        "execution_plan": {"active_binance_order": True},
+        "gold_v2": {"exit_plan": {"target_exit_spread": "0", "current_exit_spread": "1.8"}},
+        "position_metrics": {"estimated_close_net": "0.80"},
+    }
+
+    assert monitor.profit_window_reason(status, args) is None
 
 
 def test_monitor_state_persists_cycle_progress(tmp_path):

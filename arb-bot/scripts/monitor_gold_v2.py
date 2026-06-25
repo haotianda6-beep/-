@@ -25,6 +25,10 @@ class MonitorState:
     closed_pairs: set[str]
     exposure_issue_since: float | None = None
     exposure_issue_reason: str | None = None
+    risk_issue_since: float | None = None
+    risk_issue_reason: str | None = None
+    profit_window_since: float | None = None
+    profit_window_reason: str | None = None
     last_state: str | None = None
     target_reached: bool = False
     alerted_keys: set[str] = field(default_factory=set)
@@ -126,6 +130,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--http-timeout", type=float, default=8.0)
     parser.add_argument("--single-leg-grace", type=float, default=20.0)
     parser.add_argument("--quantity-tolerance-oz", default="0.01")
+    parser.add_argument("--loss-warning-ratio", type=float, default=0.70)
+    parser.add_argument("--profit-window-min-usdt", default="0.50")
+    parser.add_argument("--profit-window-grace", type=float, default=30.0)
     parser.add_argument("--state-file", default="/root/perp-arb-bot/arb-bot/data/gold_v2_monitor_state.json")
     parser.add_argument("--env-file", default="/root/perp-arb-bot/arb-bot/.env")
     return parser.parse_args()
@@ -222,6 +229,60 @@ def check_status(
         state.exposure_issue_since = None
         state.exposure_issue_reason = None
 
+    risk_issue = risk_warning_reason(status, args)
+    if risk_issue:
+        issue_changed = state.risk_issue_reason != risk_issue
+        if state.risk_issue_since is None or issue_changed:
+            state.risk_issue_since = now
+            state.risk_issue_reason = risk_issue
+            write_log(log_path, {"type": "risk_issue_seen", "issue": risk_issue, **snapshot})
+        send_alert_once(
+            alert_config,
+            state,
+            f"risk:{risk_issue}",
+            "黄金持仓风险接近阈值",
+            f"{risk_issue}\n\n当前摘要：{json.dumps(snapshot, ensure_ascii=False, sort_keys=True)}",
+            log_path,
+        )
+    else:
+        if state.risk_issue_since is not None:
+            write_log(log_path, {"type": "risk_issue_recovered", "issue": state.risk_issue_reason, **snapshot})
+            state.alerted_keys.discard(f"risk:{state.risk_issue_reason}")
+        state.risk_issue_since = None
+        state.risk_issue_reason = None
+
+    profit_window = profit_window_reason(status, args)
+    if profit_window:
+        window_changed = state.profit_window_reason != profit_window
+        if state.profit_window_since is None or window_changed:
+            state.profit_window_since = now
+            state.profit_window_reason = profit_window
+            write_log(log_path, {"type": "profit_window_seen", "issue": profit_window, **snapshot})
+        elif now - state.profit_window_since >= args.profit_window_grace:
+            write_log(
+                log_path,
+                {
+                    "type": "profit_window_over_grace",
+                    "issue": profit_window,
+                    "seconds": round(now - state.profit_window_since, 3),
+                    **snapshot,
+                },
+            )
+            send_alert_once(
+                alert_config,
+                state,
+                f"profit_window:{profit_window}",
+                "黄金出现正净值但未平仓",
+                f"{profit_window}\n\n当前摘要：{json.dumps(snapshot, ensure_ascii=False, sort_keys=True)}",
+                log_path,
+            )
+    else:
+        if state.profit_window_since is not None:
+            write_log(log_path, {"type": "profit_window_recovered", "issue": state.profit_window_reason, **snapshot})
+            state.alerted_keys.discard(f"profit_window:{state.profit_window_reason}")
+        state.profit_window_since = None
+        state.profit_window_reason = None
+
     write_log(log_path, {"type": "tick", **snapshot})
 
 
@@ -255,6 +316,40 @@ def exposure_issue_reason(status: dict[str, Any], args: argparse.Namespace) -> s
     diff = abs(abs(binance_qty) - mt4_oz)
     if diff > tolerance:
         return f"数量不一致：币安 {abs(binance_qty)} XAU，MT4 {mt4_oz} XAU，差额 {diff} > 容忍 {tolerance}"
+    return None
+
+
+def risk_warning_reason(status: dict[str, Any], args: argparse.Namespace) -> str | None:
+    metrics = status.get("position_metrics") or {}
+    estimated_net = parse_decimal(metrics.get("estimated_close_net"))
+    max_loss = parse_decimal(metrics.get("max_pair_loss_usdt"))
+    if max_loss <= 0 or estimated_net >= 0:
+        return None
+    ratio = max(Decimal("0"), min(Decimal("1"), parse_decimal(getattr(args, "loss_warning_ratio", "0.70"))))
+    warning_loss = max_loss * ratio
+    if abs(estimated_net) < warning_loss:
+        return None
+    return f"预估净值 {estimated_net}U 已接近最大亏损 {max_loss}U 的 {ratio * Decimal('100')}%"
+
+
+def profit_window_reason(status: dict[str, Any], args: argparse.Namespace) -> str | None:
+    if status.get("state") != "PAIR_OPEN":
+        return None
+    execution_plan = status.get("execution_plan") or {}
+    if bool(status.get("active_order")) or bool(execution_plan.get("active_binance_order")):
+        return None
+    gold_v2 = status.get("gold_v2") or {}
+    exit_plan = gold_v2.get("exit_plan") or {}
+    metrics = status.get("position_metrics") or {}
+    estimated_net = parse_decimal(metrics.get("estimated_close_net"))
+    min_profit = parse_decimal(getattr(args, "profit_window_min_usdt", "0.50"))
+    if estimated_net < min_profit:
+        return None
+    target = parse_decimal(exit_plan.get("target_exit_spread"))
+    current = parse_decimal(exit_plan.get("current_exit_spread") or metrics.get("current_exit_spread"))
+    buffer_value = metrics.get("exit_follow_buffer_usd_per_oz")
+    if target <= 0 and current > target:
+        return f"预估净值 {estimated_net}U 已为正，但平仓目标被 MT4 跟随缓冲压到 {target}，当前平仓价差 {current}，缓冲 {buffer_value}"
     return None
 
 
