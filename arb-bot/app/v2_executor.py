@@ -237,6 +237,11 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
                 return
             price = round_up(max(quote.ask + self.settings.binance_entry_offset_usd, mt4_quote.ask - target), self.binance.filters.tick_size)
             side = Side.SELL
+        guard_reason = self._exit_profit_guard_reason(pair, price, mt4_quote, plan_status, loss_limit_active)
+        if guard_reason:
+            self.exit_ready_since_ms = 0
+            self.runtime.last_error = guard_reason
+            return
         if not loss_limit_active and not self._exit_trigger_confirmed(current, target):
             return
         try:
@@ -291,7 +296,12 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if gap_reason:
             await self.cancel_active_order(f"V2 平仓报价异常，撤销未成交限价单：{gap_reason}")
             return
-        if not exit_spread_ready(pair, binance_quote, mt4_quote, target) and not self._loss_limit_active(plan_status):
+        loss_limit_active = self._loss_limit_active(plan_status)
+        guard_reason = self._exit_profit_guard_reason(pair, self.active_order.price, mt4_quote, plan_status, loss_limit_active)
+        if guard_reason:
+            await self.cancel_active_order(guard_reason)
+            return
+        if not exit_spread_ready(pair, binance_quote, mt4_quote, target) and not loss_limit_active:
             await self.cancel_active_order("V2 平仓价差回落，撤销未成交限价单")
             return
         if utc_now_ms() - self.order_created_ms > max(self.settings.min_order_live_ms, self.settings.max_order_age_ms):
@@ -307,6 +317,59 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         exit_plan = (plan_status or {}).get("exit_plan") or {}
         loss_limit = exit_plan.get("loss_limit") or {}
         return bool(loss_limit.get("active"))
+
+    def _exit_profit_guard_reason(
+        self,
+        pair: OpenPair,
+        binance_exit_price: Decimal,
+        mt4_quote,
+        plan_status: dict[str, Any],
+        loss_limit_active: bool,
+    ) -> str | None:
+        if loss_limit_active:
+            return None
+        min_net = self._minimum_exit_net(pair)
+        plan_net = self._planned_exit_net(plan_status)
+        if plan_net is not None and plan_net < min_net:
+            return f"V2 平仓利润保护：计划净利 {plan_net} 低于最低 {min_net}，不挂平仓单"
+        projected = self._projected_exit_net_at_limit(pair, binance_exit_price, mt4_quote)
+        if projected is None:
+            return "V2 平仓利润保护：等待 MT4 可成交价后再评估平仓"
+        if projected < min_net:
+            return f"V2 平仓利润保护：按币安挂单价和 MT4 当前价复算净利 {projected} 低于最低 {min_net}，不平仓"
+        return None
+
+    def _planned_exit_net(self, plan_status: dict[str, Any]) -> Decimal | None:
+        exit_plan = (plan_status or {}).get("exit_plan") or {}
+        value = exit_plan.get("estimated_net")
+        if value is None:
+            return None
+        return Decimal(str(value))
+
+    def _minimum_exit_net(self, pair: OpenPair) -> Decimal:
+        return max(Decimal("0"), self._effective_close_profit_usd_per_oz(pair) * pair.quantity_oz)
+
+    def _effective_close_profit_usd_per_oz(self, pair: OpenPair) -> Decimal:
+        if self.settings.max_pair_age_minutes <= 0:
+            return self.settings.close_profit_usd_per_oz
+        age_ms = utc_now_ms() - int(pair.opened_ms)
+        if age_ms >= self.settings.max_pair_age_minutes * 60_000:
+            return max(Decimal("0"), min(self.settings.close_profit_usd_per_oz, self.settings.aged_close_profit_usd_per_oz))
+        return self.settings.close_profit_usd_per_oz
+
+    def _projected_exit_net_at_limit(self, pair: OpenPair, binance_exit_price: Decimal, mt4_quote) -> Decimal | None:
+        if not mt4_quote:
+            return None
+        qty = pair.quantity_oz
+        if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            mt4_exit_price = mt4_quote.bid
+            binance_pnl = (pair.binance_entry_price - binance_exit_price) * qty
+            mt4_pnl = (mt4_exit_price - pair.mt4_entry_price) * qty
+        else:
+            mt4_exit_price = mt4_quote.ask
+            binance_pnl = (binance_exit_price - pair.binance_entry_price) * qty
+            mt4_pnl = (pair.mt4_entry_price - mt4_exit_price) * qty
+        return pair.realized_pnl + binance_pnl + mt4_pnl
 
     def _exit_trigger_confirmed(self, current: Decimal, target: Decimal) -> bool:
         confirm_ms = self.settings.effective_exit_confirm_ms

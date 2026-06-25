@@ -156,6 +156,67 @@ async def test_v2_does_not_place_exit_until_real_exit_plan_is_ready(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_v2_regular_exit_blocks_limit_price_that_would_not_meet_min_profit(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, EXIT_CONFIRM_MS=0)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    client.set_quote(Decimal("100"), Decimal("100.1"))
+    mt4_tick(mt4, "97.2", "97.4")
+
+    await executor.step(exit_plan("3.2"))
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    assert "平仓利润保护" in run.last_error
+
+
+@pytest.mark.asyncio
+async def test_v2_exit_order_is_canceled_when_limit_net_falls_below_min_profit(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, EXIT_CONFIRM_MS=0)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    client.set_quote(Decimal("100"), Decimal("100.1"))
+    mt4_tick(mt4, "99", "99.2")
+    await executor.step(exit_plan("3.2"))
+    assert run.state == StrategyState.QUOTING_BINANCE_EXIT
+    assert executor.active_order is not None
+
+    mt4_tick(mt4, "97.5", "97.7")
+    await executor.step(exit_plan("3.2"))
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    events = Storage(cfg.sqlite_path).get_events(0, utc_now_ms() + 1_000, limit=10)
+    assert any(event["kind"] == "v2_order_canceled" and "平仓利润保护" in event["payload"].get("reason", "") for event in events)
+
+
+@pytest.mark.asyncio
 async def test_v2_loss_limit_places_resting_exit_before_spread_recovers(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False)
     client = PaperBinanceClient(cfg)
