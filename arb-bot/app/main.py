@@ -105,6 +105,7 @@ _live_pair_reconcile_ms = 0
 _live_pair_reconcile_error_count = 0
 _live_pair_operation_cooldown_until_ms = 0
 _orphan_live_reconcile_ms = 0
+_orphan_live_reconcile_retry_after_ms = 0
 _orphan_live_guard_active = False
 _orphan_mt4_close_commands: dict[str, int] = {}
 _gold_v2_binance_bars_cache: list[HistoryBar] = []
@@ -1744,13 +1745,19 @@ async def _queue_binance_restore_after_live_mismatch(binance_qty: Decimal, resto
 
 
 async def _reconcile_orphan_live_state() -> bool:
-    global _orphan_live_reconcile_ms, _orphan_live_guard_active, _orphan_mt4_close_commands
+    global _orphan_live_reconcile_ms, _orphan_live_reconcile_retry_after_ms, _orphan_live_guard_active, _orphan_mt4_close_commands
     if settings.is_dry_run or strategy.open_pair is not None or v2_executor.active_order is not None:
         _orphan_live_guard_active = False
         return False
     if strategy.state not in {StrategyState.IDLE, StrategyState.PAIR_OPEN, StrategyState.PAUSED}:
         return False
     now = _now_ms()
+    if now < _orphan_live_reconcile_retry_after_ms:
+        seconds_left = max(1, (_orphan_live_reconcile_retry_after_ms - now) // 1000)
+        strategy.state = StrategyState.IDLE
+        strategy.last_error = f"币安空仓检查冷却中，约 {seconds_left} 秒后重试，期间禁止 V2 新开仓"
+        _orphan_live_guard_active = True
+        return True
     if _orphan_live_guard_active and now - _orphan_live_reconcile_ms < ORPHAN_LIVE_RECONCILE_INTERVAL_MS:
         return True
     _orphan_live_reconcile_ms = now
@@ -1765,10 +1772,13 @@ async def _reconcile_orphan_live_state() -> bool:
         if binance_qty is None:
             raise RuntimeError("Binance position cache unavailable")
     except Exception as exc:  # noqa: BLE001
+        error_text = str(exc)[:160]
+        cooldown_ms = _binance_transient_cooldown_ms(error_text) if is_transient_live_reconcile_error(error_text) else POSITION_RISK_FAILURE_RETRY_MS
+        _orphan_live_reconcile_retry_after_ms = now + cooldown_ms
         strategy.state = StrategyState.IDLE
-        strategy.last_error = f"开仓前检查币安是否空仓失败，已禁止 V2 新开仓：{str(exc)[:160]}"
+        strategy.last_error = f"开仓前检查币安是否空仓失败，冷却约 {cooldown_ms // 1000} 秒后重试，期间禁止 V2 新开仓：{error_text}"
         _orphan_live_guard_active = True
-        storage.record_event("orphan_live_guard_binance_check_failed", {"error": str(exc)[:160]})
+        storage.record_event("orphan_live_guard_binance_check_failed", {"error": error_text, "cooldown_ms": cooldown_ms})
         return True
     mt4_positions = mt4_bridge.positions()
     action = orphan_live_position_action(strategy.open_pair, binance_qty, mt4_positions, settings.mt4_symbol)
@@ -1776,6 +1786,7 @@ async def _reconcile_orphan_live_state() -> bool:
         if _orphan_live_guard_active:
             storage.record_event("orphan_live_guard_recovered", {"binance_position_qty": str(binance_qty)})
         _orphan_live_guard_active = False
+        _orphan_live_reconcile_retry_after_ms = 0
         _orphan_mt4_close_commands = {}
         if strategy.state in {StrategyState.PAIR_OPEN, StrategyState.PAUSED} and strategy.open_pair is None:
             strategy.state = StrategyState.IDLE
