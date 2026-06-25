@@ -1474,8 +1474,13 @@
         const add = plan.add_plan || {};
         const maxAddCount = Number(config?.max_add_count || 0);
         const addConfigured = maxAddCount > 0;
+        const addBlocked =
+          add.blocked === true ||
+          /已禁止|状态未确认|不可交易|交易通道忙/.test(add.reason || "");
         const addStateText = !addConfigured
           ? "补仓已关闭"
+          : addBlocked
+            ? "补仓已开启，但被保护拦截"
           : add.ready
             ? "补仓已开启，已达到触发位"
             : "补仓已开启，等待触发";
@@ -1764,7 +1769,14 @@
             ? `，安全可执行 ${fmt(actionable)} 美元`
             : "";
         const ready = addPlan?.ready === true;
-        const enabledText = ready ? "补仓已开启，已到触发位" : "补仓已开启，等待触发";
+        const blocked =
+          addPlan?.blocked === true ||
+          /已禁止|状态未确认|不可交易|交易通道忙/.test(addPlan?.reason || "");
+        const enabledText = blocked
+          ? `补仓已开启，但被保护拦截：${addPlan.reason || "等待 MT4 交易状态恢复"}`
+          : ready
+            ? "补仓已开启，已到触发位"
+            : "补仓已开启，等待触发";
         return `${enabledText}，已补 ${count}/${maxCount} 次，下次补仓阶梯 ${fmt(trigger)} 美元（${baseLabel} ${fmt(baseEdge)} + 增加 ${fmt(addGrowth)}）${safeText}${actualAddText}${actualEntryText}${currentText}`;
       }
 
