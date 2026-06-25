@@ -24,6 +24,7 @@ CONFIG_FIELD_TO_ENV = {
     "aged_close_profit_usd_per_oz": "AGED_CLOSE_PROFIT_USD_PER_OZ",
     "min_locked_edge": "MIN_LOCKED_EDGE",
     "entry_confirm_ms": "ENTRY_CONFIRM_MS",
+    "exit_confirm_ms": "EXIT_CONFIRM_MS",
     "min_order_live_ms": "MIN_ORDER_LIVE_MS",
     "requote_cooldown_ms": "REQUOTE_COOLDOWN_MS",
     "post_exit_reentry_cooldown_ms": "POST_EXIT_REENTRY_COOLDOWN_MS",
@@ -92,6 +93,7 @@ class Settings(BaseSettings):
     aged_close_profit_usd_per_oz: Decimal = Field(default=Decimal("0.10"), alias="AGED_CLOSE_PROFIT_USD_PER_OZ")
     min_locked_edge: Decimal = Field(default=Decimal("0.80"), alias="MIN_LOCKED_EDGE")
     entry_confirm_ms: int = Field(default=1500, alias="ENTRY_CONFIRM_MS")
+    exit_confirm_ms: int | None = Field(default=None, alias="EXIT_CONFIRM_MS")
     min_order_live_ms: int = Field(default=3000, alias="MIN_ORDER_LIVE_MS")
     requote_cooldown_ms: int = Field(default=2000, alias="REQUOTE_COOLDOWN_MS")
     post_exit_reentry_cooldown_ms: int = Field(default=60000, alias="POST_EXIT_REENTRY_COOLDOWN_MS")
@@ -158,6 +160,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "entry_confirm_ms",
+        "exit_confirm_ms",
         "min_order_live_ms",
         "requote_cooldown_ms",
         "post_exit_reentry_cooldown_ms",
@@ -171,8 +174,8 @@ class Settings(BaseSettings):
         "gold_v2_history_start_ms",
     )
     @classmethod
-    def non_negative_or_positive_timing(cls, value: int) -> int:
-        if value < 0:
+    def non_negative_or_positive_timing(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
             raise ValueError("timing values must not be negative")
         return value
 
@@ -193,6 +196,10 @@ class Settings(BaseSettings):
     @property
     def is_dry_run(self) -> bool:
         return self.paper_mode or not self.live_trading
+
+    @property
+    def effective_exit_confirm_ms(self) -> int:
+        return self.exit_confirm_ms if self.exit_confirm_ms is not None else self.entry_confirm_ms
 
 
 def load_settings() -> Settings:

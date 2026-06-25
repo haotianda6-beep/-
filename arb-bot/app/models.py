@@ -375,6 +375,7 @@ class RuntimeConfig(BaseModel):
     aged_close_profit_usd_per_oz: Decimal
     min_locked_edge: Decimal
     entry_confirm_ms: int
+    exit_confirm_ms: int
     min_order_live_ms: int
     requote_cooldown_ms: int
     post_exit_reentry_cooldown_ms: int
@@ -412,6 +413,7 @@ class RuntimeConfigUpdate(BaseModel):
     aged_close_profit_usd_per_oz: Decimal | None = None
     min_locked_edge: Decimal | None = None
     entry_confirm_ms: int | None = None
+    exit_confirm_ms: int | None = None
     min_order_live_ms: int | None = None
     requote_cooldown_ms: int | None = None
     post_exit_reentry_cooldown_ms: int | None = None
@@ -478,6 +480,7 @@ class RuntimeConfigUpdate(BaseModel):
         "max_quote_age_ms",
         "max_hedge_delay_ms",
         "entry_confirm_ms",
+        "exit_confirm_ms",
         "min_order_live_ms",
         "requote_cooldown_ms",
         "post_exit_reentry_cooldown_ms",

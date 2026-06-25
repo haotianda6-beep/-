@@ -1978,6 +1978,7 @@ def _runtime_config() -> RuntimeConfig:
         aged_close_profit_usd_per_oz=settings.aged_close_profit_usd_per_oz,
         min_locked_edge=settings.min_locked_edge,
         entry_confirm_ms=settings.entry_confirm_ms,
+        exit_confirm_ms=settings.effective_exit_confirm_ms,
         min_order_live_ms=settings.min_order_live_ms,
         requote_cooldown_ms=settings.requote_cooldown_ms,
         post_exit_reentry_cooldown_ms=settings.post_exit_reentry_cooldown_ms,

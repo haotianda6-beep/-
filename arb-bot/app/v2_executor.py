@@ -307,7 +307,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         return bool(loss_limit.get("active"))
 
     def _exit_trigger_confirmed(self, current: Decimal, target: Decimal) -> bool:
-        confirm_ms = self.settings.entry_confirm_ms
+        confirm_ms = self.settings.effective_exit_confirm_ms
         if confirm_ms <= 0:
             return True
         now = utc_now_ms()
