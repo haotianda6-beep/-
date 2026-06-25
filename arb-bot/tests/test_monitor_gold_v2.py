@@ -120,6 +120,32 @@ def test_profit_window_ignores_active_order():
     assert monitor.profit_window_reason(status, args) is None
 
 
+def test_summarize_status_includes_add_plan_fields():
+    status = {
+        "state": "PAIR_OPEN",
+        "binance_position_qty": "-1.000",
+        "mt4_positions": [{"side": "BUY", "lots": "0.01"}],
+        "gold_v2": {
+            "selected_entry": {"ready": False},
+            "add_plan": {
+                "ready": False,
+                "reason": "补仓后仍不安全",
+                "current_edge": "3.1",
+                "next_trigger_edge": "3.42",
+                "add_count": 0,
+                "exit_viable": False,
+            },
+            "exit_plan": {"target_exit_spread": "0"},
+        },
+    }
+
+    summary = monitor.summarize_status(status)
+
+    assert summary["add_reason"] == "补仓后仍不安全"
+    assert summary["add_current_edge"] == "3.1"
+    assert summary["add_next_trigger"] == "3.42"
+
+
 def test_monitor_state_persists_cycle_progress(tmp_path):
     state_path = tmp_path / "monitor_state.json"
     state = monitor.MonitorState(

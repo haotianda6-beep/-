@@ -371,6 +371,7 @@ def summarize_status(status: dict[str, Any]) -> dict[str, Any]:
     gold_v2 = status.get("gold_v2") or {}
     selected = gold_v2.get("selected_entry") or {}
     exit_plan = gold_v2.get("exit_plan") or {}
+    add_plan = gold_v2.get("add_plan") or {}
     metrics = status.get("position_metrics") or {}
     execution_plan = status.get("execution_plan") or {}
     active_binance_order = bool(status.get("active_order")) or bool(execution_plan.get("active_binance_order"))
@@ -390,6 +391,12 @@ def summarize_status(status: dict[str, Any]) -> dict[str, Any]:
         "entry_threshold": selected.get("threshold"),
         "entry_ready": selected.get("ready"),
         "entry_reason": selected.get("reason"),
+        "add_ready": add_plan.get("ready"),
+        "add_reason": add_plan.get("reason"),
+        "add_current_edge": add_plan.get("current_edge"),
+        "add_next_trigger": add_plan.get("next_trigger_edge"),
+        "add_count": add_plan.get("add_count"),
+        "add_exit_viable": add_plan.get("exit_viable"),
         "actual_entry_spread": metrics.get("actual_entry_spread"),
         "current_exit_spread": metrics.get("current_exit_spread"),
         "target_exit_spread": exit_plan.get("target_exit_spread"),
