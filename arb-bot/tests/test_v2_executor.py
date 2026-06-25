@@ -72,6 +72,24 @@ def add_plan(price: str = "105") -> dict:
     }
 
 
+def add_plan_temporarily_blocked_after_trigger(reason: str = "补仓后仍不安全") -> dict:
+    return {
+        "selected_entry": {"ready": False, "reason": "已有持仓"},
+        "add_plan": {
+            "enabled": True,
+            "ready": False,
+            "reason": reason,
+            "base_edge": "2",
+            "current_edge": "3.5",
+            "next_trigger_edge": "3",
+            "quantity_oz": "1",
+            "binance_side": "SELL",
+            "binance_price": "105",
+            "mt4_follow_side": "BUY",
+        },
+    }
+
+
 def exit_plan(target: str = "2") -> dict:
     return {"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": target}}
 
@@ -1040,6 +1058,42 @@ async def test_v2_add_position_waits_for_confirm_before_order(tmp_path):
     assert executor.active_order is not None
     assert executor.adding_to_pair is True
     assert run.last_error is None
+
+
+@pytest.mark.asyncio
+async def test_v2_add_confirm_survives_temporary_safety_block(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", MAX_ADD_COUNT=1, ENTRY_CONFIRM_MS=1500)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("103"),
+        mt4_entry_price=Decimal("100"),
+        binance_order_id="entry",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("3"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+
+    await executor.step(add_plan("105"))
+    assert executor.add_ready_since_ms > 0
+    executor.add_ready_since_ms = utc_now_ms() - cfg.entry_confirm_ms
+
+    await executor.step(add_plan_temporarily_blocked_after_trigger())
+
+    assert executor.add_ready_since_ms > 0
+    assert run.state == StrategyState.PAIR_OPEN
+    assert run.last_error == "补仓后仍不安全"
+
+    await executor.step(add_plan("105"))
+
+    assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert executor.active_order is not None
+    assert executor.adding_to_pair is True
 
 
 @pytest.mark.asyncio

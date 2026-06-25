@@ -14,7 +14,8 @@ class V2AddMixin:
     async def _maybe_place_add(self, plan_status: dict[str, Any]) -> bool:
         pair = self.runtime.open_pair
         plan = plan_status.get("add_plan") or {}
-        if not pair or not plan.get("ready"):
+        trigger_seen = self._add_trigger_seen(plan)
+        if not pair or not trigger_seen:
             self.add_ready_since_ms = 0
             self._clear_add_confirm_message()
             if not pair:
@@ -24,6 +25,9 @@ class V2AddMixin:
         if self._entry_requote_blocked():
             return False
         if not self._add_trigger_confirmed(plan):
+            return False
+        if not plan.get("ready"):
+            self.runtime.last_error = plan.get("reason") or "V2 补仓触发后等待安全校验通过"
             return False
         side = Side(plan["binance_side"])
         qty = Decimal(str(plan["quantity_oz"]))
@@ -48,6 +52,16 @@ class V2AddMixin:
         self.runtime.last_error = None
         self.storage.record_event("v2_add_order", {**order.model_dump(mode="json"), "add_plan": plan})
         return True
+
+    def _add_trigger_seen(self, plan: dict[str, Any]) -> bool:
+        if not plan.get("enabled"):
+            return False
+        try:
+            current = Decimal(str(plan.get("current_edge")))
+            trigger = Decimal(str(plan.get("next_trigger_edge")))
+        except Exception:
+            return bool(plan.get("ready"))
+        return current >= trigger
 
     def _add_trigger_confirmed(self, plan: dict[str, Any]) -> bool:
         confirm_ms = self.settings.entry_confirm_ms
