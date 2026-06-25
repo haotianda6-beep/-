@@ -116,6 +116,7 @@ GOLD_V2_BAR_FAILURE_RETRY_MS = 30_000
 GOLD_V2_EXIT_BUFFER_LOOKBACK_MS = 30 * 60 * 1000
 GOLD_V2_EXIT_BUFFER_MOVE_PERCENTILE = 70
 GOLD_V2_EXIT_BUFFER_MIN_POINTS = 8
+GOLD_V2_FOLLOW_MOVE_BUDGET_MS = 1000
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 MT4_DIR = Path(__file__).resolve().parents[1] / "mt4"
 RUNTIME_STATE_PATH = settings.sqlite_path.parent / "runtime_state.json"
@@ -2199,7 +2200,7 @@ def _exit_follow_buffer_usd_per_oz(swap_info, mt4_bars: list[HistoryBar] | None 
     point = swap_info.point or Decimal("0.01")
     configured = (Decimal(settings.mt4_slippage_points) * point) + settings.mt4_close_extra_buffer_usd
     recent_move = mt4_bridge.recent_move_budget(
-        settings.max_hedge_delay_ms,
+        min(settings.max_hedge_delay_ms, GOLD_V2_FOLLOW_MOVE_BUDGET_MS),
         percentile=GOLD_V2_EXIT_BUFFER_MOVE_PERCENTILE,
         min_points=GOLD_V2_EXIT_BUFFER_MIN_POINTS,
     )

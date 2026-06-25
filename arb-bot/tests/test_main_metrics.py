@@ -8,6 +8,7 @@ from app.models import OpenPair, PairDirection
 from app.main import (
     _dynamic_close_spread,
     _effective_close_profit_usd_per_oz,
+    _exit_follow_buffer_usd_per_oz,
     _estimate_mt4_swap,
     _immediate_close_net,
     _projected_close_net_after_next_settlement,
@@ -55,6 +56,23 @@ def test_effective_close_profit_relaxes_positive_target_after_timeout(monkeypatc
     )
 
     assert _effective_close_profit_usd_per_oz(pair) == Decimal("0.01")
+
+
+def test_exit_follow_buffer_uses_normal_follow_window_not_timeout(monkeypatch):
+    calls = []
+
+    def fake_recent_move_budget(lookback_ms, percentile, min_points):
+        calls.append((lookback_ms, percentile, min_points))
+        return Decimal("0.20")
+
+    monkeypatch.setattr(main.settings, "max_hedge_delay_ms", 10_000)
+    monkeypatch.setattr(main.settings, "mt4_slippage_points", 0)
+    monkeypatch.setattr(main.settings, "mt4_close_extra_buffer_usd", Decimal("0.80"))
+    monkeypatch.setattr(main.mt4_bridge, "recent_move_budget", fake_recent_move_budget)
+    swap_info = SimpleNamespace(point=Decimal("0.01"))
+
+    assert _exit_follow_buffer_usd_per_oz(swap_info) == Decimal("1.00")
+    assert calls[0][0] == 1000
 
 
 def test_mt4_swap_estimate_uses_triple_swap_weekday(monkeypatch):
