@@ -124,6 +124,7 @@ async def test_v2_entry_and_exit_use_binance_post_only_then_mt4_follow(tmp_path)
     assert run.state == StrategyState.IDLE
     assert run.open_pair is None
     assert all(order.is_maker for order in client._orders.values())
+    assert store.daily_pnl() == Decimal("1.3")
 
 
 @pytest.mark.asyncio

@@ -29,6 +29,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.close_command_id: str | None = None
         self.close_command_tickets: dict[str, int] = {}
         self.pending_close_tickets: set[int] = set()
+        self.close_mt4_qty = Decimal("0")
+        self.close_mt4_notional = Decimal("0")
         self.carry_entry_qty = Decimal("0")
         self.carry_entry_notional = Decimal("0")
         self.carry_entry_order_ids: list[str] = []
@@ -75,6 +77,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.close_command_id = None
         self.close_command_tickets = {}
         self.pending_close_tickets = set()
+        self.close_mt4_qty = Decimal("0")
+        self.close_mt4_notional = Decimal("0")
         self.carry_entry_qty = Decimal("0")
         self.carry_entry_notional = Decimal("0")
         self.carry_entry_order_ids = []
@@ -360,6 +364,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             self.runtime.state = StrategyState.PAIR_OPEN
             self.runtime.last_error = "V2 没有可平的 MT4 持仓票，已回到实盘对账恢复。"
             return
+        self.close_mt4_qty = Decimal("0")
+        self.close_mt4_notional = Decimal("0")
         self.close_started_ms = utc_now_ms()
         self.runtime.state = StrategyState.CLOSING_MT4
         self.storage.record_event(
@@ -415,21 +421,65 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         pair_id = self.runtime.open_pair.pair_id if self.runtime.open_pair else None
         if ticket is not None:
             self.pending_close_tickets.discard(ticket)
+        if report.fill_price is not None and report.lots > 0:
+            closed_qty = report.lots * self.settings.mt4_lot_size_oz
+            self.close_mt4_qty += closed_qty
+            self.close_mt4_notional += report.fill_price * closed_qty
         self.close_command_tickets.pop(report.command_id, None)
         self.storage.record_event("v2_pair_close_ticket", {"pair_id": pair_id, "ticket": ticket})
         if self.pending_close_tickets:
             return
-        tickets = self.runtime.open_pair.mt4_tickets if self.runtime.open_pair else []
+        pair = self.runtime.open_pair
+        tickets = pair.mt4_tickets if pair else []
+        if pair:
+            self._record_closed_pair_pnl(pair, self.active_order)
         self.storage.record_event("v2_pair_closed", {"pair_id": pair_id, "tickets": tickets})
         self.runtime.open_pair = None
         self.active_order = None
         self.close_command_id = None
         self.close_command_tickets = {}
         self.pending_close_tickets = set()
+        self.close_mt4_qty = Decimal("0")
+        self.close_mt4_notional = Decimal("0")
         self._clear_exit_carry()
         self.last_closed_ms = utc_now_ms()
         self.runtime.state = StrategyState.IDLE
         self.runtime.last_error = None
+
+    def _record_closed_pair_pnl(self, pair: OpenPair, exit_order: OrderUpdate | None) -> None:
+        if not exit_order or exit_order.executed_qty <= 0 or exit_order.avg_price <= 0 or self.close_mt4_qty <= 0:
+            self.storage.record_event(
+                "v2_pair_pnl_not_recorded",
+                {
+                    "pair_id": pair.pair_id,
+                    "reason": "缺少币安平仓均价或MT4平仓回报",
+                    "binance_exit_order": exit_order.model_dump(mode="json") if exit_order else None,
+                    "mt4_close_qty": str(self.close_mt4_qty),
+                },
+            )
+            return
+        qty = min(pair.quantity_oz, exit_order.executed_qty, self.close_mt4_qty)
+        mt4_exit_price = self.close_mt4_notional / self.close_mt4_qty
+        if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            binance_pnl = (pair.binance_entry_price - exit_order.avg_price) * qty
+            mt4_pnl = (mt4_exit_price - pair.mt4_entry_price) * qty
+        else:
+            binance_pnl = (exit_order.avg_price - pair.binance_entry_price) * qty
+            mt4_pnl = (pair.mt4_entry_price - mt4_exit_price) * qty
+        realized = pair.realized_pnl + binance_pnl + mt4_pnl
+        self.storage.record_pnl(pair.pair_id, realized)
+        self.storage.record_event(
+            "v2_pair_pnl_recorded",
+            {
+                "pair_id": pair.pair_id,
+                "realized_pnl": str(realized),
+                "binance_pnl": str(binance_pnl),
+                "mt4_pnl": str(mt4_pnl),
+                "qty": str(qty),
+                "binance_exit_price": str(exit_order.avg_price),
+                "mt4_exit_price": str(mt4_exit_price),
+            },
+        )
 
     async def _refresh_active_order(self) -> OrderUpdate:
         assert self.active_order is not None
