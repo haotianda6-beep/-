@@ -47,6 +47,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.active_add_base_edge: Decimal | None = None
         self.active_add_trigger_edge: Decimal | None = None
         self.post_add_exit_block_until_ms = 0
+        self.repairing_binance_only = False
+        self.repair_existing_qty = Decimal("0")
 
     async def step(self, plan_status: dict[str, Any]) -> None:
         if self._process_mt4_reports():
@@ -94,6 +96,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.active_add_base_edge = None
         self.active_add_trigger_edge = None
         self.post_add_exit_block_until_ms = 0
+        self.repairing_binance_only = False
+        self.repair_existing_qty = Decimal("0")
 
     async def cancel_active_order(self, reason: str) -> None:
         if not self.active_order:
@@ -160,6 +164,9 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.storage.record_event("v2_entry_order", order.model_dump(mode="json"))
 
     async def _check_entry_order(self, plan_status: dict[str, Any]) -> None:
+        if self.repairing_binance_only:
+            await self._check_binance_restore_order()
+            return
         if not self.active_order:
             self.runtime.state = StrategyState.IDLE
             return
@@ -344,6 +351,22 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             self.runtime.state = StrategyState.PAIR_OPEN
             self.runtime.last_error = "V2 平仓缺少 MT4 票号，已回到实盘对账恢复。"
             return
+        if order is not None and order.executed_qty < pair.quantity_oz:
+            self.storage.record_event(
+                "v2_exit_binance_qty_short_waiting_repair",
+                {
+                    "pair_id": pair.pair_id,
+                    "pair_quantity_oz": str(pair.quantity_oz),
+                    "binance_exit_order": order.model_dump(mode="json"),
+                },
+            )
+            self.active_order = None
+            self.runtime.state = StrategyState.PAIR_OPEN
+            self.runtime.last_error = (
+                f"币安平仓成交 {order.executed_qty} XAU 小于组合 {pair.quantity_oz} XAU，"
+                "禁止全平 MT4，等待下一轮实盘对账自动修复。"
+            )
+            return
         lots_by_ticket = self._close_lots_by_ticket(tickets, pair.quantity_oz)
         self.close_command_tickets = {}
         self.pending_close_tickets = set()
@@ -385,6 +408,80 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         per_ticket_qty = quantity_oz / Decimal(len(tickets))
         per_ticket_lots = lots_from_qty(self.settings, per_ticket_qty)
         return {ticket: per_ticket_lots for ticket in tickets}
+
+    def start_binance_restore(self, order: OrderUpdate, existing_qty: Decimal) -> None:
+        self.active_order = order
+        self.order_created_ms = utc_now_ms()
+        self.repairing_binance_only = True
+        self.repair_existing_qty = max(Decimal("0"), existing_qty)
+        self.runtime.state = StrategyState.QUOTING_BINANCE_ENTRY
+        self.runtime.last_error = "币安持仓数量偏少，已挂 Post Only 同向补齐单；MT4 不重复跟随。"
+        self.storage.record_event(
+            "v2_binance_restore_order_started",
+            {"existing_qty": str(existing_qty), **order.model_dump(mode="json")},
+        )
+
+    async def _check_binance_restore_order(self) -> None:
+        if not self.active_order:
+            self.repairing_binance_only = False
+            self.repair_existing_qty = Decimal("0")
+            self.runtime.state = StrategyState.PAIR_OPEN if self.runtime.open_pair else StrategyState.IDLE
+            return
+        order = await self._refresh_active_order()
+        if order.status in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED} and order.executed_qty <= 0:
+            self.storage.record_event("v2_binance_restore_order_terminal", order.model_dump(mode="json"))
+            self.active_order = None
+            self.repairing_binance_only = False
+            self.repair_existing_qty = Decimal("0")
+            self.runtime.state = StrategyState.PAIR_OPEN if self.runtime.open_pair else StrategyState.IDLE
+            return
+        if order.executed_qty > 0 and order.status in TERMINAL:
+            self._complete_binance_restore(order)
+            return
+        if order.status == OrderStatus.FILLED:
+            self._complete_binance_restore(order)
+            return
+        if order.executed_qty > 0:
+            self.runtime.last_error = f"币安缺口补齐单已部分成交 {order.executed_qty}/{order.orig_qty} XAU，继续等待完全成交。"
+            return
+        if utc_now_ms() - self.order_created_ms > max(self.settings.min_order_live_ms, self.settings.max_order_age_ms):
+            await self.cancel_active_order("币安缺口补齐限价单超时重挂")
+
+    def _complete_binance_restore(self, order: OrderUpdate) -> None:
+        pair = self.runtime.open_pair
+        if not pair:
+            self.storage.record_event("v2_binance_restore_without_pair", order.model_dump(mode="json"))
+            self.active_order = None
+            self.repairing_binance_only = False
+            self.repair_existing_qty = Decimal("0")
+            self.runtime.state = StrategyState.IDLE
+            self.runtime.last_error = "币安缺口补齐成交但组合记录缺失，等待实盘对账。"
+            return
+        filled_qty = max(Decimal("0"), order.executed_qty)
+        used_qty = min(filled_qty, max(Decimal("0"), pair.quantity_oz - self.repair_existing_qty))
+        new_qty = self.repair_existing_qty + used_qty
+        updates: dict[str, Any] = {}
+        if used_qty > 0 and new_qty > 0 and order.avg_price > 0:
+            updates["binance_entry_price"] = ((pair.binance_entry_price * self.repair_existing_qty) + (order.avg_price * used_qty)) / new_qty
+            updates["binance_order_id"] = f"{pair.binance_order_id} / {order.order_id}"
+        if updates:
+            self.runtime.open_pair = pair.model_copy(update=updates)
+        self.storage.record_event(
+            "v2_binance_restore_completed",
+            {
+                "pair_id": pair.pair_id,
+                "existing_qty": str(self.repair_existing_qty),
+                "filled_qty": str(filled_qty),
+                "used_qty": str(used_qty),
+                "target_qty": str(pair.quantity_oz),
+                "order": order.model_dump(mode="json"),
+            },
+        )
+        self.active_order = None
+        self.repairing_binance_only = False
+        self.repair_existing_qty = Decimal("0")
+        self.runtime.state = StrategyState.PAIR_OPEN
+        self.runtime.last_error = None if new_qty >= pair.quantity_oz else "币安缺口已部分补齐，等待下一轮对账继续补齐。"
 
     def _process_mt4_reports(self) -> bool:
         reports = self.mt4.drain_reports()

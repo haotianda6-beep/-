@@ -5,7 +5,7 @@ import pytest
 
 from app.binance_client import BinanceError, PaperBinanceClient
 from app.config import Settings
-from app.models import Mt4Position, Mt4Report, Mt4Tick, OpenPair, OrderStatus, OrderUpdate, Side, StrategyState, utc_now_ms
+from app.models import Mt4Position, Mt4Report, Mt4Tick, OpenPair, OrderRequest, OrderStatus, OrderUpdate, Side, StrategyState, utc_now_ms
 from app.mt4_bridge import Mt4Bridge
 from app.storage import Storage
 from app.v2_executor import GoldV2Executor
@@ -590,6 +590,100 @@ async def test_v2_mt4_close_failure_retries_after_report_without_pause(tmp_path)
     assert retry_command["ticket"] == 7
     assert retry_command["command_id"] != failed_command["command_id"]
     assert "重新发送" in run.last_error
+
+
+def test_v2_partial_binance_exit_never_closes_full_mt4_ticket(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    mt4.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("99"),
+            ask=Decimal("99.2"),
+            positions=[
+                Mt4Position(
+                    ticket=7,
+                    symbol="XAUUSD",
+                    side=Side.BUY,
+                    lots=Decimal("0.01"),
+                    open_price=Decimal("99"),
+                )
+            ],
+        )
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    partial_exit = OrderUpdate(
+        order_id="partial-exit",
+        client_order_id="arb_exit_partial",
+        symbol="XAUUSDT",
+        side=Side.BUY,
+        status=OrderStatus.FILLED,
+        price=Decimal("100"),
+        orig_qty=Decimal("0.684"),
+        executed_qty=Decimal("0.684"),
+        avg_price=Decimal("100"),
+        reduce_only=True,
+    )
+
+    executor._queue_mt4_close(partial_exit)
+
+    assert mt4.next_command() == {"command": "NONE"}
+    assert run.state == StrategyState.PAIR_OPEN
+    assert "禁止全平 MT4" in run.last_error
+
+
+@pytest.mark.asyncio
+async def test_v2_binance_restore_fill_does_not_queue_mt4_follow(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    order = await client.place_post_only_order(
+        OrderRequest(
+            symbol="XAUUSDT",
+            side=Side.SELL,
+            quantity=Decimal("0.316"),
+            price=Decimal("101"),
+            client_order_id="arb_restore_test",
+            position_side="SHORT",
+        )
+    )
+    executor.start_binance_restore(order, Decimal("0.684"))
+    await client.simulate_fill(order.order_id, Decimal("0.316"), Decimal("101"))
+
+    await executor.step({})
+
+    assert mt4.next_command() == {"command": "NONE"}
+    assert run.state == StrategyState.PAIR_OPEN
+    assert run.open_pair is not None
+    assert run.open_pair.binance_entry_price == Decimal("101")
+    assert executor.repairing_binance_only is False
 
 
 @pytest.mark.asyncio

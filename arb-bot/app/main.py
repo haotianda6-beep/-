@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
@@ -17,7 +18,12 @@ from app.binance_client import BinanceBaseClient, BinanceError, BinanceFuturesCl
 from app.config import Settings, existing_env_paths, load_settings, update_local_config_file, update_mode_file
 from app.logger import setup_logging
 from app.history import build_spread_analysis, fetch_binance_klines
-from app.live_reconcile import is_transient_live_reconcile_error, open_pair_live_reconcile_action, orphan_live_position_action
+from app.live_reconcile import (
+    is_transient_live_reconcile_error,
+    open_pair_binance_restore_quantity,
+    open_pair_live_reconcile_action,
+    orphan_live_position_action,
+)
 from app.models import (
     BinancePositionSnapshot,
     EngineStatus,
@@ -256,6 +262,17 @@ async def _cancel_orphan_arb_orders(reason: str) -> None:
                 },
             )
             if not final_order.reduce_only and final_order.executed_qty > 0:
+                if final_order.client_order_id.startswith("arb_restore_") and strategy.open_pair is not None:
+                    storage.record_event(
+                        "orphan_restore_fill_preserved",
+                        {
+                            "reason": reason,
+                            "order_id": final_order.order_id,
+                            "client_order_id": final_order.client_order_id,
+                            "executed_qty": str(final_order.executed_qty),
+                        },
+                    )
+                    continue
                 await _emergency_close_binance_fill(final_order, final_order.executed_qty, f"{reason} 时发现遗留开仓单已有成交")
         except Exception as exc:  # noqa: BLE001
             logger.warning("failed to cancel orphan Binance order during %s: %s", reason, str(exc)[:160])
@@ -1582,6 +1599,34 @@ async def _reconcile_open_pair_live_state() -> bool:
         return True
     if action == "pause":
         mt4_symbol_positions = [position for position in mt4_positions if position.symbol == settings.mt4_symbol]
+        restore_qty = open_pair_binance_restore_quantity(
+            strategy.open_pair,
+            binance_qty,
+            mt4_symbol_positions,
+            settings.mt4_symbol,
+            settings.mt4_lot_size_oz,
+        )
+        if restore_qty is not None:
+            if restore_qty < binance_client.filters.min_qty:
+                strategy.state = StrategyState.PAIR_OPEN
+                strategy.last_error = f"币安缺口 {restore_qty} XAU 小于最小下单量，保持监控并等待下一轮对账。"
+                storage.record_event(
+                    "open_pair_live_mismatch_restore_too_small",
+                    {
+                        "pair_id": strategy.open_pair.pair_id,
+                        "binance_position_qty": str(binance_qty),
+                        "restore_qty": str(restore_qty),
+                        "min_qty": str(binance_client.filters.min_qty),
+                    },
+                )
+                return True
+            if await _queue_binance_restore_after_live_mismatch(
+                binance_qty,
+                restore_qty,
+                "组合持仓与实盘数量不一致，自动优先补齐币安缺口",
+            ):
+                _persist_runtime_state()
+                return True
         if binance_qty == 0 and mt4_symbol_positions:
             v2_executor.clear()
             if strategy.queue_mt4_close_after_binance_flat_mismatch(mt4_symbol_positions):
@@ -1642,6 +1687,59 @@ async def _reconcile_open_pair_live_state() -> bool:
         )
         return True
     return False
+
+
+async def _queue_binance_restore_after_live_mismatch(binance_qty: Decimal, restore_qty: Decimal, reason: str) -> bool:
+    pair = strategy.open_pair
+    if pair is None or restore_qty <= 0:
+        return False
+    if v2_executor.active_order is not None:
+        strategy.last_error = f"{reason}；币安缺口补齐挂单已存在，等待成交。"
+        return True
+    quote = binance_client.latest_quote()
+    if quote is None:
+        strategy.state = StrategyState.PAIR_OPEN
+        strategy.last_error = f"{reason}；币安报价暂缺，等待报价恢复后继续补齐。"
+        storage.record_event(
+            "live_mismatch_restore_wait_quote",
+            {"reason": reason, "binance_position_qty": str(binance_qty), "restore_qty": str(restore_qty)},
+        )
+        return True
+    if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+        side = Side.SELL
+        price = round_up(quote.ask + settings.binance_entry_offset_usd, binance_client.filters.tick_size)
+        position_side = "SHORT"
+    else:
+        side = Side.BUY
+        price = round_down(quote.bid - settings.binance_entry_offset_usd, binance_client.filters.tick_size)
+        position_side = "LONG"
+    try:
+        order = await binance_client.place_post_only_order(
+            OrderRequest(
+                symbol=settings.binance_symbol,
+                side=side,
+                quantity=restore_qty,
+                price=price,
+                client_order_id=f"arb_restore_{uuid4().hex[:20]}",
+                reduce_only=False,
+                position_side=position_side,
+            )
+        )
+    except BinanceError as exc:
+        strategy.state = StrategyState.PAIR_OPEN
+        strategy.last_error = f"{reason}；币安补齐挂单暂时失败，持续重试：{str(exc)[:160]}"
+        storage.record_event(
+            "live_mismatch_restore_order_failed",
+            {"reason": reason, "binance_position_qty": str(binance_qty), "restore_qty": str(restore_qty), "error": str(exc)[:160]},
+        )
+        return True
+    v2_executor.start_binance_restore(order, abs(binance_qty))
+    strategy.last_error = f"{reason}；已挂币安 Post Only 同向补齐单，MT4 不重复跟随。"
+    storage.record_event(
+        "live_mismatch_restore_order",
+        {"reason": reason, "binance_position_qty": str(binance_qty), "restore_qty": str(restore_qty), **order.model_dump(mode="json")},
+    )
+    return True
 
 
 async def _reconcile_orphan_live_state() -> bool:

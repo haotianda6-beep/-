@@ -1,6 +1,11 @@
 from decimal import Decimal
 
-from app.live_reconcile import is_transient_live_reconcile_error, open_pair_live_reconcile_action, orphan_live_position_action
+from app.live_reconcile import (
+    is_transient_live_reconcile_error,
+    open_pair_binance_restore_quantity,
+    open_pair_live_reconcile_action,
+    orphan_live_position_action,
+)
 from app.models import Mt4Position, OpenPair, PairDirection, Side
 
 
@@ -60,6 +65,26 @@ def test_open_pair_reconcile_pauses_when_binance_quantity_mismatches() -> None:
     )
 
     assert action == "pause"
+
+
+def test_open_pair_restore_quantity_when_binance_is_underfilled_but_mt4_matches() -> None:
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("4152.68"),
+        mt4_entry_price=Decimal("4149.47"),
+        binance_order_id="7262226459",
+        mt4_tickets=[76804334],
+    )
+
+    restore_qty = open_pair_binance_restore_quantity(
+        pair,
+        Decimal("-0.684"),
+        [Mt4Position(ticket=76804334, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("4149.47"))],
+        "XAUUSD",
+    )
+
+    assert restore_qty == Decimal("0.316")
 
 
 def test_open_pair_reconcile_pauses_when_mt4_quantity_mismatches() -> None:
