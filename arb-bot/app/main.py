@@ -117,6 +117,7 @@ GOLD_V2_BAR_FAILURE_RETRY_MS = 30_000
 GOLD_V2_EXIT_BUFFER_LOOKBACK_MS = 30 * 60 * 1000
 GOLD_V2_EXIT_BUFFER_MOVE_PERCENTILE = 70
 GOLD_V2_EXIT_BUFFER_MIN_POINTS = 8
+GOLD_V2_ENTRY_MOVE_BUDGET_MS = 10_000
 GOLD_V2_FOLLOW_MOVE_BUDGET_MS = 1000
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 MT4_DIR = Path(__file__).resolve().parents[1] / "mt4"
@@ -426,6 +427,11 @@ async def _gold_v2_status(
             binance_bars=binance_bars,
             open_pair=strategy.open_pair,
             metrics=metrics,
+            mt4_tick_move_budget=mt4_bridge.recent_move_budget(
+                min(settings.max_hedge_delay_ms, GOLD_V2_ENTRY_MOVE_BUDGET_MS),
+                percentile=GOLD_V2_EXIT_BUFFER_MOVE_PERCENTILE,
+                min_points=4,
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("gold v2 status unavailable: %s", str(exc)[:160])

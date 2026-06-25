@@ -275,6 +275,30 @@ def test_v2_slippage_budget_includes_recent_mt4_movement(tmp_path):
     assert status["short_entry"]["expected_locked_edge"] == Decimal("3.3")
 
 
+def test_v2_slippage_budget_prefers_realtime_tick_movement(tmp_path):
+    cfg = settings(tmp_path, MT4_SLIPPAGE_POINTS=0)
+    store = Storage(cfg.sqlite_path)
+    start = utc_now_ms() - 10 * 60_000
+    mt4_bars = [bar(start + index * 60_000, Decimal("4000") + Decimal(index)) for index in range(10)]
+    binance_bars = [bar(item.open_time_ms, item.close + Decimal("2.0")) for item in mt4_bars]
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4010.0"), ask=Decimal("4010.2")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("4007.0"), ask=Decimal("4007.2")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+        mt4_tick_move_budget=Decimal("0.1"),
+    )
+
+    assert status["mt4_slippage_budget"] == Decimal("0.4")
+    assert status["mt4_move_budget_source"] == "实时tick"
+
+
 def test_v2_entry_slippage_budget_excludes_mt4_close_extra_buffer(tmp_path):
     cfg = settings(tmp_path, MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("0.8"))
     store = Storage(cfg.sqlite_path)

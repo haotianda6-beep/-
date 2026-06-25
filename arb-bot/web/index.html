@@ -1469,8 +1469,11 @@
           plan.mt4_live_spread_usd_per_oz !== undefined
             ? `；MT4实时点差 ${fmt(plan.mt4_live_spread_usd_per_oz)} 美元`
             : "";
+        const moveSource = plan.mt4_move_budget_source
+          ? `；预算来源 ${plan.mt4_move_budget_source}`
+          : "";
         $("v2RiskLine").textContent =
-          `${policy || "禁止币安市价单"}；MT4滑点预算 ${fmt(plan.mt4_slippage_budget)} 美元${liveSpread}`;
+          `${policy || "禁止币安市价单"}；MT4滑点预算 ${fmt(plan.mt4_slippage_budget)} 美元${liveSpread}${moveSource}`;
       }
 
       function renderLimitOrder(data) {

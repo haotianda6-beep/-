@@ -28,13 +28,15 @@ def build_gold_v2_status(
     binance_bars: list[HistoryBar],
     open_pair: OpenPair | None,
     metrics: PositionMetrics | None,
+    mt4_tick_move_budget: Decimal | None = None,
 ) -> dict:
     now_ms = utc_now_ms()
     mt4_bars = storage.get_bars("mt4", settings.mt4_symbol, "1m", now_ms - LOOKBACK_MS, now_ms)
     short_range, long_range = _spread_ranges(mt4_bars, binance_bars)
     short_threshold = _entry_threshold(short_range, settings.open_min_edge)
     long_threshold = _entry_threshold(long_range, settings.open_min_edge)
-    slippage_budget = _mt4_slippage_budget(settings, mt4_quote, mt4_bars)
+    slippage_budget = _mt4_slippage_budget(settings, mt4_quote, mt4_bars, mt4_tick_move_budget)
+    move_budget_source = "实时tick" if mt4_tick_move_budget is not None else "1分钟K线"
 
     short_plan = _entry_plan(
         direction=PairDirection.BINANCE_SHORT_MT4_LONG,
@@ -71,6 +73,7 @@ def build_gold_v2_status(
         "lookback_minutes": 30,
         "threshold_rule": "最近30分钟价差最低到最高之间取70%位置，并且不能低于手动最小开仓价差。",
         "mt4_slippage_budget": slippage_budget,
+        "mt4_move_budget_source": move_budget_source,
         "mt4_live_spread_usd_per_oz": live_spread_usd_per_oz(mt4_quote),
         "short_range": short_range,
         "long_range": long_range,
@@ -492,10 +495,16 @@ def _add_base_edge(pair: OpenPair, metrics: PositionMetrics | None) -> Decimal |
     return pair.base_edge or (metrics.actual_entry_spread if metrics else None)
 
 
-def _mt4_slippage_budget(settings: Settings, mt4_quote: MarketQuote | None = None, mt4_bars: list[HistoryBar] | None = None) -> Decimal:
+def _mt4_slippage_budget(
+    settings: Settings,
+    mt4_quote: MarketQuote | None = None,
+    mt4_bars: list[HistoryBar] | None = None,
+    tick_move_budget: Decimal | None = None,
+) -> Decimal:
     configured = slippage_budget_usd_per_oz(settings.mt4_slippage_points, XAU_POINT_VALUE, mt4_quote)
     base = max(configured, DEFAULT_SLIPPAGE_BUDGET)
-    return base + _mt4_recent_move_budget(mt4_bars or [])
+    recent = tick_move_budget if tick_move_budget is not None else _mt4_recent_move_budget(mt4_bars or [])
+    return base + recent
 
 
 def _mt4_recent_move_budget(mt4_bars: list[HistoryBar]) -> Decimal:
