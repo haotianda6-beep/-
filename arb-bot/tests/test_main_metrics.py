@@ -7,6 +7,7 @@ import app.mt4_rollover as mt4_rollover
 from app.models import OpenPair, PairDirection
 from app.main import (
     _dynamic_close_spread,
+    _effective_close_profit_usd_per_oz,
     _estimate_mt4_swap,
     _immediate_close_net,
     _projected_close_net_after_next_settlement,
@@ -36,6 +37,24 @@ def test_dynamic_close_spread_does_not_go_negative_when_buffer_is_large():
         exit_follow_buffer=Decimal("2.70"),
         close_profit=Decimal("0.20"),
     ) == Decimal("0")
+
+
+def test_effective_close_profit_uses_lower_aged_target_after_timeout(monkeypatch):
+    now_ms = 1_000_000
+    monkeypatch.setattr(main, "utc_now_ms", lambda: now_ms)
+    monkeypatch.setattr(main.settings, "max_pair_age_minutes", 10)
+    monkeypatch.setattr(main.settings, "close_profit_usd_per_oz", Decimal("0.20"))
+    monkeypatch.setattr(main.settings, "aged_close_profit_usd_per_oz", Decimal("0.01"))
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("4000"),
+        mt4_entry_price=Decimal("3998"),
+        binance_order_id="entry",
+        opened_ms=now_ms - 11 * 60_000,
+    )
+
+    assert _effective_close_profit_usd_per_oz(pair) == Decimal("0.01")
 
 
 def test_mt4_swap_estimate_uses_triple_swap_weekday(monkeypatch):
