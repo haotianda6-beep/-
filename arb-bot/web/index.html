@@ -1382,7 +1382,7 @@
         $("spreadLine").textContent =
           b && m ? quoteSpreadText(b, m) : "-";
         renderAccounts(data);
-        renderV2Plan(data.gold_v2);
+        renderV2Plan(data.gold_v2, data.config);
         renderLimitOrder(data);
         renderPositions(data);
 
@@ -1408,7 +1408,7 @@
         renderConfig(data.config);
       }
 
-      function renderV2Plan(plan) {
+      function renderV2Plan(plan, config = null) {
         if (!plan) {
           $("v2ModeLine").textContent = "等待新版观察计划";
           $("v2ThresholdLine").textContent = "-";
@@ -1446,12 +1446,20 @@
         }
 
         const add = plan.add_plan || {};
+        const maxAddCount = Number(config?.max_add_count || 0);
+        const addConfigured = maxAddCount > 0;
+        const addPrefix = addConfigured
+          ? `补仓配置已开启，最多 ${fmt(maxAddCount)} 次`
+          : "补仓配置已关闭";
         if (
           add.next_trigger_edge !== undefined &&
           add.next_trigger_edge !== null
         ) {
           $("v2AddPlanLine").textContent =
-            `已写入但未启动；第 ${fmt(add.next_add_number)} 次触发价差 ${fmt(add.next_trigger_edge)} 美元`;
+            `${addPrefix}；已补 ${fmt(add.add_count || 0)}/${fmt(add.max_add_count || maxAddCount)} 次，第 ${fmt(add.next_add_number)} 次触发价差 ${fmt(add.next_trigger_edge)} 美元，${add.reason || "等待触发"}`;
+        } else if (addConfigured) {
+          $("v2AddPlanLine").textContent =
+            `${addPrefix}；${add.reason || "等待持仓后计算补仓"}`;
         } else {
           $("v2AddPlanLine").textContent = add.reason || "补仓未启动";
         }

@@ -495,7 +495,7 @@ def _add_base_edge(pair: OpenPair, metrics: PositionMetrics | None) -> Decimal |
 def _mt4_slippage_budget(settings: Settings, mt4_quote: MarketQuote | None = None, mt4_bars: list[HistoryBar] | None = None) -> Decimal:
     configured = slippage_budget_usd_per_oz(settings.mt4_slippage_points, XAU_POINT_VALUE, mt4_quote)
     base = max(configured, DEFAULT_SLIPPAGE_BUDGET)
-    return base + settings.mt4_close_extra_buffer_usd + _mt4_recent_move_budget(mt4_bars or [])
+    return base + _mt4_recent_move_budget(mt4_bars or [])
 
 
 def _mt4_recent_move_budget(mt4_bars: list[HistoryBar]) -> Decimal:

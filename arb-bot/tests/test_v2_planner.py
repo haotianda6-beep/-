@@ -86,7 +86,7 @@ def test_v2_blocks_entry_when_recent_range_has_no_safe_exit(tmp_path):
     assert "安全平仓" in status["short_entry"]["reason"]
 
 
-def test_v2_blocks_entry_until_current_edge_covers_slippage_budget(tmp_path):
+def test_v2_blocks_entry_until_current_edge_covers_entry_slippage_budget(tmp_path):
     cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.0"), MT4_SLIPPAGE_POINTS=0, MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("5.0"))
     store = Storage(cfg.sqlite_path)
     mt4_bars, binance_bars = recent_bars([Decimal("2.0")] * 10)
@@ -96,16 +96,17 @@ def test_v2_blocks_entry_until_current_edge_covers_slippage_budget(tmp_path):
         settings=cfg,
         storage=store,
         filters=filters(),
-        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4002.8"), ask=Decimal("4003.0")),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4002.0"), ask=Decimal("4002.4")),
         mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("4000.0"), ask=Decimal("4000.2")),
         binance_bars=binance_bars,
         open_pair=None,
         metrics=PositionMetrics(),
     )
 
-    assert status["short_entry"]["current_edge"] == Decimal("2.8")
+    assert status["short_entry"]["current_edge"] == Decimal("2.2")
     assert status["short_entry"]["threshold"] == Decimal("2.0")
-    assert status["short_entry"]["required_edge"] == Decimal("7.300")
+    assert status["mt4_slippage_budget"] == Decimal("0.3")
+    assert status["short_entry"]["required_edge"] == Decimal("2.3")
     assert status["short_entry"]["ready"] is False
     assert "安全入场边际" in status["short_entry"]["reason"]
 
@@ -274,7 +275,7 @@ def test_v2_slippage_budget_includes_recent_mt4_movement(tmp_path):
     assert status["short_entry"]["expected_locked_edge"] == Decimal("3.3")
 
 
-def test_v2_entry_slippage_budget_includes_mt4_extra_buffer(tmp_path):
+def test_v2_entry_slippage_budget_excludes_mt4_close_extra_buffer(tmp_path):
     cfg = settings(tmp_path, MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("0.8"))
     store = Storage(cfg.sqlite_path)
     mt4_bars, binance_bars = recent_bars([Decimal("2")] * 10)
@@ -291,7 +292,7 @@ def test_v2_entry_slippage_budget_includes_mt4_extra_buffer(tmp_path):
         metrics=PositionMetrics(),
     )
 
-    assert status["mt4_slippage_budget"] == Decimal("1.3")
+    assert status["mt4_slippage_budget"] == Decimal("0.5")
     assert status["short_entry"]["binance_price"] == Decimal("4003.3")
     assert status["short_entry"]["expected_locked_edge"] == Decimal("3.3")
 
