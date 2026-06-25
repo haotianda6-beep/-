@@ -325,6 +325,7 @@ class PositionMetrics(BaseModel):
     profitable_spread_threshold: Decimal | None = None
     dynamic_close_spread: Decimal | None = None
     close_profit_usd_per_oz: Decimal | None = None
+    max_pair_loss_usdt: Decimal | None = None
     exit_follow_buffer_usd_per_oz: Decimal | None = None
     mt4_live_spread_usd_per_oz: Decimal | None = None
     mt4_spread_protection_usd: Decimal | None = None
@@ -369,6 +370,7 @@ class RuntimeConfig(BaseModel):
     cancel_min_edge: Decimal
     close_max_spread: Decimal
     close_profit_usd_per_oz: Decimal
+    max_pair_loss_usdt: Decimal
     max_pair_age_minutes: int
     aged_close_profit_usd_per_oz: Decimal
     min_locked_edge: Decimal
@@ -405,6 +407,7 @@ class RuntimeConfigUpdate(BaseModel):
     cancel_min_edge: Decimal | None = None
     close_max_spread: Decimal | None = None
     close_profit_usd_per_oz: Decimal | None = None
+    max_pair_loss_usdt: Decimal | None = None
     max_pair_age_minutes: int | None = None
     aged_close_profit_usd_per_oz: Decimal | None = None
     min_locked_edge: Decimal | None = None
@@ -437,6 +440,7 @@ class RuntimeConfigUpdate(BaseModel):
         "cancel_min_edge",
         "close_max_spread",
         "close_profit_usd_per_oz",
+        "max_pair_loss_usdt",
         "aged_close_profit_usd_per_oz",
         "min_locked_edge",
         "max_unhedged_loss_usd_per_oz",

@@ -327,14 +327,20 @@ def _exit_plan(settings: Settings, pair: OpenPair | None, metrics: PositionMetri
         return {"enabled": False, "reason": "当前无组合持仓，不计算平仓价差。"}
     if not metrics or metrics.dynamic_close_spread is None:
         return {"enabled": False, "reason": "等待真实均价、资金费和隔夜费数据后再计算平仓价差。"}
+    loss_limit = _loss_limit_exit_plan(settings, pair, metrics)
     negative_swap = _negative_swap_exit_plan(settings, pair, metrics)
     target_exit_spread = (
+        loss_limit["target_exit_spread"]
+        if loss_limit.get("active") and loss_limit.get("target_exit_spread") is not None
+        else
         negative_swap["target_exit_spread"]
         if negative_swap.get("active") and negative_swap.get("target_exit_spread") is not None
         else metrics.dynamic_close_spread
     )
     reason = "平仓目标来自真实均价、已产生费用和额外利润空间。"
-    if negative_swap.get("active"):
+    if loss_limit.get("active"):
+        reason = loss_limit["reason"]
+    elif negative_swap.get("active"):
         reason = negative_swap["reason"]
     return {
         "enabled": True,
@@ -345,7 +351,30 @@ def _exit_plan(settings: Settings, pair: OpenPair | None, metrics: PositionMetri
         "estimated_net": metrics.estimated_close_net,
         "reason": reason,
         "normal_target_exit_spread": metrics.dynamic_close_spread,
+        "loss_limit": loss_limit,
         "negative_swap": negative_swap,
+    }
+
+
+def _loss_limit_exit_plan(settings: Settings, pair: OpenPair, metrics: PositionMetrics) -> dict:
+    if settings.max_pair_loss_usdt <= 0 or pair.quantity_oz <= 0:
+        return {"active": False, "reason": "组合最大亏损风控未启用。"}
+    if metrics.estimated_close_net is None or metrics.profitable_spread_threshold is None:
+        return {"active": False, "reason": "等待组合净值和保本价差后再判断最大亏损。"}
+    max_loss = settings.max_pair_loss_usdt
+    if metrics.estimated_close_net > -max_loss:
+        return {
+            "active": False,
+            "reason": f"当前预估净值 {metrics.estimated_close_net}，未触发最大亏损 {max_loss}。",
+            "max_loss_usdt": max_loss,
+        }
+    target = max(Decimal("0"), metrics.profitable_spread_threshold + (max_loss / pair.quantity_oz))
+    return {
+        "active": True,
+        "reason": f"组合预估净值 {metrics.estimated_close_net} 已触发最大亏损 {max_loss}，只用币安限价尝试在可控亏损内离场。",
+        "target_exit_spread": target,
+        "estimated_net": metrics.estimated_close_net,
+        "max_loss_usdt": max_loss,
     }
 
 
