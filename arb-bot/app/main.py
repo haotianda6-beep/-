@@ -17,7 +17,7 @@ from app.binance_client import BinanceBaseClient, BinanceError, BinanceFuturesCl
 from app.config import Settings, existing_env_paths, load_settings, update_local_config_file, update_mode_file
 from app.logger import setup_logging
 from app.history import build_spread_analysis, fetch_binance_klines
-from app.live_reconcile import is_transient_live_reconcile_error, open_pair_live_reconcile_action
+from app.live_reconcile import is_transient_live_reconcile_error, open_pair_live_reconcile_action, orphan_live_position_action
 from app.models import (
     BinancePositionSnapshot,
     EngineStatus,
@@ -67,6 +67,7 @@ POSITION_RISK_FAILURE_RETRY_MS = 30_000
 FUNDING_INCOME_CACHE_TTL_MS = 60_000
 FUNDING_INCOME_FAILURE_RETRY_MS = 60_000
 LIVE_PAIR_RECONCILE_INTERVAL_MS = 30_000
+ORPHAN_LIVE_RECONCILE_INTERVAL_MS = 5_000
 HISTORY_MT4_BATCH_WINDOW_MS = 180_000
 HISTORY_BINANCE_ALIGN_WINDOW_MS = 900_000
 HISTORY_EVENT_EXIT_LINK_WINDOW_MS = 600_000
@@ -97,6 +98,9 @@ _runtime_state_cache: str | None = None
 _live_pair_reconcile_ms = 0
 _live_pair_reconcile_error_count = 0
 _live_pair_operation_cooldown_until_ms = 0
+_orphan_live_reconcile_ms = 0
+_orphan_live_guard_active = False
+_orphan_mt4_close_commands: dict[str, int] = {}
 _gold_v2_binance_bars_cache: list[HistoryBar] = []
 _gold_v2_binance_bars_cache_ms = 0
 _gold_v2_binance_bars_failure_ms = 0
@@ -1496,10 +1500,11 @@ async def _strategy_loop() -> None:
                 strategy.last_error = None
             else:
                 if not await _reconcile_open_pair_live_state():
-                    metrics = await _position_metrics()
-                    await v2_executor.step(
-                        await _gold_v2_status(metrics, binance_client.latest_quote(), mt4_bridge.latest_quote())
-                    )
+                    if not await _reconcile_orphan_live_state():
+                        metrics = await _position_metrics()
+                        await v2_executor.step(
+                            await _gold_v2_status(metrics, binance_client.latest_quote(), mt4_bridge.latest_quote())
+                        )
         except Exception as exc:  # noqa: BLE001
             strategy.last_error = str(exc)[:240]
             logger.exception("strategy loop error")
@@ -1637,6 +1642,100 @@ async def _reconcile_open_pair_live_state() -> bool:
         )
         return True
     return False
+
+
+async def _reconcile_orphan_live_state() -> bool:
+    global _orphan_live_reconcile_ms, _orphan_live_guard_active, _orphan_mt4_close_commands
+    if settings.is_dry_run or strategy.open_pair is not None or v2_executor.active_order is not None:
+        _orphan_live_guard_active = False
+        return False
+    if strategy.state not in {StrategyState.IDLE, StrategyState.PAIR_OPEN, StrategyState.PAUSED}:
+        return False
+    now = _now_ms()
+    if _orphan_live_guard_active and now - _orphan_live_reconcile_ms < ORPHAN_LIVE_RECONCILE_INTERVAL_MS:
+        return True
+    _orphan_live_reconcile_ms = now
+    if not mt4_bridge.connected():
+        strategy.state = StrategyState.IDLE
+        strategy.last_error = "MT4 未连接，无法确认空仓，已禁止 V2 新开仓"
+        _orphan_live_guard_active = True
+        storage.record_event("orphan_live_guard_mt4_disconnected", {"reason": strategy.last_error})
+        return True
+    try:
+        binance_qty = await _binance_position_quantity(force=True)
+        if binance_qty is None:
+            raise RuntimeError("Binance position cache unavailable")
+    except Exception as exc:  # noqa: BLE001
+        strategy.state = StrategyState.IDLE
+        strategy.last_error = f"开仓前检查币安是否空仓失败，已禁止 V2 新开仓：{str(exc)[:160]}"
+        _orphan_live_guard_active = True
+        storage.record_event("orphan_live_guard_binance_check_failed", {"error": str(exc)[:160]})
+        return True
+    mt4_positions = mt4_bridge.positions()
+    action = orphan_live_position_action(strategy.open_pair, binance_qty, mt4_positions, settings.mt4_symbol)
+    if action is None:
+        if _orphan_live_guard_active:
+            storage.record_event("orphan_live_guard_recovered", {"binance_position_qty": str(binance_qty)})
+        _orphan_live_guard_active = False
+        _orphan_mt4_close_commands = {}
+        if strategy.state in {StrategyState.PAIR_OPEN, StrategyState.PAUSED} and strategy.open_pair is None:
+            strategy.state = StrategyState.IDLE
+        if strategy.last_error and strategy.last_error.startswith(("未找到组合记录", "MT4 未连接", "开仓前检查币安")):
+            strategy.last_error = None
+        return False
+    _orphan_live_guard_active = True
+    strategy.state = StrategyState.IDLE
+    if action in {"binance", "both"}:
+        await _queue_binance_flatten_after_live_mismatch(binance_qty, "未找到组合记录但检测到币安遗留仓位，自动优先平币安风险")
+        return True
+    _queue_orphan_mt4_close(mt4_positions, binance_qty)
+    return True
+
+
+def _queue_orphan_mt4_close(mt4_positions: list, binance_qty: Decimal) -> None:
+    global _orphan_mt4_close_commands
+    _orphan_mt4_close_commands = {
+        command_id: ticket
+        for command_id, ticket in _orphan_mt4_close_commands.items()
+        if mt4_bridge.pending_command(command_id)
+    }
+    mt4_symbol_positions = [
+        position
+        for position in mt4_positions
+        if position.symbol == settings.mt4_symbol and position.lots > 0
+    ]
+    if not mt4_symbol_positions:
+        return
+    if _orphan_mt4_close_commands:
+        strategy.last_error = "未找到组合记录但检测到 MT4 遗留仓位，平仓命令已发送，等待 MT4 回报"
+        storage.record_event(
+            "orphan_mt4_close_pending_wait",
+            {"command_ids": list(_orphan_mt4_close_commands.keys()), "tickets": list(_orphan_mt4_close_commands.values())},
+        )
+        return
+    command_ids: list[str] = []
+    for position in mt4_symbol_positions:
+        command = mt4_bridge.queue_close(position.ticket, position.lots, "orphan MT4 position cleanup")
+        _orphan_mt4_close_commands[command.command_id] = position.ticket
+        command_ids.append(command.command_id)
+    strategy.last_error = "未找到组合记录但检测到 MT4 遗留仓位，已自动发送 MT4 平仓命令"
+    storage.record_event(
+        "orphan_mt4_close_queued",
+        {
+            "binance_position_qty": str(binance_qty),
+            "command_ids": command_ids,
+            "positions": [
+                {
+                    "ticket": position.ticket,
+                    "symbol": position.symbol,
+                    "side": position.side.value,
+                    "lots": str(position.lots),
+                    "open_price": str(position.open_price),
+                }
+                for position in mt4_symbol_positions
+            ],
+        },
+    )
 
 
 async def _queue_binance_flatten_after_live_mismatch(binance_qty: Decimal, reason: str) -> bool:

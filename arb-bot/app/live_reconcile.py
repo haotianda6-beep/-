@@ -7,6 +7,7 @@ from app.models import Mt4Position, OpenPair
 
 
 LiveReconcileAction = Literal["clear", "pause"]
+OrphanLiveAction = Literal["binance", "mt4", "both"]
 
 
 def is_transient_live_reconcile_error(error_text: str) -> bool:
@@ -50,4 +51,24 @@ def open_pair_live_reconcile_action(
     mt4_qty = sum((position.lots for position in mt4_symbol_positions), Decimal("0")) * mt4_lot_size_oz
     if abs(mt4_qty - open_pair.quantity_oz) > tolerance:
         return "pause"
+    return None
+
+
+def orphan_live_position_action(
+    open_pair: OpenPair | None,
+    binance_position_qty: Decimal,
+    mt4_positions: list[Mt4Position],
+    mt4_symbol: str,
+) -> OrphanLiveAction | None:
+    if open_pair is not None:
+        return None
+    mt4_symbol_positions = [position for position in mt4_positions if position.symbol == mt4_symbol and position.lots > 0]
+    has_binance = binance_position_qty != 0
+    has_mt4 = bool(mt4_symbol_positions)
+    if has_binance and has_mt4:
+        return "both"
+    if has_binance:
+        return "binance"
+    if has_mt4:
+        return "mt4"
     return None

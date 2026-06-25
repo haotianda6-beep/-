@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app.live_reconcile import is_transient_live_reconcile_error, open_pair_live_reconcile_action
+from app.live_reconcile import is_transient_live_reconcile_error, open_pair_live_reconcile_action, orphan_live_position_action
 from app.models import Mt4Position, OpenPair, PairDirection, Side
 
 
@@ -130,3 +130,40 @@ def test_binance_recv_window_error_is_transient() -> None:
     assert is_transient_live_reconcile_error('{"code":-1003,"msg":"Too many requests; current limit of IP is 2400 requests per minute."}')
     assert is_transient_live_reconcile_error("418 I'm a teapot")
     assert not is_transient_live_reconcile_error('{"code":-2015,"msg":"Invalid API-key, IP, or permissions."}')
+
+
+def test_orphan_live_position_action_blocks_binance_leftover_without_pair() -> None:
+    assert orphan_live_position_action(None, Decimal("-1"), [], "XAUUSD") == "binance"
+
+
+def test_orphan_live_position_action_blocks_mt4_leftover_without_pair() -> None:
+    action = orphan_live_position_action(
+        None,
+        Decimal("0"),
+        [Mt4Position(ticket=1, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("3990"))],
+        "XAUUSD",
+    )
+
+    assert action == "mt4"
+
+
+def test_orphan_live_position_action_blocks_both_leftover_without_pair() -> None:
+    action = orphan_live_position_action(
+        None,
+        Decimal("-1"),
+        [Mt4Position(ticket=1, symbol="XAUUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("3990"))],
+        "XAUUSD",
+    )
+
+    assert action == "both"
+
+
+def test_orphan_live_position_action_allows_flat_without_pair() -> None:
+    action = orphan_live_position_action(
+        None,
+        Decimal("0"),
+        [Mt4Position(ticket=1, symbol="ETHUSD", side=Side.BUY, lots=Decimal("0.01"), open_price=Decimal("3000"))],
+        "XAUUSD",
+    )
+
+    assert action is None
