@@ -171,6 +171,22 @@ def test_write_log_respects_backup_count(tmp_path):
     assert (tmp_path / "monitor.log.2").read_text(encoding="utf-8") == "old1"
 
 
+def test_write_log_can_disable_stdout(tmp_path, capsys):
+    log_path = tmp_path / "monitor.log"
+    monitor.configure_log_rotation(max_log_mb=0, backups=3)
+
+    monitor.configure_stdout_logging(True)
+    monitor.write_log(log_path, {"type": "tick"})
+    assert '"type": "tick"' in capsys.readouterr().out
+
+    monitor.configure_stdout_logging(False)
+    monitor.write_log(log_path, {"type": "tick2"})
+    assert capsys.readouterr().out == ""
+    assert '"type": "tick2"' in log_path.read_text(encoding="utf-8")
+
+    monitor.configure_stdout_logging(True)
+
+
 def test_monitor_state_persists_cycle_progress(tmp_path):
     state_path = tmp_path / "monitor_state.json"
     state = monitor.MonitorState(
