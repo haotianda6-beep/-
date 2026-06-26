@@ -704,6 +704,59 @@ async def test_v2_cancels_unfilled_entry_when_resting_order_locked_edge_turns_ba
 
 
 @pytest.mark.asyncio
+async def test_v2_cancels_unfilled_entry_when_direction_model_becomes_invalid(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, REQUOTE_COOLDOWN_MS=0)
+    store = Storage(cfg.sqlite_path)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+
+    await executor.step({**guarded_short_plan("101", locked_floor="2"), "selected_entry": {**guarded_short_plan("101", locked_floor="2")["selected_entry"], "model_ok": True}})
+    assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert executor.active_order is not None
+
+    invalid = guarded_short_plan("101", locked_floor="2")
+    invalid["selected_entry"].update({"ready": False, "model_ok": False, "reason": "方向模型未通过"})
+    await executor.step(invalid)
+
+    assert run.state == StrategyState.IDLE
+    assert executor.active_order is None
+    events = store.get_events(0, utc_now_ms() + 1_000, limit=50)
+    canceled = [event for event in events if event["kind"] == "v2_order_canceled"]
+    assert canceled
+    assert "方向模型未通过" in canceled[-1]["payload"]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_v2_cancels_unfilled_entry_when_quotes_become_abnormal(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, REQUOTE_COOLDOWN_MS=0)
+    store = Storage(cfg.sqlite_path)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+
+    await executor.step(guarded_short_plan("101", locked_floor="2"))
+    assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert executor.active_order is not None
+
+    mt4_tick(mt4, "80", "80.2")
+    await executor.step({"selected_entry": {"ready": False, "reason": "报价异常"}})
+
+    assert run.state == StrategyState.IDLE
+    assert executor.active_order is None
+    events = store.get_events(0, utc_now_ms() + 1_000, limit=50)
+    canceled = [event for event in events if event["kind"] == "v2_order_canceled"]
+    assert canceled
+    assert "报价异常" in canceled[-1]["payload"]["reason"]
+
+
+@pytest.mark.asyncio
 async def test_v2_keeps_unfilled_entry_when_resting_order_locked_edge_still_safe(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False)
     client = PaperBinanceClient(cfg)

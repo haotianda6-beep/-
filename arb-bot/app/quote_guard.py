@@ -31,4 +31,7 @@ def _invalid_quote_reason(label: str, quote: MarketQuote) -> str | None:
         return f"{label}报价为0或负数"
     if quote.ask < quote.bid:
         return f"{label}卖价小于买价"
+    spread = quote.ask - quote.bid
+    if spread > MAX_REASONABLE_XAU_MID_GAP:
+        return f"{label}买卖价差 {spread:.2f} 美元，超过 {MAX_REASONABLE_XAU_MID_GAP} 美元，疑似停盘或坏报价"
     return None

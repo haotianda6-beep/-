@@ -312,14 +312,18 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if not order or order.reduce_only or order.executed_qty > 0:
             return None
         plan = self._active_entry_plan(plan_status)
-        if not plan or not plan.get("ready"):
+        if not plan:
             return None
+        if plan.get("model_ok") is False:
+            return f"{self._active_entry_cancel_reason()}：方向模型未通过胜率/频率验证"
         mt4_quote = self.mt4.latest_quote()
         if not mt4_quote:
             return None
         gap_reason = xau_quote_gap_reason(self.binance.latest_quote(), mt4_quote)
         if gap_reason:
             return f"V2 开仓挂单报价异常，撤销未成交限价单：{gap_reason}"
+        if not plan.get("ready"):
+            return None
         required = self._active_entry_required_locked_edge(plan)
         if required is None:
             return None

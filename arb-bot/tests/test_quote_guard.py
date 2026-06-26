@@ -43,6 +43,17 @@ def test_xau_quote_gap_reason_blocks_above_four_dollar_gold_gap():
     assert "超过 4.00 美元" in reason
 
 
+def test_xau_quote_gap_reason_blocks_wide_single_venue_spread():
+    reason = xau_quote_gap_reason(
+        MarketQuote(symbol="XAUUSDT", bid=Decimal("4000"), ask=Decimal("4000.2")),
+        MarketQuote(symbol="XAUUSD", bid=Decimal("3996"), ask=Decimal("4001.1")),
+    )
+
+    assert reason is not None
+    assert "买卖价差" in reason
+    assert "超过 4.00 美元" in reason
+
+
 def test_xau_quote_gap_reason_allows_normal_gold_gap():
     reason = xau_quote_gap_reason(
         MarketQuote(symbol="XAUUSDT", bid=Decimal("4000"), ask=Decimal("4000.2")),

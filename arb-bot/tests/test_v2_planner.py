@@ -287,6 +287,30 @@ def test_v2_blocks_entry_when_quote_gap_is_unreasonable(tmp_path):
     assert status["selected_entry"]["reason"].startswith("报价异常")
 
 
+def test_v2_does_not_display_unreasonable_raw_edge_as_current_edge(tmp_path, monkeypatch):
+    monkeypatch.setattr(v2_planner, "xau_quote_gap_reason", lambda *_args, **_kwargs: None)
+    cfg = settings(tmp_path)
+    store = Storage(cfg.sqlite_path)
+    mt4_bars, binance_bars = recent_bars([Decimal("2")] * 10)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4008"), ask=Decimal("4012.3")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("4000"), ask=Decimal("4000.0")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+    )
+
+    assert status["short_entry"]["ready"] is False
+    assert status["short_entry"]["current_edge"] is None
+    assert "12.3" not in status["short_entry"]["reason"]
+    assert "超过黄金正常上限" in status["short_entry"]["reason"]
+
+
 def test_v2_ignores_unreasonable_historical_bar_gap(tmp_path, monkeypatch):
     monkeypatch.setattr(v2_planner, "is_xau_weekend_ms", lambda timestamp_ms: False)
     cfg = settings(tmp_path)
@@ -1088,7 +1112,7 @@ def test_v2_add_plan_blocks_above_four_dollar_trigger(tmp_path):
     add_plan = status["add_plan"]
     assert add_plan["raw_next_trigger_edge"] == Decimal("4.08")
     assert add_plan["next_trigger_edge"] == Decimal("4.00")
-    assert add_plan["current_edge"] == Decimal("4.1")
+    assert add_plan["current_edge"] is None
     assert add_plan["next_actionable_trigger_edge"] == Decimal("3.70")
     assert add_plan["ready"] is False
     assert "超过黄金正常上限 4.00" in add_plan["reason"]
