@@ -525,6 +525,10 @@ def _sync_mt4_trade_guard_from_tick(payload: Mt4Tick) -> None:
             "MT4 暂不可交易" in strategy.last_error
             or "MT4 暂不可平仓" in strategy.last_error
             or "MT4 交易状态未确认可交易" in strategy.last_error
+            or (
+                "MT4 EA版本" in strategy.last_error
+                and payload.ea_version == REQUIRED_MT4_EA_VERSION
+            )
         ):
             strategy.last_error = None
             storage.record_event("mt4_trade_allowed_recovered", {"symbol": payload.symbol})

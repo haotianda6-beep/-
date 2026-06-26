@@ -146,6 +146,29 @@
         font-size: 12px;
       }
 
+      .notice {
+        display: none;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+        padding: 12px 14px;
+        border: 1px solid #5a4121;
+        border-radius: 8px;
+        background: rgba(214, 168, 79, 0.12);
+        color: #ffe4a3;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .notice.show {
+        display: flex;
+      }
+
+      .notice strong {
+        color: #fff1c5;
+      }
+
       .status {
         display: inline-flex;
         align-items: center;
@@ -424,6 +447,11 @@
           <button class="secondary" id="stopLiveBtn">停止实盘</button>
         </div>
       </header>
+
+      <div class="notice" id="eaVersionNotice">
+        <div id="eaVersionNoticeText">MT4 EA 版本待确认。</div>
+        <a class="download-link" href="ea/ArbBridgeEA.mq4" download>下载新版 EA</a>
+      </div>
 
       <section class="grid">
         <div class="panel metric">
@@ -1386,6 +1414,7 @@
         const mt4EaVersion = data.mt4_ea_version
           ? `EA版本 ${data.mt4_ea_version}`
           : "EA版本未上报";
+        renderEaVersionNotice(data);
         $("mt4Meta").textContent = m
           ? `延迟 ${age(m.timestamp_ms)}，实时点差 ${fmt(Number(m.ask) - Number(m.bid))} 美元，${mt4Trade.detail}，${mt4EaVersion}`
           : "等待报价";
@@ -1452,6 +1481,20 @@
           detail: "EA 需要更新并重新加载后才会上报可交易状态",
           className: "warn",
         };
+      }
+
+      function renderEaVersionNotice(data) {
+        const expected = "20260626-trade-guard-v2";
+        const current = data.mt4_ea_version || "未上报";
+        const notice = $("eaVersionNotice");
+        const text = $("eaVersionNoticeText");
+        if (current === expected) {
+          notice.classList.remove("show");
+          text.textContent = "";
+          return;
+        }
+        notice.classList.add("show");
+        text.innerHTML = `<strong>MT4 EA 版本过旧，系统已进入保护。</strong> 当前 ${current}，需要 ${expected}。更新后才允许币安挂开仓、补仓、平仓单。`;
       }
 
       function renderV2Plan(plan, config = null) {
