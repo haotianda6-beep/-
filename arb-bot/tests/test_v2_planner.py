@@ -1233,6 +1233,89 @@ def test_v2_add_plan_accepts_exact_required_blended_edge(tmp_path):
     assert status["add_plan"]["exit_viable"] is True
 
 
+def test_v2_add_plan_requires_verified_direction_model(tmp_path):
+    cfg = settings(tmp_path, ADD_EDGE_GROWTH_USD=Decimal("1"), MT4_SLIPPAGE_POINTS=0, MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("0"))
+    store = Storage(cfg.sqlite_path)
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("4002"),
+        mt4_entry_price=Decimal("4000"),
+        binance_order_id="entry",
+        base_edge=Decimal("2"),
+    )
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.3"), ask=Decimal("4003.5")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=[],
+        open_pair=pair,
+        metrics=PositionMetrics(actual_entry_spread=Decimal("2")),
+        mt4_tick_move_budget=Decimal("0"),
+    )
+
+    add_plan = status["add_plan"]
+    assert add_plan["exit_viable"] is True
+    assert add_plan["model_ok"] is False
+    assert add_plan["ready"] is False
+    assert "模型未通过" in add_plan["reason"]
+
+
+def test_v2_add_plan_allows_verified_direction_model(tmp_path, monkeypatch):
+    models = iter(
+        [
+            {
+                "enabled": True,
+                "selected": {
+                    "projected_daily_trades": Decimal("3.2"),
+                    "win_rate": Decimal("0.75"),
+                    "trades": 4,
+                    "threshold": Decimal("2.4"),
+                },
+                "suggested_threshold": Decimal("2.4"),
+            },
+            {
+                "enabled": True,
+                "reason": "最近样本没有证明 70% 以上回归胜率，沿用区间阈值。",
+                "suggested_threshold": None,
+            },
+        ]
+    )
+    monkeypatch.setattr(v2_planner, "build_entry_model", lambda **_: next(models))
+    cfg = settings(tmp_path, ADD_EDGE_GROWTH_USD=Decimal("1"), MT4_SLIPPAGE_POINTS=0, MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("0"))
+    store = Storage(cfg.sqlite_path)
+    mt4_bars, binance_bars = recent_bars([Decimal("2.4")] * 12)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("4002"),
+        mt4_entry_price=Decimal("4000"),
+        binance_order_id="entry",
+        base_edge=Decimal("2"),
+    )
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.3"), ask=Decimal("4003.5")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=binance_bars,
+        open_pair=pair,
+        metrics=PositionMetrics(actual_entry_spread=Decimal("2")),
+        mt4_tick_move_budget=Decimal("0"),
+    )
+
+    add_plan = status["add_plan"]
+    assert add_plan["model_ok"] is True
+    assert add_plan["model_win_rate"] == Decimal("0.75")
+    assert add_plan["ready"] is True
+
+
 def test_v2_negative_swap_window_relaxes_exit_to_safe_target(tmp_path):
     cfg = settings(
         tmp_path,

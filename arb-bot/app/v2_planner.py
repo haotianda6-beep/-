@@ -165,7 +165,17 @@ def build_gold_v2_status(
         "long_entry": long_plan,
         "selected_entry": selected,
         "exit_plan": _exit_plan(settings, open_pair, metrics),
-        "add_plan": _add_plan(settings, filters, open_pair, metrics, binance_quote, mt4_quote, slippage_budget, exit_follow_budget),
+        "add_plan": _add_plan(
+            settings,
+            filters,
+            open_pair,
+            metrics,
+            binance_quote,
+            mt4_quote,
+            slippage_budget,
+            exit_follow_budget,
+            _add_model_gate(open_pair, short_model_gate, long_model_gate),
+        ),
         "partial_fill_policy": [
             "币安只允许挂单成交，禁止市价开仓和平仓。",
             "补仓按真实首仓价差加阶梯触发，币安仍只允许挂单成交。",
@@ -985,6 +995,7 @@ def _add_plan(
     mt4: MarketQuote | None,
     slippage_budget: Decimal,
     exit_follow_budget: Decimal,
+    model_gate: dict | None = None,
 ) -> dict:
     if not pair:
         return {"enabled": False, "reason": "无持仓，补仓计划不启动。"}
@@ -1013,6 +1024,10 @@ def _add_plan(
         "add_count": pair.add_count,
         "max_add_count": settings.max_add_count,
         "quantity_oz": max(_round_down(settings.target_oz, filters.qty_step), filters.min_qty),
+        "model_ok": bool(model_gate and model_gate.get("ok")),
+        "model_direction": model_gate["direction"] if model_gate else None,
+        "model_win_rate": model_gate["win_rate"] if model_gate else None,
+        "model_projected_daily_trades": model_gate["projected_daily_trades"] if model_gate else None,
     }
     if not binance or not mt4:
         return {**data, "ready": False, "reason": "等待币安和MT4同时返回报价。"}
@@ -1081,6 +1096,12 @@ def _add_plan(
             reason = "补仓后均价差改善不足，暂不放大仓位。"
         else:
             reason = "补仓后均价差仍不足以覆盖平仓缓冲和目标利润，暂不补仓。"
+    if not (model_gate and model_gate.get("ok")):
+        ready = False
+        reason = _append_reason(
+            reason,
+            _append_reason("当前持仓方向模型未通过70%胜率和3-5单/天验证，禁止继续补仓放大仓位", _entry_model_gate_reason(model_gate)),
+        )
     return {**data,
         "ready": ready,
         "reason": reason,
@@ -1100,6 +1121,16 @@ def _add_plan(
         "mt4_slippage_budget": slippage_budget,
         "mt4_exit_follow_budget": exit_follow_budget,
     }
+
+
+def _add_model_gate(pair: OpenPair | None, short_model_gate: dict | None, long_model_gate: dict | None) -> dict | None:
+    if not pair:
+        return None
+    if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+        return short_model_gate
+    if pair.direction == PairDirection.BINANCE_LONG_MT4_SHORT:
+        return long_model_gate
+    return None
 
 
 def _add_base_edge(pair: OpenPair, metrics: PositionMetrics | None) -> Decimal | None:
