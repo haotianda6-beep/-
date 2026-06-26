@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app.v2_tuning import _simulate_candidate, build_entry_model
+from app.v2_tuning import _daily_trade_in_target, _simulate_candidate, build_entry_model
 
 
 def test_entry_model_selects_threshold_with_target_win_rate():
@@ -56,6 +56,11 @@ def test_entry_model_prefers_daily_trade_target_over_high_frequency():
     assert model["selected"]["entry_trigger_spread"] == Decimal("5.0")
     assert Decimal("3") <= model["selected"]["projected_daily_trades"] <= Decimal("5")
     assert "3-5单" in model["reason"]
+
+
+def test_entry_model_daily_trade_target_rejects_above_five_per_day():
+    assert _daily_trade_in_target({"projected_daily_trades": Decimal("5")})
+    assert not _daily_trade_in_target({"projected_daily_trades": Decimal("5.1")})
 
 
 def test_entry_model_excludes_abnormal_threshold_candidates():

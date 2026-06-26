@@ -5,7 +5,7 @@ from decimal import Decimal
 MIN_MODEL_TRADES = 3
 TARGET_DAILY_TRADES = Decimal("4")
 MIN_DAILY_TRADES = Decimal("3")
-MAX_DAILY_TRADES = Decimal("6")
+MAX_DAILY_TRADES = Decimal("5")
 MIN_TARGET_WIN_RATE = Decimal("0.70")
 PERCENTILES = (55, 60, 65, 70, 75, 80, 85, 90, 92, 94, 95, 96, 97, 98, 99, 100)
 
