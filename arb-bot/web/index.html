@@ -609,6 +609,10 @@
                 <span id="pairQty">-</span>
               </div>
               <div class="compact-row">
+                <strong>已实现盈亏</strong>
+                <span id="pairRealizedPnl">-</span>
+              </div>
+              <div class="compact-row">
                 <strong>补仓</strong>
                 <span id="pairAddLine">-</span>
               </div>
@@ -1396,6 +1400,9 @@
           ? translateDirection(pair.direction)
           : "-";
         $("pairQty").textContent = pair ? `${fmt(pair.quantity_oz)} XAU` : "-";
+        $("pairRealizedPnl").textContent = pair
+          ? signedUsd(pair.realized_pnl)
+          : "-";
         $("pairAddLine").textContent = pair
           ? renderPairAddLine(pair, data.config, b, m, metrics, data.gold_v2?.add_plan)
           : "-";
@@ -1675,7 +1682,7 @@
           metrics.binance_unrealized_pnl !== null &&
           metrics.binance_unrealized_pnl !== undefined
         ) {
-          parts.push(`币安浮盈 ${signedMoney(metrics.binance_unrealized_pnl)}`);
+          parts.push(`币安浮动盈亏 ${signedMoney(metrics.binance_unrealized_pnl)}`);
         }
         return parts.join("，");
       }
@@ -1788,7 +1795,7 @@
         return positions
           .map((position) => {
             const ticket = position.ticket ? `单号 ${position.ticket}，` : "";
-            return `${ticket}${translateAction(position.side)} ${fmt(position.lots)} 手，开仓 ${fmt(position.open_price)}，浮盈 ${signedUsd(position.profit)}，隔夜费 ${signedUsd(position.swap)}`;
+            return `${ticket}${translateAction(position.side)} ${fmt(position.lots)} 手，开仓 ${fmt(position.open_price)}，浮动盈亏 ${signedUsd(position.profit)}，隔夜费 ${signedUsd(position.swap)}`;
           })
           .join("；");
       }
