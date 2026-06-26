@@ -352,6 +352,12 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             self._clear_active_order_context()
             self.runtime.state = StrategyState.PAIR_OPEN
             return
+        if order.executed_qty <= 0:
+            mt4_block_reason = self._mt4_trade_block_reason("平仓")
+            if mt4_block_reason:
+                self.runtime.last_error = mt4_block_reason
+                await self.cancel_active_order(mt4_block_reason)
+                return
         if order.status == OrderStatus.FILLED:
             self._queue_mt4_close(self._with_carried_exit_fill(order))
             return

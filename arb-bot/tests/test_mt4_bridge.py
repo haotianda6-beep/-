@@ -71,6 +71,24 @@ def test_mt4_tick_updates_trade_status(tmp_path):
     assert bridge.trade_context_busy() is False
 
 
+def test_mt4_tick_combines_symbol_and_terminal_trade_status(tmp_path):
+    cfg = Settings(_env_file=None, SQLITE_PATH=tmp_path / "test.sqlite3")
+    bridge = Mt4Bridge(cfg)
+
+    bridge.update_tick(
+        Mt4Tick(
+            symbol="XAUUSD",
+            bid=Decimal("4177"),
+            ask=Decimal("4178"),
+            trade_allowed=True,
+            symbol_trade_allowed=True,
+            terminal_trade_allowed=False,
+        )
+    )
+
+    assert bridge.trade_allowed() is False
+
+
 def test_mt4_tick_updates_ea_version(tmp_path):
     cfg = Settings(_env_file=None, SQLITE_PATH=tmp_path / "test.sqlite3")
     bridge = Mt4Bridge(cfg)

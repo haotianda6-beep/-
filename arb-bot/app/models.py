@@ -172,6 +172,8 @@ class Mt4Tick(BaseModel):
     account_profit: Decimal | None = None
     account_currency: str | None = None
     trade_allowed: bool | None = None
+    symbol_trade_allowed: bool | None = None
+    terminal_trade_allowed: bool | None = None
     trade_context_busy: bool | None = None
 
 

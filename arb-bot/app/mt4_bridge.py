@@ -69,7 +69,10 @@ class Mt4Bridge:
                 if any(value is not None for value in account_values)
                 else None
             )
-            self._trade_allowed = tick.trade_allowed
+            trade_allowed = tick.trade_allowed
+            if tick.symbol_trade_allowed is not None or tick.terminal_trade_allowed is not None:
+                trade_allowed = bool(tick.symbol_trade_allowed) and bool(tick.terminal_trade_allowed)
+            self._trade_allowed = trade_allowed
             self._trade_context_busy = tick.trade_context_busy
             self.last_seen_ms = received_ms
         return quote
