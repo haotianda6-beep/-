@@ -445,14 +445,14 @@ def test_v2_performance_penalty_keeps_daily_trade_cap():
     model = {
         "candidates": [
             {"threshold": Decimal("3.72"), "projected_daily_trades": Decimal("3.26")},
-            {"threshold": Decimal("4.19"), "projected_daily_trades": Decimal("3.02")},
-            {"threshold": Decimal("4.24"), "projected_daily_trades": Decimal("1.60")},
+            {"threshold": Decimal("3.95"), "projected_daily_trades": Decimal("3.02")},
+            {"threshold": Decimal("4.10"), "projected_daily_trades": Decimal("1.60")},
         ]
     }
 
     threshold = _threshold_with_performance_penalty(Decimal("3.72"), Decimal("0.50"), model)
 
-    assert threshold == Decimal("4.19")
+    assert threshold == Decimal("3.95")
 
 
 def test_v2_realized_positive_total_uses_small_entry_penalty(tmp_path):
@@ -777,7 +777,7 @@ def test_v2_add_plan_uses_real_first_edge_plus_step(tmp_path):
     assert status["add_plan"]["ready"] is False
 
 
-def test_v2_add_plan_allows_near_four_dollar_trigger(tmp_path):
+def test_v2_add_plan_blocks_above_four_dollar_trigger(tmp_path):
     cfg = settings(tmp_path, ADD_EDGE_GROWTH_USD=Decimal("1"), MT4_SLIPPAGE_POINTS=0, MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("0"))
     store = Storage(cfg.sqlite_path)
     pair = OpenPair(
@@ -806,8 +806,9 @@ def test_v2_add_plan_allows_near_four_dollar_trigger(tmp_path):
     assert add_plan["next_trigger_edge"] == Decimal("4.08")
     assert add_plan["current_edge"] == Decimal("4.1")
     assert add_plan["next_actionable_trigger_edge"] == Decimal("4.08")
-    assert add_plan["ready"] is True
-    assert add_plan["estimated_blended_edge"] > Decimal("1.65")
+    assert add_plan["ready"] is False
+    assert "超过黄金正常上限 4.00" in add_plan["reason"]
+    assert add_plan["estimated_blended_edge"] is None
 
 
 def test_v2_add_plan_does_not_lower_current_average_edge(tmp_path):

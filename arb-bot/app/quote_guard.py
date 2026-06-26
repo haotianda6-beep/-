@@ -5,7 +5,7 @@ from decimal import Decimal
 from app.models import MarketQuote
 
 
-MAX_REASONABLE_XAU_MID_GAP = Decimal("4.25")
+MAX_REASONABLE_XAU_MID_GAP = Decimal("4.00")
 
 
 def xau_quote_gap_reason(

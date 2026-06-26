@@ -81,12 +81,12 @@ def test_entry_model_excludes_abnormal_threshold_candidates():
         close_profit=Decimal("0.1"),
         max_hold_minutes=3,
         min_points=8,
-        max_threshold=Decimal("4.25"),
+        max_threshold=Decimal("4.00"),
     )
 
-    assert model["suggested_threshold"] <= Decimal("4.25")
+    assert model["suggested_threshold"] <= Decimal("4.00")
     assert model["points"] == 9
-    assert all(candidate["threshold"] <= Decimal("4.25") for candidate in model["candidates"])
+    assert all(candidate["threshold"] <= Decimal("4.00") for candidate in model["candidates"])
 
 
 def test_entry_model_applies_entry_cooldown_to_projected_frequency():
