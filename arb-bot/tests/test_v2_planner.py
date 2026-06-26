@@ -1,8 +1,11 @@
 from decimal import Decimal
 from datetime import datetime, timezone
 
+import pytest
+
 import app.v2_planner as v2_planner
 from app.config import Settings
+from app.market_calendar import is_xau_weekend_ms as real_is_xau_weekend_ms
 from app.models import ExchangeFilters, HistoryBar, MarketQuote, OpenPair, PairDirection, PositionMetrics, utc_now_ms
 from app.storage import Storage
 from app.v2_planner import (
@@ -12,6 +15,11 @@ from app.v2_planner import (
     _threshold_with_performance_penalty,
     build_gold_v2_status,
 )
+
+
+@pytest.fixture(autouse=True)
+def open_market_calendar(monkeypatch):
+    monkeypatch.setattr(v2_planner, "is_xau_weekend_ms", lambda timestamp_ms: False)
 
 
 def settings(tmp_path, **kwargs) -> Settings:
@@ -256,7 +264,8 @@ def test_v2_ignores_unreasonable_historical_bar_gap(tmp_path, monkeypatch):
     assert status["short_entry"]["threshold"] <= Decimal("4")
 
 
-def test_v2_ignores_weekend_training_bars():
+def test_v2_ignores_weekend_training_bars(monkeypatch):
+    monkeypatch.setattr(v2_planner, "is_xau_weekend_ms", real_is_xau_weekend_ms)
     saturday = 1_787_985_600_000
     monday = 1_788_158_400_000
     mt4_bars = [
@@ -275,7 +284,8 @@ def test_v2_ignores_weekend_training_bars():
     assert discarded == 1
 
 
-def test_v2_ignores_china_calendar_weekend_training_bars():
+def test_v2_ignores_china_calendar_weekend_training_bars(monkeypatch):
+    monkeypatch.setattr(v2_planner, "is_xau_weekend_ms", real_is_xau_weekend_ms)
     china_saturday = int(datetime(2026, 6, 26, 17, tzinfo=timezone.utc).timestamp() * 1000)
     monday = int(datetime(2026, 6, 29, 1, tzinfo=timezone.utc).timestamp() * 1000)
     mt4_bars = [

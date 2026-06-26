@@ -389,6 +389,57 @@ async def test_v2_entry_mt4_follow_carries_price_limit_from_locked_edge(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_v2_mt4_price_bound_failure_rolls_back_entry_with_post_only(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
+    store = Storage(cfg.sqlite_path)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(guarded_short_plan("101", locked_floor="2"))
+    client.set_quote(Decimal("101"), Decimal("101.2"))
+    await executor.step(guarded_short_plan("101", locked_floor="2"))
+    command = mt4.next_command()
+
+    mt4.submit_report(
+        Mt4Report(
+            command_id=command["command_id"],
+            status="error",
+            action="BUY",
+            ticket=-1,
+            fill_price=None,
+            lots=Decimal("0.01"),
+            error_code=9001,
+            message="max price exceeded",
+        )
+    )
+    await executor.step(guarded_short_plan("101", locked_floor="2"))
+
+    assert run.state == StrategyState.QUOTING_BINANCE_EXIT
+    assert executor.rollbacking_mt4_follow is True
+    assert mt4.next_command() == {"command": "NONE"}
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    await executor.step({})
+    rollback = executor.active_order
+    assert rollback is not None
+    assert rollback.reduce_only is True
+    assert rollback.side == Side.BUY
+
+    await client.simulate_fill(rollback.order_id, Decimal("1"), rollback.price)
+    await executor.step({})
+
+    assert run.state == StrategyState.IDLE
+    assert run.open_pair is None
+    assert executor.active_order is None
+    events = store.get_events(0, utc_now_ms() + 1_000, limit=100)
+    assert any(event["kind"] == "v2_mt4_follow_rollback_completed" for event in events)
+
+
+@pytest.mark.asyncio
 async def test_v2_blocks_new_entry_during_min_entry_interval(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", GOLD_V2_MIN_ENTRY_INTERVAL_MS=10_000)
     store = Storage(cfg.sqlite_path)
@@ -1886,6 +1937,59 @@ async def test_v2_add_position_merges_pair_after_binance_fill_and_mt4_follow(tmp
     await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "10", "estimated_net": "2"}})
     assert run.state == StrategyState.PAIR_OPEN
     assert executor.active_order is None
+
+
+@pytest.mark.asyncio
+async def test_v2_mt4_price_bound_failure_rolls_back_add_only(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", MAX_ADD_COUNT=1)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(short_plan("101"))
+    client.set_quote(Decimal("101"), Decimal("101.2"))
+    await executor.step(short_plan("101"))
+    command = mt4.next_command()
+    mt4.submit_report(Mt4Report(command_id=command["command_id"], status="ok", action="BUY", ticket=7, fill_price=Decimal("99"), lots=Decimal("0.01")))
+    await executor.step(short_plan("101"))
+
+    await executor.step(add_plan("105", actionable="3.8"))
+    client.set_quote(Decimal("105"), Decimal("105.2"))
+    await executor.step(add_plan("105"))
+    add_command = mt4.next_command()
+    mt4.submit_report(
+        Mt4Report(
+            command_id=add_command["command_id"],
+            status="error",
+            action="BUY",
+            ticket=-1,
+            fill_price=None,
+            lots=Decimal("0.01"),
+            error_code=9001,
+            message="max price exceeded",
+        )
+    )
+    await executor.step(add_plan("105", actionable="3.8"))
+
+    client.set_quote(Decimal("104"), Decimal("104.2"))
+    await executor.step({})
+    rollback = executor.active_order
+    assert rollback is not None
+    assert rollback.reduce_only is True
+    assert rollback.side == Side.BUY
+
+    await client.simulate_fill(rollback.order_id, Decimal("1"), rollback.price)
+    await executor.step({})
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert run.open_pair is not None
+    assert run.open_pair.quantity_oz == Decimal("1")
+    assert run.open_pair.add_count == 0
+    assert run.open_pair.mt4_tickets == [7]
+    assert executor.adding_to_pair is False
 
 
 @pytest.mark.asyncio

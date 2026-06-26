@@ -71,6 +71,10 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.entry_requote_until_ms = 0
         self.repairing_binance_only = False
         self.repair_existing_qty = Decimal("0")
+        self.rollbacking_mt4_follow = False
+        self.mt4_follow_rollback_source_order: OrderUpdate | None = None
+        self.mt4_follow_rollback_remaining_qty = Decimal("0")
+        self.mt4_follow_rollback_reason: str | None = None
         self.mt4_exit_block_until_ms = 0
         self.mt4_exit_block_seeded_from_last_error = False
         self.active_exit_order_risk_active = False
@@ -93,7 +97,10 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             if self.runtime.state == StrategyState.PAIR_OPEN:
                 await self._maybe_place_add(plan_status)
         elif self.runtime.state == StrategyState.QUOTING_BINANCE_EXIT:
-            await self._check_exit_order(plan_status)
+            if self.rollbacking_mt4_follow:
+                await self._check_mt4_follow_rollback_order()
+            else:
+                await self._check_exit_order(plan_status)
         elif self.runtime.state == StrategyState.CLOSING_MT4:
             self._check_mt4_timeout(self.close_started_ms, "MT4 平仓跟随超时")
 
@@ -137,6 +144,10 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.entry_requote_until_ms = 0
         self.repairing_binance_only = False
         self.repair_existing_qty = Decimal("0")
+        self.rollbacking_mt4_follow = False
+        self.mt4_follow_rollback_source_order = None
+        self.mt4_follow_rollback_remaining_qty = Decimal("0")
+        self.mt4_follow_rollback_reason = None
         self.mt4_exit_block_until_ms = 0
         self.mt4_exit_block_seeded_from_last_error = False
         self.active_exit_order_risk_active = False
@@ -870,6 +881,9 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         return bool(reports)
 
     def _handle_hedge_report(self, report) -> None:
+        if self._mt4_follow_price_bound_error(report):
+            self._start_mt4_follow_rollback(f"MT4 跟随价格越界：{report.message or report.error_code}")
+            return
         if self._handle_add_report(report):
             return
         if report.status != "ok" or report.fill_price is None or not self.active_order or not self.entry_direction:
@@ -888,6 +902,143 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.active_mt4_follow_min_edge = None
         self.runtime.state = StrategyState.PAIR_OPEN
         self.runtime.last_error = None
+
+    def _mt4_follow_price_bound_error(self, report) -> bool:
+        if report.status == "ok":
+            return False
+        if report.error_code in {9001, 9002}:
+            return True
+        message = str(report.message or "").lower()
+        return "max price exceeded" in message or "min price exceeded" in message
+
+    def _start_mt4_follow_rollback(self, reason: str) -> None:
+        if not self.active_order or self.active_order.executed_qty <= 0:
+            self._recover(reason)
+            return
+        self.rollbacking_mt4_follow = True
+        self.mt4_follow_rollback_source_order = self.active_order
+        self.mt4_follow_rollback_remaining_qty = self.active_order.executed_qty
+        self.mt4_follow_rollback_reason = reason
+        self.hedge_command_id = None
+        self.runtime.state = StrategyState.QUOTING_BINANCE_EXIT
+        self.runtime.last_error = f"{reason}，已停止 MT4 跟随，准备币安 Post Only 限价撤回本次成交。"
+        self.storage.record_event(
+            "v2_mt4_follow_price_bound_rollback_started",
+            {"reason": reason, "source_order": self.active_order.model_dump(mode="json")},
+        )
+
+    async def _check_mt4_follow_rollback_order(self) -> None:
+        if self.mt4_follow_rollback_remaining_qty <= 0:
+            self._finish_mt4_follow_rollback(None)
+            return
+        if not self.active_order or not self.active_order.reduce_only:
+            await self._place_mt4_follow_rollback_order()
+            return
+        order = await self._refresh_active_order()
+        if order.executed_qty > 0 and order.status in TERMINAL:
+            self._apply_mt4_follow_rollback_fill(order)
+            return
+        if order.status in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED}:
+            self.storage.record_event("v2_mt4_follow_rollback_order_terminal", order.model_dump(mode="json"))
+            self.active_order = self.mt4_follow_rollback_source_order
+            return
+        if order.executed_qty > 0:
+            self.runtime.last_error = f"币安撤回单已部分成交 {order.executed_qty}/{order.orig_qty} XAU，继续等待完全成交。"
+            return
+        if utc_now_ms() - self.order_created_ms > max(self.settings.min_order_live_ms, self.settings.max_order_age_ms):
+            try:
+                canceled = await self.binance.cancel_order(order.order_id)
+            except Exception as exc:  # noqa: BLE001
+                self.runtime.last_error = f"币安撤回单撤单失败，继续重试：{str(exc)[:160]}"
+                self.storage.record_event("v2_mt4_follow_rollback_cancel_failed", {"error": str(exc)[:160], "order_id": order.order_id})
+                return
+            checked = canceled or order
+            if checked.executed_qty > 0 and checked.status in TERMINAL:
+                self._apply_mt4_follow_rollback_fill(checked)
+                return
+            self.storage.record_event("v2_mt4_follow_rollback_requote", {"order_id": order.order_id})
+            self.active_order = self.mt4_follow_rollback_source_order
+
+    async def _place_mt4_follow_rollback_order(self) -> None:
+        source = self.mt4_follow_rollback_source_order or self.active_order
+        quote = self.binance.latest_quote()
+        if not source or not quote:
+            self.runtime.last_error = "等待币安报价后撤回 MT4 跟随失败产生的单边成交。"
+            return
+        qty = max(Decimal("0"), self.mt4_follow_rollback_remaining_qty)
+        if qty <= 0:
+            self._finish_mt4_follow_rollback(None)
+            return
+        side = Side.BUY if source.side == Side.SELL else Side.SELL
+        if side == Side.BUY:
+            price = round_down(quote.bid - self.settings.binance_entry_offset_usd, self.binance.filters.tick_size)
+            position_side = "SHORT"
+        else:
+            price = round_up(quote.ask + self.settings.binance_entry_offset_usd, self.binance.filters.tick_size)
+            position_side = "LONG"
+        try:
+            rollback = await self.binance.place_post_only_order(
+                OrderRequest(
+                    symbol=self.settings.binance_symbol,
+                    side=side,
+                    quantity=qty,
+                    price=price,
+                    reduce_only=True,
+                    position_side=position_side,
+                )
+            )
+        except BinanceError as exc:
+            self.runtime.last_error = f"币安撤回 MT4 跟随失败成交的限价单被拒，持续重试：{str(exc)[:160]}"
+            self.storage.record_event("v2_mt4_follow_rollback_order_rejected", {"error": str(exc)[:160], "qty": str(qty), "price": str(price)})
+            return
+        self.active_order = rollback
+        self.order_created_ms = utc_now_ms()
+        self.runtime.state = StrategyState.QUOTING_BINANCE_EXIT
+        self.runtime.last_error = "MT4 跟随价格越界，币安已挂 Post Only 限价撤回本次成交。"
+        self.storage.record_event(
+            "v2_mt4_follow_rollback_order",
+            {
+                **rollback.model_dump(mode="json"),
+                "source_order_id": source.order_id,
+                "reason": self.mt4_follow_rollback_reason,
+            },
+        )
+
+    def _apply_mt4_follow_rollback_fill(self, order: OrderUpdate) -> None:
+        self.mt4_follow_rollback_remaining_qty = max(Decimal("0"), self.mt4_follow_rollback_remaining_qty - order.executed_qty)
+        self.storage.record_event(
+            "v2_mt4_follow_rollback_fill",
+            {"remaining_qty": str(self.mt4_follow_rollback_remaining_qty), **order.model_dump(mode="json")},
+        )
+        if self.mt4_follow_rollback_remaining_qty > 0 and self.mt4_follow_rollback_remaining_qty >= self.binance.filters.min_qty:
+            self.active_order = self.mt4_follow_rollback_source_order
+            return
+        self._finish_mt4_follow_rollback(order)
+
+    def _finish_mt4_follow_rollback(self, order: OrderUpdate | None) -> None:
+        source = self.mt4_follow_rollback_source_order
+        self.storage.record_event(
+            "v2_mt4_follow_rollback_completed",
+            {
+                "reason": self.mt4_follow_rollback_reason,
+                "source_order": source.model_dump(mode="json") if source else None,
+                "rollback_order": order.model_dump(mode="json") if order else None,
+            },
+        )
+        self.active_order = None
+        self.rollbacking_mt4_follow = False
+        self.mt4_follow_rollback_source_order = None
+        self.mt4_follow_rollback_remaining_qty = Decimal("0")
+        self.mt4_follow_rollback_reason = None
+        self.hedge_command_id = None
+        self._clear_entry_quote()
+        self._clear_entry_carry()
+        self.adding_to_pair = False
+        self.active_add_base_edge = None
+        self.active_add_trigger_edge = None
+        self.active_mt4_follow_min_edge = None
+        self.runtime.state = StrategyState.PAIR_OPEN if self.runtime.open_pair else StrategyState.IDLE
+        self.runtime.last_error = "MT4 跟随价格越界，本次币安成交已用 Post Only 限价撤回。"
 
     def _capture_entry_mt4_quote(self) -> dict[str, str | int | None]:
         quote = self.mt4.latest_quote()
