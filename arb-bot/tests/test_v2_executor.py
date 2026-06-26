@@ -136,6 +136,60 @@ async def test_v2_binance_fill_audit_flags_fee_or_taker(tmp_path):
     assert risk[-1]["payload"]["non_maker_trade_ids"] == ["trade-2"]
 
 
+@pytest.mark.asyncio
+async def test_v2_fee_or_taker_event_blocks_new_entry(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
+    store = Storage(cfg.sqlite_path)
+    store.record_event(
+        "v2_binance_fee_or_taker_detected",
+        {"order_id": "bad-entry", "commission": "0.01", "all_maker": False},
+    )
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+
+    await executor.step(short_plan("101"))
+
+    assert run.state == StrategyState.IDLE
+    assert executor.active_order is None
+    assert "已禁止新的开仓挂单" in run.last_error
+    assert not [event for event in store.get_events(0, utc_now_ms() + 1_000) if event["kind"] == "v2_entry_order"]
+
+
+@pytest.mark.asyncio
+async def test_v2_fee_or_taker_event_blocks_add_but_keeps_pair_open(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", MAX_ADD_COUNT=1)
+    store = Storage(cfg.sqlite_path)
+    store.record_event(
+        "v2_binance_fee_or_taker_detected",
+        {"order_id": "bad-add", "commission": "0.01", "all_maker": False},
+    )
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("103"),
+        mt4_entry_price=Decimal("100"),
+        binance_order_id="entry",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("3"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+
+    await executor.step(add_plan("105"))
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert run.open_pair is not None
+    assert executor.active_order is None
+    assert "已禁止新的补仓挂单" in run.last_error
+    assert not [event for event in store.get_events(0, utc_now_ms() + 1_000) if event["kind"] == "v2_add_order"]
+
+
 def short_plan(price: str = "101") -> dict:
     return {
         "selected_entry": {

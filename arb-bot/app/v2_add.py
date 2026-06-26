@@ -34,6 +34,11 @@ class V2AddMixin:
         if not plan.get("ready"):
             self.runtime.last_error = plan.get("reason") or "V2 补仓触发后等待安全校验通过"
             return False
+        maker_block = getattr(self, "_maker_only_violation_reason", None)
+        maker_block_reason = maker_block("补仓") if maker_block else None
+        if maker_block_reason:
+            self.runtime.last_error = maker_block_reason
+            return False
         side = Side(plan["binance_side"])
         qty = Decimal(str(plan["quantity_oz"]))
         price = Decimal(str(plan["binance_price"]))

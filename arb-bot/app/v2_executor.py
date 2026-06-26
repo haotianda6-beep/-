@@ -210,6 +210,10 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if not plan.get("ready"):
             self.runtime.last_error = plan.get("reason")
             return
+        maker_block_reason = self._maker_only_violation_reason("开仓")
+        if maker_block_reason:
+            self.runtime.last_error = maker_block_reason
+            return
         side = Side(plan["binance_side"])
         qty = Decimal(str(plan["quantity_oz"]))
         price = Decimal(str(plan["binance_price"]))
@@ -243,6 +247,24 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         seconds_left = max(1, (self.entry_requote_until_ms - now) // 1000)
         self.runtime.last_error = f"V2 开仓撤单冷却中，约 {seconds_left} 秒后再允许重新挂单"
         return True
+
+    def _maker_only_violation_reason(self, action: str) -> str | None:
+        try:
+            events = self.storage.get_events(GOLD_V2_CURRENT_GUARD_START_MS, utc_now_ms() + 1000, limit=2000)
+        except Exception:  # noqa: BLE001
+            return None
+        violations = [event for event in events if event.get("kind") == "v2_binance_fee_or_taker_detected"]
+        if not violations:
+            return None
+        payload = violations[-1].get("payload") or {}
+        order_id = payload.get("order_id") or "-"
+        commission = payload.get("commission")
+        all_maker = payload.get("all_maker")
+        return (
+            f"币安成交审计发现手续费或吃单，已禁止新的{action}挂单；"
+            f"订单 {order_id}，手续费 {commission}，all_maker={all_maker}。"
+            "已有持仓仍允许按策略平仓，需确认 maker-only 问题后再恢复新开仓。"
+        )
 
     async def _check_entry_order(self, plan_status: dict[str, Any]) -> None:
         if self.repairing_binance_only:
