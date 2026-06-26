@@ -436,6 +436,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
     def _clear_risk_exit_confirm(self) -> None:
         self.risk_exit_ready_since_ms = 0
         self.risk_exit_confirm_reason = None
+        if self.runtime.last_error and self.runtime.last_error.startswith("V2 风控平仓确认中"):
+            self.runtime.last_error = None
 
     def _clear_active_order_context(self) -> None:
         self.active_exit_order_risk_active = False

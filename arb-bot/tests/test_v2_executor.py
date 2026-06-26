@@ -780,10 +780,28 @@ async def test_v2_loss_limit_requires_risk_confirm_time(tmp_path, monkeypatch):
     assert "风控平仓确认中" in run.last_error
 
     now["value"] = 10_500
+    await executor.step(
+        {
+            "selected_entry": {"ready": False},
+            "exit_plan": {
+                "enabled": True,
+                "target_exit_spread": "3",
+                "loss_limit": {"active": False, "reason": "当前未触发最大亏损"},
+            },
+        }
+    )
+    assert run.last_error is None
+    assert executor.risk_exit_ready_since_ms == 0
+
+    now["value"] = 11_000
     await executor.step(loss_plan)
     assert executor.active_order is None
 
-    now["value"] = 10_850
+    now["value"] = 11_500
+    await executor.step(loss_plan)
+    assert executor.active_order is None
+
+    now["value"] = 11_850
     await executor.step(loss_plan)
     assert run.state == StrategyState.QUOTING_BINANCE_EXIT
     assert executor.active_order is not None
