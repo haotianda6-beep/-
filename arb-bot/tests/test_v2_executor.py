@@ -176,6 +176,7 @@ def add_plan(price: str = "105", actionable: str | None = None) -> dict:
     }
     if actionable is not None:
         plan["add_plan"]["next_actionable_trigger_edge"] = actionable
+        plan["add_plan"]["next_locked_trigger_edge"] = actionable
     return plan
 
 
@@ -208,6 +209,7 @@ def add_plan_reached_base_trigger_before_actionable_price() -> dict:
             "current_edge": "3.2",
             "next_trigger_edge": "3",
             "next_actionable_trigger_edge": "3.8",
+            "next_locked_trigger_edge": "3.8",
             "quantity_oz": "1",
             "binance_side": "SELL",
             "binance_price": "105",
@@ -226,6 +228,7 @@ def add_plan_actionable_after_base_trigger(price: str = "105") -> dict:
             "current_edge": "4.0",
             "next_trigger_edge": "3",
             "next_actionable_trigger_edge": "3.8",
+            "next_locked_trigger_edge": "3.8",
             "quantity_oz": "1",
             "binance_side": "SELL",
             "binance_price": price,

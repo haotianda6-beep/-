@@ -1587,11 +1587,14 @@
           const actionableText =
             add.next_actionable_trigger_edge !== undefined &&
             add.next_actionable_trigger_edge !== null &&
-            Number(add.next_actionable_trigger_edge) > Number(add.next_trigger_edge)
-              ? `；安全可执行价差 ${fmt(add.next_actionable_trigger_edge)} 美元`
+            Number(add.next_actionable_trigger_edge) !== Number(add.next_trigger_edge)
+              ? `；开始挂单观察线 ${fmt(add.next_actionable_trigger_edge)} 美元`
               : "";
+          const capText = add.trigger_cap_applied
+            ? `；已按黄金正常上限压到 ${fmt(add.next_locked_trigger_edge || add.next_trigger_edge)} 美元`
+            : "";
           $("v2AddPlanLine").textContent =
-            `${addStateText}；${addPrefix}；已补 ${fmt(add.add_count || 0)}/${fmt(add.max_add_count || maxAddCount)} 次，第 ${fmt(add.next_add_number)} 次阶梯价差 ${fmt(add.next_trigger_edge)} 美元${actionableText}，${add.reason || "等待触发"}`;
+            `${addStateText}；${addPrefix}；已补 ${fmt(add.add_count || 0)}/${fmt(add.max_add_count || maxAddCount)} 次，第 ${fmt(add.next_add_number)} 次预计成交价差 ${fmt(add.next_trigger_edge)} 美元${actionableText}${capText}，${add.reason || "等待触发"}`;
         } else if (addConfigured) {
           $("v2AddPlanLine").textContent =
             `${addStateText}；${addPrefix}；${add.reason || "等待持仓后计算补仓"}`;

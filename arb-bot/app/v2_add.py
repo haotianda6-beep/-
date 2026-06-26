@@ -54,7 +54,9 @@ class V2AddMixin:
         self.entry_hedge_side = Side(plan["mt4_follow_side"])
         self.adding_to_pair = True
         self.active_add_base_edge = Decimal(str(plan["base_edge"]))
-        self.active_add_trigger_edge = Decimal(str(plan.get("next_actionable_trigger_edge") or plan["next_trigger_edge"]))
+        self.active_add_trigger_edge = Decimal(
+            str(plan.get("next_locked_trigger_edge") or plan.get("next_trigger_edge") or plan.get("next_actionable_trigger_edge"))
+        )
         self.add_ready_since_ms = 0
         self.runtime.state = StrategyState.QUOTING_BINANCE_ENTRY
         self.runtime.last_error = None

@@ -878,13 +878,20 @@ def _add_plan(
     if base is None:
         return {"enabled": False, "reason": "等待组合真实均价差后再计算补仓阶梯。"}
     next_count = pair.add_count + 1
-    trigger = base + settings.add_edge_growth_usd * Decimal(next_count)
+    raw_trigger = base + settings.add_edge_growth_usd * Decimal(next_count)
+    trigger = min(raw_trigger, MAX_TRADABLE_ABS_SPREAD)
+    max_actionable_trigger = max(Decimal("0"), MAX_TRADABLE_ABS_SPREAD - max(Decimal("0"), slippage_budget))
+    initial_actionable_trigger = max(Decimal("0"), trigger - max(Decimal("0"), slippage_budget))
     data = {
         "enabled": True,
         "reason": "等待价差走扩到补仓触发位。",
         "base_edge": base,
         "next_add_number": next_count,
+        "raw_next_trigger_edge": raw_trigger,
         "next_trigger_edge": trigger,
+        "next_locked_trigger_edge": trigger,
+        "trigger_cap_applied": raw_trigger > trigger,
+        "max_actionable_trigger_edge": max_actionable_trigger,
         "add_count": pair.add_count,
         "max_add_count": settings.max_add_count,
         "quantity_oz": max(_round_down(settings.target_oz, filters.qty_step), filters.min_qty),
@@ -898,15 +905,14 @@ def _add_plan(
     required_locked_edge = None
     if current_avg_edge is not None and qty > 0:
         required_locked_edge = ((required_blended_edge * (pair.quantity_oz + qty)) - (current_avg_edge * pair.quantity_oz)) / qty
-    actionable_trigger = trigger
+    actionable_trigger = initial_actionable_trigger
     if required_locked_edge is not None:
-        actionable_trigger = max(trigger, required_locked_edge - slippage_budget)
+        actionable_trigger = max(actionable_trigger, required_locked_edge - slippage_budget)
     average_protection_edge = current_avg_edge
     required_average_after_add = current_avg_edge
     add_improvement_buffer = None
     if average_protection_edge is not None:
-        actionable_trigger = max(actionable_trigger, average_protection_edge)
-        add_improvement_buffer = max(MIN_ADD_EDGE_IMPROVEMENT, slippage_budget / Decimal("2"))
+        add_improvement_buffer = _add_improvement_buffer(average_protection_edge, slippage_budget)
         required_average_after_add = average_protection_edge + add_improvement_buffer
         required_locked_for_improvement = ((required_average_after_add * (pair.quantity_oz + qty)) - (average_protection_edge * pair.quantity_oz)) / qty
         actionable_trigger = max(actionable_trigger, required_locked_for_improvement - slippage_budget)
@@ -982,6 +988,15 @@ def _add_base_edge(pair: OpenPair, metrics: PositionMetrics | None) -> Decimal |
     if pair.add_count == 0 and metrics and metrics.actual_entry_spread is not None:
         return metrics.actual_entry_spread
     return pair.base_edge or (metrics.actual_entry_spread if metrics else None)
+
+
+def _add_improvement_buffer(average_edge: Decimal, slippage_budget: Decimal) -> Decimal:
+    default = max(MIN_ADD_EDGE_IMPROVEMENT, max(Decimal("0"), slippage_budget) / Decimal("2"))
+    headroom = MAX_TRADABLE_ABS_SPREAD - average_edge
+    if headroom <= 0:
+        return default
+    adaptive = max(Decimal("0.05"), headroom / Decimal("2"))
+    return min(default, adaptive)
 
 
 def _entry_viability_close_profit(settings: Settings) -> Decimal:

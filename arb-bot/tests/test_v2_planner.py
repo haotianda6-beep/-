@@ -928,7 +928,9 @@ def test_v2_add_plan_uses_real_first_edge_plus_step(tmp_path):
 
     assert status["add_plan"]["enabled"] is True
     assert status["add_plan"]["next_add_number"] == 3
-    assert status["add_plan"]["next_trigger_edge"] == Decimal("4.8")
+    assert status["add_plan"]["raw_next_trigger_edge"] == Decimal("4.8")
+    assert status["add_plan"]["next_trigger_edge"] == Decimal("4.00")
+    assert status["add_plan"]["trigger_cap_applied"] is True
     assert status["add_plan"]["ready"] is False
 
 
@@ -958,9 +960,10 @@ def test_v2_add_plan_blocks_above_four_dollar_trigger(tmp_path):
     )
 
     add_plan = status["add_plan"]
-    assert add_plan["next_trigger_edge"] == Decimal("4.08")
+    assert add_plan["raw_next_trigger_edge"] == Decimal("4.08")
+    assert add_plan["next_trigger_edge"] == Decimal("4.00")
     assert add_plan["current_edge"] == Decimal("4.1")
-    assert add_plan["next_actionable_trigger_edge"] == Decimal("4.08")
+    assert add_plan["next_actionable_trigger_edge"] == Decimal("3.70")
     assert add_plan["ready"] is False
     assert "超过黄金正常上限 4.00" in add_plan["reason"]
     assert add_plan["estimated_blended_edge"] is None
