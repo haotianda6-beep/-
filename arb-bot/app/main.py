@@ -449,6 +449,7 @@ async def _gold_v2_status(
                 min_points=4,
             ),
         )
+        status["execution_quality"] = _gold_v2_execution_quality()
         return _apply_gold_v2_runtime_blocks(status)
     except Exception as exc:  # noqa: BLE001
         logger.warning("gold v2 status unavailable: %s", str(exc)[:160])
@@ -517,6 +518,130 @@ def _gold_v2_realized_performance_from_items(items: list[TradeHistoryItem]) -> d
     summary["current_guard"]["version"] = GOLD_V2_CURRENT_GUARD_VERSION
     summary["current_guard"]["start_ms"] = GOLD_V2_CURRENT_GUARD_START_MS
     return summary
+
+
+def _gold_v2_execution_quality(now_ms: int | None = None) -> dict:
+    now_ms = now_ms or utc_now_ms()
+    try:
+        events = storage.get_events(now_ms - 7 * 24 * 60 * 60 * 1000, now_ms + 1000, limit=5000)
+    except Exception as exc:  # noqa: BLE001
+        return {"ready": False, "reason": f"执行质量统计暂不可用：{str(exc)[:120]}"}
+    guard_events = [
+        event
+        for event in events
+        if _event_time_ms(event) >= GOLD_V2_CURRENT_GUARD_START_MS
+    ]
+    entry_slippage = _event_decimal_values(
+        guard_events,
+        {"v2_mt4_entry_slippage", "v2_mt4_add_slippage"},
+        "mt4_entry_adverse_slippage",
+    )
+    entry_latency = _event_decimal_values(
+        guard_events,
+        {"v2_mt4_entry_slippage", "v2_mt4_add_slippage"},
+        "mt4_command_to_report_latency_ms",
+    )
+    close_slippage = _event_decimal_values(
+        guard_events,
+        {"v2_pair_pnl_recorded"},
+        "mt4_close_adverse_slippage",
+    )
+    close_latency = _event_decimal_values(
+        guard_events,
+        {"v2_pair_pnl_recorded"},
+        "mt4_command_to_report_latency_ms",
+    )
+    pnl_events = [event for event in guard_events if event.get("kind") == "v2_pair_pnl_recorded"]
+    pnls = _payload_decimal_values(pnl_events, "realized_pnl")
+    spread_capture = _spread_capture_values(pnl_events)
+    fee_events = [event for event in guard_events if event.get("kind") == "v2_binance_fee_or_taker_detected"]
+    return {
+        "ready": True,
+        "scope": "current_guard",
+        "current_guard_version": GOLD_V2_CURRENT_GUARD_VERSION,
+        "current_guard_start_ms": GOLD_V2_CURRENT_GUARD_START_MS,
+        "entry_follow": _quality_value_summary(entry_slippage),
+        "entry_follow_latency_ms": _quality_value_summary(entry_latency),
+        "close_follow": _quality_value_summary(close_slippage),
+        "close_follow_latency_ms": _quality_value_summary(close_latency),
+        "closed_pairs": _quality_pnl_summary(pnls),
+        "spread_capture_usd_per_oz": _quality_value_summary(spread_capture),
+        "binance_fee_or_taker_event_count": len(fee_events),
+        "latest_binance_fee_or_taker_event": (fee_events[-1].get("payload") if fee_events else None),
+    }
+
+
+def _event_time_ms(event: dict[str, Any]) -> int:
+    ts = event.get("ts")
+    if not ts:
+        return 0
+    try:
+        return int(datetime.fromisoformat(str(ts)).timestamp() * 1000)
+    except ValueError:
+        return 0
+
+
+def _event_decimal_values(events: list[dict[str, Any]], kinds: set[str], key: str) -> list[Decimal]:
+    return _payload_decimal_values([event for event in events if event.get("kind") in kinds], key)
+
+
+def _payload_decimal_values(events: list[dict[str, Any]], key: str) -> list[Decimal]:
+    values = []
+    for event in events:
+        payload = event.get("payload") or {}
+        value = _payload_decimal(payload, key)
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def _spread_capture_values(events: list[dict[str, Any]]) -> list[Decimal]:
+    values = []
+    for event in events:
+        payload = event.get("payload") or {}
+        entry = _payload_decimal(payload, "entry_spread")
+        exit_spread = _payload_decimal(payload, "actual_exit_spread")
+        if entry is not None and exit_spread is not None:
+            values.append(entry - exit_spread)
+    return values
+
+
+def _payload_decimal(payload: dict[str, Any], key: str) -> Decimal | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _quality_value_summary(values: list[Decimal]) -> dict:
+    if not values:
+        return {"sample_count": 0}
+    total = sum(values, Decimal("0"))
+    return {
+        "sample_count": len(values),
+        "average": total / Decimal(len(values)),
+        "latest": values[-1],
+        "min": min(values),
+        "max": max(values),
+    }
+
+
+def _quality_pnl_summary(values: list[Decimal]) -> dict:
+    summary = _quality_value_summary(values)
+    if not values:
+        return {**summary, "wins": 0, "losses": 0, "win_rate": None, "total": Decimal("0")}
+    wins = sum(1 for value in values if value > 0)
+    losses = sum(1 for value in values if value < 0)
+    return {
+        **summary,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": Decimal(wins) / Decimal(len(values)),
+        "total": sum(values, Decimal("0")),
+    }
 
 
 def _gold_v2_realized_performance_detail(items: list[TradeHistoryItem], label: str) -> dict:

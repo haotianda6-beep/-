@@ -581,6 +581,10 @@
                 <span class="wrap" id="v2AddPlanLine">-</span>
               </div>
               <div class="compact-row">
+                <strong>执行质量</strong>
+                <span class="wrap" id="v2QualityLine">-</span>
+              </div>
+              <div class="compact-row">
                 <strong>风控规则</strong>
                 <span class="wrap" id="v2RiskLine">-</span>
               </div>
@@ -1526,6 +1530,7 @@
           $("v2SelectedLine").textContent = "-";
           $("v2OrderLine").textContent = "-";
           $("v2AddPlanLine").textContent = "-";
+          $("v2QualityLine").textContent = "-";
           $("v2RiskLine").textContent = "-";
           return;
         }
@@ -1594,6 +1599,7 @@
         } else {
           $("v2AddPlanLine").textContent = add.reason || "补仓未启动";
         }
+        $("v2QualityLine").textContent = executionQualityText(plan.execution_quality);
         const policy = (plan.partial_fill_policy || []).slice(0, 2).join("；");
         const liveSpread =
           plan.mt4_live_spread_usd_per_oz !== null &&
@@ -1610,6 +1616,30 @@
             : "";
         $("v2RiskLine").textContent =
           `${policy || "禁止币安市价单"}；MT4滑点预算 ${fmt(plan.mt4_slippage_budget)} 美元${liveSpread}${moveSource}${exitBudget}`;
+      }
+
+      function executionQualityText(quality) {
+        if (!quality || quality.ready === false) {
+          return quality?.reason || "等待当前保护版执行样本";
+        }
+        const pairs = quality.closed_pairs || {};
+        const entry = quality.entry_follow || {};
+        const close = quality.close_follow || {};
+        const capture = quality.spread_capture_usd_per_oz || {};
+        const pairCount = Number(pairs.sample_count || 0);
+        const win =
+          pairs.win_rate !== null && pairs.win_rate !== undefined
+            ? `${fmt(Number(pairs.win_rate) * 100)}%`
+            : "-";
+        const entrySlip =
+          entry.sample_count > 0 ? `进场MT4均滑 ${fmt(entry.average)} 美元` : "进场滑点待样本";
+        const closeSlip =
+          close.sample_count > 0 ? `平仓MT4均滑 ${fmt(close.average)} 美元` : "平仓滑点待样本";
+        const captureText =
+          capture.sample_count > 0 ? `价差捕获均值 ${fmt(capture.average)} 美元` : "价差捕获待样本";
+        const feeCount = Number(quality.binance_fee_or_taker_event_count || 0);
+        const feeText = feeCount > 0 ? `币安手续费/吃单告警 ${fmt(feeCount)} 次` : "币安maker无告警";
+        return `当前保护版 ${fmt(pairCount)} 单，胜率 ${win}，${captureText}；${entrySlip}；${closeSlip}；${feeText}`;
       }
 
       function entryModelText(model) {

@@ -17,6 +17,14 @@ from app.main import (
 )
 
 
+def event_at(timestamp_ms: int, kind: str, payload: dict) -> dict:
+    return {
+        "ts": datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc).isoformat(),
+        "kind": kind,
+        "payload": payload,
+    }
+
+
 def test_immediate_close_net_excludes_future_funding_and_swap():
     immediate = _immediate_close_net(
         gross=Decimal("1.00"),
@@ -32,6 +40,60 @@ def test_immediate_close_net_excludes_future_funding_and_swap():
         funding_estimate=Decimal("0.40"),
         mt4_swap_estimate=Decimal("-0.60"),
     ) == Decimal("0.55")
+
+
+def test_gold_v2_execution_quality_uses_current_guard_events(monkeypatch):
+    guard = main.GOLD_V2_CURRENT_GUARD_START_MS
+    fake_storage = SimpleNamespace(
+        get_events=lambda start_ms, end_ms, limit=5000: [
+            event_at(
+                guard - 1_000,
+                "v2_mt4_entry_slippage",
+                {"mt4_entry_adverse_slippage": "99", "mt4_command_to_report_latency_ms": "999"},
+            ),
+            event_at(
+                guard + 1_000,
+                "v2_mt4_entry_slippage",
+                {"mt4_entry_adverse_slippage": "0.20", "mt4_command_to_report_latency_ms": "120"},
+            ),
+            event_at(
+                guard + 2_000,
+                "v2_mt4_add_slippage",
+                {"mt4_entry_adverse_slippage": "-0.10", "mt4_command_to_report_latency_ms": "80"},
+            ),
+            event_at(
+                guard + 3_000,
+                "v2_pair_pnl_recorded",
+                {
+                    "realized_pnl": "1.50",
+                    "entry_spread": "3.00",
+                    "actual_exit_spread": "1.20",
+                    "mt4_close_adverse_slippage": "0.15",
+                    "mt4_command_to_report_latency_ms": "90",
+                },
+            ),
+            event_at(
+                guard + 4_000,
+                "v2_binance_fee_or_taker_detected",
+                {"phase": "entry", "commission": "0.01", "all_maker": False},
+            ),
+        ]
+    )
+    monkeypatch.setattr(main, "storage", fake_storage)
+
+    quality = main._gold_v2_execution_quality(now_ms=guard + 10_000)
+
+    assert quality["ready"] is True
+    assert quality["entry_follow"]["sample_count"] == 2
+    assert quality["entry_follow"]["average"] == Decimal("0.05")
+    assert quality["entry_follow"]["max"] == Decimal("0.20")
+    assert quality["entry_follow_latency_ms"]["average"] == Decimal("100")
+    assert quality["closed_pairs"]["sample_count"] == 1
+    assert quality["closed_pairs"]["win_rate"] == Decimal("1")
+    assert quality["closed_pairs"]["total"] == Decimal("1.50")
+    assert quality["spread_capture_usd_per_oz"]["latest"] == Decimal("1.80")
+    assert quality["close_follow"]["latest"] == Decimal("0.15")
+    assert quality["binance_fee_or_taker_event_count"] == 1
 
 
 def test_gold_v2_realized_performance_uses_true_v2_trade_history_only():
