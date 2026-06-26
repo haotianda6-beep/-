@@ -232,6 +232,8 @@ async def test_v2_entry_and_exit_use_binance_post_only_then_mt4_follow(tmp_path)
     command = mt4.next_command()
     assert command["action"] == "BUY"
     assert command["lots"] == "0.01"
+    queued_events = [event for event in store.get_events(0, utc_now_ms() + 1_000, limit=100) if event["kind"] == "v2_mt4_entry_queued"]
+    assert queued_events[-1]["payload"]["mt4_quote_at_command"]["ask"] == "99"
 
     mt4.submit_report(Mt4Report(command_id=command["command_id"], status="ok", action="BUY", ticket=7, fill_price=Decimal("99"), lots=Decimal("0.01")))
     await executor.step(short_plan("101"))
@@ -260,7 +262,12 @@ async def test_v2_entry_and_exit_use_binance_post_only_then_mt4_follow(tmp_path)
     assert run.open_pair is None
     assert all(order.is_maker for order in client._orders.values())
     assert store.daily_pnl() == Decimal("1.3")
-    pnl_events = [event for event in store.get_events(0, utc_now_ms() + 1_000, limit=100) if event["kind"] == "v2_pair_pnl_recorded"]
+    events = store.get_events(0, utc_now_ms() + 1_000, limit=100)
+    entry_slippage_events = [event for event in events if event["kind"] == "v2_mt4_entry_slippage"]
+    assert entry_slippage_events
+    assert entry_slippage_events[-1]["payload"]["reference_price"] == "99"
+    assert entry_slippage_events[-1]["payload"]["mt4_entry_adverse_slippage"] == "0"
+    pnl_events = [event for event in events if event["kind"] == "v2_pair_pnl_recorded"]
     assert pnl_events
     pnl_payload = pnl_events[-1]["payload"]
     assert pnl_payload["entry_spread"] == "2"

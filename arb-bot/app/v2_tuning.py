@@ -21,21 +21,23 @@ def build_entry_model(
     entry_cooldown_minutes: int = 0,
     spread_protection_budget: Decimal = Decimal("0"),
     aged_close_profit: Decimal | None = None,
+    max_threshold: Decimal | None = None,
 ) -> dict:
-    if len(values) < min_points:
+    usable_values = _usable_values(values, max_threshold)
+    if len(usable_values) < min_points:
         return {
             "enabled": False,
-            "reason": "样本不足，暂不启用自动阈值模型。",
-            "points": len(values),
+            "reason": "有效样本不足，暂不启用自动阈值模型。",
+            "points": len(usable_values),
             "suggested_threshold": None,
             "entry_cooldown_minutes": entry_cooldown_minutes,
             "spread_protection_budget": spread_protection_budget,
             "aged_close_profit": aged_close_profit if aged_close_profit is not None else close_profit,
         }
-    candidates = _candidate_thresholds(values, manual_min)
+    candidates = _candidate_thresholds(usable_values, manual_min)
     results = [
         _simulate_candidate(
-            values=values,
+            values=usable_values,
             threshold=threshold,
             slippage_budget=slippage_budget,
             exit_follow_budget=exit_follow_budget,
@@ -52,7 +54,7 @@ def build_entry_model(
         return {
             "enabled": True,
             "reason": "最近样本没有证明 70% 以上回归胜率，沿用区间阈值。",
-            "points": len(values),
+            "points": len(usable_values),
             "suggested_threshold": None,
             "entry_cooldown_minutes": entry_cooldown_minutes,
             "spread_protection_budget": spread_protection_budget,
@@ -62,7 +64,7 @@ def build_entry_model(
     return {
         "enabled": True,
         "reason": _selection_reason(selected),
-        "points": len(values),
+        "points": len(usable_values),
         "suggested_threshold": selected["threshold"],
         "entry_cooldown_minutes": entry_cooldown_minutes,
         "spread_protection_budget": spread_protection_budget,
@@ -70,6 +72,12 @@ def build_entry_model(
         "selected": selected,
         "candidates": results,
     }
+
+
+def _usable_values(values: list[Decimal], max_threshold: Decimal | None) -> list[Decimal]:
+    if max_threshold is None or max_threshold <= 0:
+        return values
+    return [value for value in values if -max_threshold <= value <= max_threshold]
 
 
 def _candidate_thresholds(values: list[Decimal], manual_min: Decimal) -> list[Decimal]:

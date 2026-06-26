@@ -122,7 +122,11 @@ class V2AddMixin:
         self.hedge_command_id = command.command_id
         self.hedge_started_ms = utc_now_ms()
         self.runtime.state = StrategyState.HEDGING_MT4
-        self.storage.record_event("v2_mt4_add_queued" if self.adding_to_pair else "v2_mt4_entry_queued", {"command_id": command.command_id, "lots": str(command.lots)})
+        quote_at_command = self._capture_entry_mt4_quote() if hasattr(self, "_capture_entry_mt4_quote") else {}
+        self.storage.record_event(
+            "v2_mt4_add_queued" if self.adding_to_pair else "v2_mt4_entry_queued",
+            {"command_id": command.command_id, "lots": str(command.lots), "mt4_quote_at_command": quote_at_command},
+        )
 
     def _recover_entry_context_from_order(self, order: OrderUpdate) -> None:
         if self.runtime.open_pair:
@@ -159,6 +163,9 @@ class V2AddMixin:
         old_qty, add_qty = pair.quantity_oz, order.executed_qty
         new_qty = old_qty + add_qty
         edge = order.avg_price - report.fill_price if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG else report.fill_price - order.avg_price
+        record_slippage = getattr(self, "_record_mt4_entry_slippage", None)
+        if record_slippage:
+            record_slippage("v2_mt4_add_slippage", report)
         tickets = list(pair.mt4_tickets or ([] if pair.mt4_ticket is None else [pair.mt4_ticket]))
         if report.ticket and report.ticket not in tickets:
             tickets.append(report.ticket)
@@ -193,6 +200,9 @@ class V2AddMixin:
         self.post_add_exit_block_until_ms = utc_now_ms() + max(5000, self.settings.max_hedge_delay_ms)
         self.active_order = None
         self.hedge_command_id = None
+        clear_entry_quote = getattr(self, "_clear_entry_quote", None)
+        if clear_entry_quote:
+            clear_entry_quote()
         if hasattr(self, "_clear_entry_carry"):
             self._clear_entry_carry()
         self.adding_to_pair = False

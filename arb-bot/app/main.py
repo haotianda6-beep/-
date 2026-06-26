@@ -26,6 +26,7 @@ from app.live_reconcile import (
     open_pair_sync_grace_active,
     orphan_live_position_action,
 )
+from app.market_calendar import is_xau_weekend_ms
 from app.models import (
     BinancePositionSnapshot,
     EngineStatus,
@@ -472,8 +473,10 @@ async def _gold_v2_recent_binance_bars() -> list[HistoryBar]:
     return _gold_v2_binance_bars_cache
 
 
-def _record_mt4_tick_bar(quote: MarketQuote) -> None:
+def _record_mt4_tick_bar(quote: MarketQuote, trade_allowed: bool | None = None) -> None:
     global _mt4_tick_bar_last_saved_ms
+    if trade_allowed is False or is_xau_weekend_ms(quote.timestamp_ms):
+        return
     now = _now_ms()
     if now - _mt4_tick_bar_last_saved_ms < 1000:
         return
@@ -497,7 +500,7 @@ async def mt4_tick(payload: Mt4Tick, x_mt4_token: str | None = Header(default=No
         raise HTTPException(status_code=403, detail="invalid MT4 token")
     quote = mt4_bridge.update_tick(payload)
     _sync_mt4_trade_guard_from_tick(payload)
-    _record_mt4_tick_bar(quote)
+    _record_mt4_tick_bar(quote, mt4_bridge.trade_allowed())
     return {"status": "ok", "symbol": quote.symbol, "timestamp_ms": quote.timestamp_ms}
 
 
@@ -512,6 +515,7 @@ def _sync_mt4_trade_guard_from_tick(payload: Mt4Tick) -> None:
             "MT4 暂不可交易" in strategy.last_error
             or "MT4 暂不可平仓" in strategy.last_error
             or "MT4 交易状态未确认可交易" in strategy.last_error
+            or "MT4 未连接" in strategy.last_error
             or (
                 "MT4 EA版本" in strategy.last_error
                 and payload.ea_version == REQUIRED_MT4_EA_VERSION

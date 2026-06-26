@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -117,6 +118,19 @@ def test_spread_analysis_ignores_weekend_and_abnormal_spreads():
     assert result.matched_points == 1
     assert result.latest_diff == Decimal("3")
     assert result.min_abs_diff == Decimal("3")
+
+
+def test_spread_analysis_ignores_china_calendar_weekend_spreads():
+    china_saturday = int(datetime(2026, 6, 26, 17, tzinfo=timezone.utc).timestamp() * 1000)
+    monday = int(datetime(2026, 6, 29, 1, tzinfo=timezone.utc).timestamp() * 1000)
+    mt4 = [bar(china_saturday, "4170"), bar(monday, "4170")]
+    binance = [bar(china_saturday, "4182.3"), bar(monday, "4173")]
+
+    result = compare_spreads(mt4, binance, days=7, interval="1m", threshold=Decimal("0.50"))
+
+    assert result.ready
+    assert result.matched_points == 1
+    assert result.latest_diff == Decimal("3")
 
 
 def test_spread_analysis_reports_unaligned_bars():

@@ -57,6 +57,38 @@ def test_entry_model_prefers_daily_trade_target_over_high_frequency():
     assert "3-5单" in model["reason"]
 
 
+def test_entry_model_excludes_abnormal_threshold_candidates():
+    values = [
+        Decimal("1.0"),
+        Decimal("3.0"),
+        Decimal("1.0"),
+        Decimal("12.3"),
+        Decimal("1.0"),
+        Decimal("3.0"),
+        Decimal("1.0"),
+        Decimal("12.3"),
+        Decimal("1.0"),
+        Decimal("3.0"),
+        Decimal("1.0"),
+        Decimal("12.3"),
+    ]
+
+    model = build_entry_model(
+        values=values,
+        manual_min=Decimal("2.0"),
+        slippage_budget=Decimal("0.3"),
+        exit_follow_budget=Decimal("0.6"),
+        close_profit=Decimal("0.1"),
+        max_hold_minutes=3,
+        min_points=8,
+        max_threshold=Decimal("4.25"),
+    )
+
+    assert model["suggested_threshold"] <= Decimal("4.25")
+    assert model["points"] == 9
+    assert all(candidate["threshold"] <= Decimal("4.25") for candidate in model["candidates"])
+
+
 def test_entry_model_applies_entry_cooldown_to_projected_frequency():
     values = [Decimal("1.0")] * 1440
     for index in range(10, 1430, 20):

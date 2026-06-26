@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
 import httpx
 
 from app.config import Settings
+from app.market_calendar import is_xau_weekend_ms
 from app.models import HistoryBar, SpreadAnalysis, SpreadAnalysisPoint
 from app.storage import Storage
 from app.quote_guard import MAX_REASONABLE_XAU_MID_GAP
@@ -163,5 +163,4 @@ def _bucket_time(timestamp_ms: int, interval_ms: int) -> int:
 
 
 def _weekend_bar(open_time_ms: int) -> bool:
-    weekday = datetime.fromtimestamp(open_time_ms / 1000, timezone.utc).weekday()
-    return weekday >= 5
+    return is_xau_weekend_ms(open_time_ms)

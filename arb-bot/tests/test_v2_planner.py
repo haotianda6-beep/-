@@ -242,6 +242,25 @@ def test_v2_ignores_weekend_training_bars():
     assert discarded == 1
 
 
+def test_v2_ignores_china_calendar_weekend_training_bars():
+    china_saturday = int(datetime(2026, 6, 26, 17, tzinfo=timezone.utc).timestamp() * 1000)
+    monday = int(datetime(2026, 6, 29, 1, tzinfo=timezone.utc).timestamp() * 1000)
+    mt4_bars = [
+        ranged_bar(china_saturday, Decimal("4000"), Decimal("3999.9"), Decimal("4000.1")),
+        ranged_bar(monday, Decimal("4000"), Decimal("3999.9"), Decimal("4000.1")),
+    ]
+    binance_bars = [
+        ranged_bar(china_saturday, Decimal("4012.3"), Decimal("4012.2"), Decimal("4012.4")),
+        ranged_bar(monday, Decimal("4003"), Decimal("4002.9"), Decimal("4003.1")),
+    ]
+
+    short, long, discarded = _spread_values(mt4_bars, binance_bars)
+
+    assert short == [Decimal("3")]
+    assert long == [Decimal("-3")]
+    assert discarded == 1
+
+
 def test_v2_ignores_stale_and_volatile_training_bars():
     base = 1_800_000_000_000
     mt4_bars = [
@@ -446,6 +465,28 @@ def test_v2_exit_follow_budget_uses_learned_mt4_close_slippage(tmp_path):
 
     assert status["mt4_exit_follow_budget"] == Decimal("0.95")
     assert status["short_entry"]["mt4_exit_follow_budget"] == Decimal("0.95")
+
+
+def test_v2_entry_slippage_budget_uses_learned_mt4_entry_slippage(tmp_path):
+    cfg = settings(tmp_path, MT4_SLIPPAGE_POINTS=0)
+    store = Storage(cfg.sqlite_path)
+    store.record_event("v2_mt4_entry_slippage", {"mt4_entry_adverse_slippage": "1.10"})
+    mt4_bars, binance_bars = recent_bars([Decimal("2")] * 10)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003"), ask=Decimal("4003.2")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+    )
+
+    assert status["mt4_slippage_budget"] == Decimal("1.10")
+    assert status["short_entry"]["mt4_slippage_budget"] == Decimal("1.10")
 
 
 def test_v2_slippage_budget_includes_recent_mt4_movement(tmp_path):

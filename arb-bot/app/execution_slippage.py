@@ -14,16 +14,50 @@ def mt4_close_slippage_budget_usd_per_oz(
     percentile: int = 80,
     limit: int = 200,
 ) -> Decimal:
+    return _slippage_budget_usd_per_oz(
+        storage=storage,
+        now_ms=now_ms,
+        kinds={"v2_pair_pnl_recorded"},
+        field="mt4_close_adverse_slippage",
+        percentile=percentile,
+        limit=limit,
+    )
+
+
+def mt4_entry_slippage_budget_usd_per_oz(
+    storage: Storage,
+    now_ms: int,
+    percentile: int = 80,
+    limit: int = 200,
+) -> Decimal:
+    return _slippage_budget_usd_per_oz(
+        storage=storage,
+        now_ms=now_ms,
+        kinds={"v2_mt4_entry_slippage", "v2_mt4_add_slippage"},
+        field="mt4_entry_adverse_slippage",
+        percentile=percentile,
+        limit=limit,
+    )
+
+
+def _slippage_budget_usd_per_oz(
+    storage: Storage,
+    now_ms: int,
+    kinds: set[str],
+    field: str,
+    percentile: int,
+    limit: int,
+) -> Decimal:
     try:
         events = storage.get_events(now_ms - SLIPPAGE_LOOKBACK_MS, now_ms + 1000, limit=limit)
     except Exception:  # noqa: BLE001
         return Decimal("0")
     values: list[Decimal] = []
     for event in events:
-        if event.get("kind") != "v2_pair_pnl_recorded":
+        if event.get("kind") not in kinds:
             continue
         payload = event.get("payload") or {}
-        value = _positive_decimal(payload.get("mt4_close_adverse_slippage"))
+        value = _positive_decimal(payload.get(field))
         if value is not None:
             values.append(value)
     if not values:

@@ -40,6 +40,9 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.close_mt4_quote_ask: Decimal | None = None
         self.close_mt4_quote_ms: int | None = None
         self.close_mt4_report_ms: int | None = None
+        self.entry_mt4_quote_bid: Decimal | None = None
+        self.entry_mt4_quote_ask: Decimal | None = None
+        self.entry_mt4_quote_ms: int | None = None
         self.carry_entry_qty = Decimal("0")
         self.carry_entry_notional = Decimal("0")
         self.carry_entry_order_ids: list[str] = []
@@ -104,6 +107,9 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.close_mt4_quote_ask = None
         self.close_mt4_quote_ms = None
         self.close_mt4_report_ms = None
+        self.entry_mt4_quote_bid = None
+        self.entry_mt4_quote_ask = None
+        self.entry_mt4_quote_ms = None
         self.carry_entry_qty = Decimal("0")
         self.carry_entry_notional = Decimal("0")
         self.carry_entry_order_ids = []
@@ -742,6 +748,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if report.status != "ok" or report.fill_price is None or not self.active_order or not self.entry_direction:
             self._retry_mt4_hedge_after_failure(f"MT4 开仓跟随失败：{report.message or report.error_code}")
             return
+        self._record_mt4_entry_slippage("v2_mt4_entry_slippage", report)
         edge = self.active_order.avg_price - report.fill_price if self.entry_direction == PairDirection.BINANCE_SHORT_MT4_LONG else report.fill_price - self.active_order.avg_price
         self.runtime.open_pair = OpenPair(direction=self.entry_direction, quantity_oz=self.active_order.executed_qty, binance_entry_price=self.active_order.avg_price, mt4_entry_price=report.fill_price, binance_order_id=self.active_order.order_id, mt4_ticket=report.ticket, mt4_tickets=[report.ticket] if report.ticket else [], base_edge=edge)
         self.last_entry_ms = int(self.runtime.open_pair.opened_ms)
@@ -749,9 +756,57 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.post_add_exit_block_until_ms = utc_now_ms() + max(5000, self.settings.max_hedge_delay_ms)
         self.active_order = None
         self.hedge_command_id = None
+        self._clear_entry_quote()
         self._clear_entry_carry()
         self.runtime.state = StrategyState.PAIR_OPEN
         self.runtime.last_error = None
+
+    def _capture_entry_mt4_quote(self) -> dict[str, str | int | None]:
+        quote = self.mt4.latest_quote()
+        self.entry_mt4_quote_bid = quote.bid if quote else None
+        self.entry_mt4_quote_ask = quote.ask if quote else None
+        self.entry_mt4_quote_ms = quote.timestamp_ms if quote else None
+        return {
+            "bid": str(self.entry_mt4_quote_bid) if self.entry_mt4_quote_bid is not None else None,
+            "ask": str(self.entry_mt4_quote_ask) if self.entry_mt4_quote_ask is not None else None,
+            "timestamp_ms": self.entry_mt4_quote_ms,
+        }
+
+    def _record_mt4_entry_slippage(self, kind: str, report) -> None:
+        adverse = None
+        reference = None
+        if report.fill_price is not None and self.entry_hedge_side == Side.BUY and self.entry_mt4_quote_ask is not None:
+            reference = self.entry_mt4_quote_ask
+            adverse = report.fill_price - self.entry_mt4_quote_ask
+        elif report.fill_price is not None and self.entry_hedge_side == Side.SELL and self.entry_mt4_quote_bid is not None:
+            reference = self.entry_mt4_quote_bid
+            adverse = self.entry_mt4_quote_bid - report.fill_price
+        self.storage.record_event(
+            kind,
+            {
+                "command_id": report.command_id,
+                "side": self.entry_hedge_side.value if self.entry_hedge_side else None,
+                "fill_price": str(report.fill_price) if report.fill_price is not None else None,
+                "reference_price": str(reference) if reference is not None else None,
+                "mt4_entry_adverse_slippage": str(adverse) if adverse is not None else None,
+                "mt4_quote_at_command": {
+                    "bid": str(self.entry_mt4_quote_bid) if self.entry_mt4_quote_bid is not None else None,
+                    "ask": str(self.entry_mt4_quote_ask) if self.entry_mt4_quote_ask is not None else None,
+                    "timestamp_ms": self.entry_mt4_quote_ms,
+                },
+                "mt4_report_timestamp_ms": report.timestamp_ms,
+                "mt4_command_to_report_latency_ms": (
+                    max(0, int(report.timestamp_ms) - self.hedge_started_ms)
+                    if report.timestamp_ms and self.hedge_started_ms
+                    else None
+                ),
+            },
+        )
+
+    def _clear_entry_quote(self) -> None:
+        self.entry_mt4_quote_bid = None
+        self.entry_mt4_quote_ask = None
+        self.entry_mt4_quote_ms = None
 
     def _entry_interval_blocked(self) -> bool:
         interval_ms = max(0, self.settings.gold_v2_min_entry_interval_ms)
