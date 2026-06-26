@@ -448,7 +448,9 @@ async def _gold_v2_status(
                 min_points=4,
             ),
         )
-        status["execution_quality"] = _gold_v2_execution_quality()
+        execution_quality = _gold_v2_execution_quality()
+        status["execution_quality"] = execution_quality
+        _apply_gold_v2_execution_quality_to_objective(status, execution_quality)
         return _apply_gold_v2_runtime_blocks(status)
     except Exception as exc:  # noqa: BLE001
         logger.warning("gold v2 status unavailable: %s", str(exc)[:160])
@@ -570,6 +572,23 @@ def _gold_v2_execution_quality(now_ms: int | None = None) -> dict:
         "binance_fee_or_taker_event_count": len(fee_events),
         "latest_binance_fee_or_taker_event": (fee_events[-1].get("payload") if fee_events else None),
     }
+
+
+def _apply_gold_v2_execution_quality_to_objective(status: dict, execution_quality: dict) -> None:
+    objective = status.get("objective_health")
+    if not isinstance(objective, dict):
+        return
+    fee_count = int(execution_quality.get("binance_fee_or_taker_event_count") or 0)
+    maker_only_ok = execution_quality.get("ready") is True and fee_count == 0
+    objective["maker_only_ok"] = maker_only_ok
+    objective["binance_fee_or_taker_event_count"] = fee_count
+    objective["hard_constraints_ok"] = maker_only_ok
+    if maker_only_ok:
+        return
+    objective["ready_for_goal"] = False
+    reason = objective.get("reason") or ""
+    extra = f"当前保护版存在币安手续费或吃单事件 {fee_count} 次，未满足币安只挂限价 maker 的硬要求。"
+    objective["reason"] = f"{reason} {extra}".strip()
 
 
 def _event_time_ms(event: dict[str, Any]) -> int:

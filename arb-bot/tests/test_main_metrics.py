@@ -11,6 +11,7 @@ from app.main import (
     _effective_close_profit_usd_per_oz,
     _exit_follow_buffer_usd_per_oz,
     _estimate_mt4_swap,
+    _apply_gold_v2_execution_quality_to_objective,
     _gold_v2_realized_performance_from_items,
     _immediate_close_net,
     _live_mismatch_wait_state,
@@ -60,6 +61,36 @@ def test_immediate_close_net_excludes_future_funding_and_swap():
         funding_estimate=Decimal("0.40"),
         mt4_swap_estimate=Decimal("-0.60"),
     ) == Decimal("0.55")
+
+
+def test_gold_v2_objective_keeps_ready_when_maker_only_quality_passes():
+    status = {"objective_health": {"ready_for_goal": True, "reason": "达标"}}
+
+    _apply_gold_v2_execution_quality_to_objective(
+        status,
+        {"ready": True, "binance_fee_or_taker_event_count": 0},
+    )
+
+    objective = status["objective_health"]
+    assert objective["ready_for_goal"] is True
+    assert objective["maker_only_ok"] is True
+    assert objective["hard_constraints_ok"] is True
+
+
+def test_gold_v2_objective_blocks_when_fee_or_taker_event_exists():
+    status = {"objective_health": {"ready_for_goal": True, "reason": "胜率和频率达标"}}
+
+    _apply_gold_v2_execution_quality_to_objective(
+        status,
+        {"ready": True, "binance_fee_or_taker_event_count": 1},
+    )
+
+    objective = status["objective_health"]
+    assert objective["ready_for_goal"] is False
+    assert objective["maker_only_ok"] is False
+    assert objective["hard_constraints_ok"] is False
+    assert objective["binance_fee_or_taker_event_count"] == 1
+    assert "币安手续费或吃单事件 1 次" in objective["reason"]
 
 
 def test_gold_v2_execution_quality_uses_current_guard_events(monkeypatch):
