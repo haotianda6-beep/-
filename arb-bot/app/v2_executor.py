@@ -17,6 +17,7 @@ from app.v2_support import TERMINAL, execution_status, exit_spread_ready, lots_f
 
 MT4_MARKET_CLOSED_ERROR_CODES = {132}
 MT4_EXIT_BLOCK_MS = 30 * 60 * 1000
+REQUIRED_MT4_EA_VERSION = "20260626-trade-guard-v2"
 
 
 class GoldV2Executor(V2AddMixin, V2CommonMixin):
@@ -852,6 +853,12 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
 
     def _mt4_trade_block_reason(self, action: str) -> str | None:
         if not self.settings.is_dry_run:
+            ea_version = self.mt4.ea_version()
+            if ea_version != REQUIRED_MT4_EA_VERSION:
+                return (
+                    f"MT4 EA版本 {ea_version or '未上报'} 不是 {REQUIRED_MT4_EA_VERSION}，"
+                    f"已禁止币安{action}挂单并保持当前对冲。"
+                )
             trade_allowed = self.mt4.trade_allowed()
             if trade_allowed is not True:
                 return f"MT4 交易状态未确认可交易，已禁止币安{action}挂单并保持当前对冲。"

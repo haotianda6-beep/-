@@ -63,7 +63,7 @@ from app.strategy import (
     round_down,
     round_up,
 )
-from app.v2_executor import GoldV2Executor
+from app.v2_executor import GoldV2Executor, REQUIRED_MT4_EA_VERSION
 from app.v2_planner import build_gold_v2_status
 
 
@@ -2428,6 +2428,12 @@ def _apply_gold_v2_runtime_blocks(status: dict) -> dict:
 
 def _mt4_trade_block_display_reason(action: str) -> str | None:
     if not settings.is_dry_run:
+        ea_version = mt4_bridge.ea_version()
+        if ea_version != REQUIRED_MT4_EA_VERSION:
+            return (
+                f"MT4 EA版本 {ea_version or '未上报'} 不是 {REQUIRED_MT4_EA_VERSION}，"
+                f"已禁止币安{action}挂单并保持当前对冲。"
+            )
         if mt4_bridge.trade_allowed() is not True:
             return f"MT4 交易状态未确认可交易，已禁止币安{action}挂单并保持当前对冲。"
         if mt4_bridge.trade_context_busy():

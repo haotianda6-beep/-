@@ -8,7 +8,7 @@ from app.config import Settings
 from app.models import Mt4Position, Mt4Report, Mt4Tick, OpenPair, OrderRequest, OrderStatus, OrderUpdate, Side, StrategyState, utc_now_ms
 from app.mt4_bridge import Mt4Bridge
 from app.storage import Storage
-from app.v2_executor import GoldV2Executor
+from app.v2_executor import GoldV2Executor, REQUIRED_MT4_EA_VERSION
 
 
 def settings(tmp_path, **kwargs) -> Settings:
@@ -48,10 +48,12 @@ def mt4_tick(
     symbol_trade_allowed: bool | None = None,
     terminal_trade_allowed: bool | None = None,
     trade_context_busy: bool | None = None,
+    ea_version: str | None = None,
 ) -> None:
     mt4.update_tick(
         Mt4Tick(
             symbol="XAUUSD",
+            ea_version=ea_version,
             bid=Decimal(bid),
             ask=Decimal(ask),
             trade_allowed=trade_allowed,
@@ -469,7 +471,7 @@ async def test_v2_mt4_trade_block_prevents_add_order(tmp_path):
     executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
     executor.mt4_exit_block_until_ms = utc_now_ms() + 60_000
     client.set_quote(Decimal("104"), Decimal("104.2"))
-    mt4_tick(mt4, "100", "100.2")
+    mt4_tick(mt4, "100", "100.2", ea_version=REQUIRED_MT4_EA_VERSION)
 
     await executor.step(add_plan("105"))
 
@@ -504,13 +506,57 @@ async def test_v2_live_requires_mt4_trade_allowed_before_add_order(tmp_path):
     )
     executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
     client.set_quote(Decimal("104"), Decimal("104.2"))
-    mt4_tick(mt4, "100", "100.2")
+    mt4_tick(mt4, "100", "100.2", ea_version=REQUIRED_MT4_EA_VERSION)
 
     await executor.step(add_plan("105"))
 
     assert run.state == StrategyState.PAIR_OPEN
     assert executor.active_order is None
     assert "交易状态未确认可交易" in run.last_error
+
+
+@pytest.mark.asyncio
+async def test_v2_live_requires_current_mt4_ea_version_before_add_order(tmp_path):
+    cfg = settings(
+        tmp_path,
+        SQLITE_PATH=tmp_path / "test.sqlite3",
+        PAPER_MODE=False,
+        LIVE_TRADING=True,
+        PAPER_AUTO_FILL=False,
+        MAX_ADD_COUNT=2,
+    )
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    client.set_quote(Decimal("104"), Decimal("104.2"))
+    mt4_tick(
+        mt4,
+        "100",
+        "100.2",
+        trade_allowed=True,
+        symbol_trade_allowed=True,
+        terminal_trade_allowed=True,
+        trade_context_busy=False,
+        ea_version="20260626-trade-guard",
+    )
+
+    await executor.step(add_plan("105"))
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    assert REQUIRED_MT4_EA_VERSION in run.last_error
 
 
 @pytest.mark.asyncio
@@ -572,14 +618,30 @@ async def test_v2_live_cancels_unfilled_exit_order_when_mt4_becomes_untradable(t
     )
     executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
     client.set_quote(Decimal("100"), Decimal("100.1"))
-    mt4_tick(mt4, "99", "99.2", symbol_trade_allowed=True, terminal_trade_allowed=True, trade_context_busy=False)
+    mt4_tick(
+        mt4,
+        "99",
+        "99.2",
+        symbol_trade_allowed=True,
+        terminal_trade_allowed=True,
+        trade_context_busy=False,
+        ea_version=REQUIRED_MT4_EA_VERSION,
+    )
 
     await executor.step(exit_plan("3.2"))
 
     assert run.state == StrategyState.QUOTING_BINANCE_EXIT
     assert executor.active_order is not None
 
-    mt4_tick(mt4, "99", "99.2", symbol_trade_allowed=True, terminal_trade_allowed=False, trade_context_busy=False)
+    mt4_tick(
+        mt4,
+        "99",
+        "99.2",
+        symbol_trade_allowed=True,
+        terminal_trade_allowed=False,
+        trade_context_busy=False,
+        ea_version=REQUIRED_MT4_EA_VERSION,
+    )
     await executor.step(exit_plan("3.2"))
 
     assert run.state == StrategyState.PAIR_OPEN
