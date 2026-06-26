@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from app.binance_client import BinanceBaseClient, BinanceError, BinanceFuturesClient, PaperBinanceClient
 from app.config import Settings, existing_env_paths, load_settings, update_local_config_file, update_mode_file
 from app.execution_slippage import mt4_close_slippage_budget_usd_per_oz
+from app.gold_v2_version import GOLD_V2_CURRENT_GUARD_START_MS, GOLD_V2_CURRENT_GUARD_VERSION
 from app.logger import setup_logging
 from app.history import build_spread_analysis, fetch_binance_klines
 from app.live_reconcile import (
@@ -128,8 +129,6 @@ GOLD_V2_EXIT_BUFFER_MOVE_PERCENTILE = 70
 GOLD_V2_EXIT_BUFFER_MIN_POINTS = 8
 GOLD_V2_ENTRY_MOVE_BUDGET_MS = 10_000
 GOLD_V2_FOLLOW_MOVE_BUDGET_MS = 1000
-GOLD_V2_CURRENT_GUARD_VERSION = "2026-06-26 22:54 CST"
-GOLD_V2_CURRENT_GUARD_START_MS = 1_782_485_640_000
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 MT4_DIR = Path(__file__).resolve().parents[1] / "mt4"
 RUNTIME_STATE_PATH = settings.sqlite_path.parent / "runtime_state.json"

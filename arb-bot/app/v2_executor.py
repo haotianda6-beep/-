@@ -6,6 +6,7 @@ from typing import Any
 
 from app.binance_client import BinanceBaseClient, BinanceError
 from app.config import Settings
+from app.gold_v2_version import GOLD_V2_CURRENT_GUARD_START_MS
 from app.models import ExecutionPlanStatus, OpenPair, OrderRequest, OrderStatus, OrderUpdate, PairDirection, Side, StrategyState, utc_now_ms
 from app.mt4_bridge import Mt4Bridge
 from app.quote_guard import xau_quote_gap_reason
@@ -924,9 +925,11 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
                 continue
             payload = event.get("payload") or {}
             try:
-                return int(payload.get("opened_ms") or 0)
+                opened_ms = int(payload.get("opened_ms") or 0)
             except (TypeError, ValueError):
-                return 0
+                continue
+            if opened_ms >= GOLD_V2_CURRENT_GUARD_START_MS:
+                return opened_ms
         return 0
 
     def _handle_close_report(self, report) -> None:

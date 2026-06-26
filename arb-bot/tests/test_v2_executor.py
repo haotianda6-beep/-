@@ -5,6 +5,7 @@ import pytest
 
 from app.binance_client import BinanceError, PaperBinanceClient
 from app.config import Settings
+from app.gold_v2_version import GOLD_V2_CURRENT_GUARD_START_MS
 from app.models import Mt4Position, Mt4Report, Mt4Tick, OpenPair, OrderRequest, OrderStatus, OrderUpdate, Side, StrategyState, utc_now_ms
 from app.mt4_bridge import Mt4Bridge
 from app.storage import Storage
@@ -370,6 +371,45 @@ async def test_v2_blocks_new_entry_during_min_entry_interval(tmp_path):
     executor = GoldV2Executor(cfg, client, mt4, store, run)
     executor.last_entry_ms = utc_now_ms()
 
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(short_plan("101"))
+
+    assert run.state == StrategyState.IDLE
+    assert executor.active_order is None
+    assert "开仓频率控制中" in run.last_error
+
+
+@pytest.mark.asyncio
+async def test_v2_ignores_pre_guard_entry_when_loading_entry_cooldown(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", GOLD_V2_MIN_ENTRY_INTERVAL_MS=10_000)
+    store = Storage(cfg.sqlite_path)
+    store.record_event("v2_pair_open", {"opened_ms": GOLD_V2_CURRENT_GUARD_START_MS - 1_000})
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+
+    assert executor.last_entry_ms == 0
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(short_plan("101"))
+
+    assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert executor.active_order is not None
+
+
+@pytest.mark.asyncio
+async def test_v2_loads_current_guard_entry_for_entry_cooldown(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", GOLD_V2_MIN_ENTRY_INTERVAL_MS=10_000)
+    store = Storage(cfg.sqlite_path)
+    store.record_event("v2_pair_open", {"opened_ms": utc_now_ms()})
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+
+    assert executor.last_entry_ms > 0
     client.set_quote(Decimal("100"), Decimal("100.2"))
     mt4_tick(mt4, "98.8", "99")
     await executor.step(short_plan("101"))
