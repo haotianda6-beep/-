@@ -27,7 +27,7 @@ from app.live_reconcile import (
     open_pair_sync_grace_active,
     orphan_live_position_action,
 )
-from app.market_calendar import is_xau_weekend_ms
+from app.market_calendar import is_xau_weekend_ms, xau_weekend_entry_block_reason
 from app.models import (
     BinancePositionSnapshot,
     EngineStatus,
@@ -2651,29 +2651,38 @@ def _execution_plan(metrics: PositionMetrics | None = None) -> ExecutionPlanStat
 
 
 def _apply_gold_v2_runtime_blocks(status: dict) -> dict:
-    block_reason = _mt4_trade_block_display_reason("补仓")
-    if not block_reason:
+    add_block_reason = _mt4_trade_block_display_reason("补仓")
+    entry_block_reason = _mt4_trade_block_display_reason("开仓")
+    exit_block_reason = _mt4_trade_block_display_reason("平仓")
+    if not (add_block_reason or entry_block_reason or exit_block_reason):
         return status
     blocked = dict(status)
     add_plan = dict(blocked.get("add_plan") or {})
-    if add_plan:
-        add_plan.update({"ready": False, "blocked": True, "reason": block_reason})
+    if add_plan and add_block_reason:
+        add_plan.update({"ready": False, "blocked": True, "reason": add_block_reason})
         blocked["add_plan"] = add_plan
     selected_entry = dict(blocked.get("selected_entry") or {})
-    if selected_entry:
-        selected_entry.update({"ready": False, "blocked": True, "reason": _mt4_trade_block_display_reason("开仓")})
+    if selected_entry and entry_block_reason:
+        selected_entry.update({"ready": False, "blocked": True, "reason": entry_block_reason})
         blocked["selected_entry"] = selected_entry
     exit_plan = dict(blocked.get("exit_plan") or {})
-    if exit_plan:
-        exit_plan.update({"blocked": True, "block_reason": _mt4_trade_block_display_reason("平仓")})
+    if exit_plan and exit_block_reason:
+        exit_plan.update({"blocked": True, "block_reason": exit_block_reason})
         blocked["exit_plan"] = exit_plan
     blocked["execution_blocked"] = True
-    blocked["reason"] = _mt4_trade_block_display_reason("交易")
+    blocked["entry_blocked"] = bool(entry_block_reason)
+    blocked["add_blocked"] = bool(add_block_reason)
+    blocked["exit_blocked"] = bool(exit_block_reason)
+    blocked["reason"] = "；".join(reason for reason in (entry_block_reason, add_block_reason, exit_block_reason) if reason)
     return blocked
 
 
 def _mt4_trade_block_display_reason(action: str) -> str | None:
     if not settings.is_dry_run:
+        if action in {"开仓", "补仓"}:
+            weekend_reason = xau_weekend_entry_block_reason(utc_now_ms())
+            if weekend_reason:
+                return f"{weekend_reason}，已禁止币安{action}挂单，已有持仓仍允许按策略平仓。"
         ea_version = mt4_bridge.ea_version()
         if ea_version != REQUIRED_MT4_EA_VERSION:
             return (

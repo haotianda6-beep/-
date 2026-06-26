@@ -7,6 +7,7 @@ from typing import Any
 from app.binance_client import BinanceBaseClient, BinanceError
 from app.config import Settings
 from app.gold_v2_version import GOLD_V2_CURRENT_GUARD_START_MS
+from app.market_calendar import xau_weekend_entry_block_reason
 from app.models import ExecutionPlanStatus, OpenPair, OrderRequest, OrderStatus, OrderUpdate, PairDirection, Side, StrategyState, utc_now_ms
 from app.mt4_bridge import Mt4Bridge
 from app.quote_guard import xau_quote_gap_reason
@@ -1097,6 +1098,10 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
 
     def _mt4_trade_block_reason(self, action: str) -> str | None:
         if not self.settings.is_dry_run:
+            if action in {"开仓", "补仓"}:
+                weekend_reason = xau_weekend_entry_block_reason(utc_now_ms())
+                if weekend_reason:
+                    return f"{weekend_reason}，已禁止币安{action}挂单，已有持仓仍允许按策略平仓。"
             ea_version = self.mt4.ea_version()
             if ea_version != REQUIRED_MT4_EA_VERSION:
                 return (

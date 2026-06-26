@@ -750,8 +750,35 @@ async def test_v2_mt4_trade_block_prevents_add_order(tmp_path):
     assert "禁止币安补仓" in run.last_error
 
 
+def test_v2_live_weekend_guard_blocks_entry_and_add_but_not_exit(tmp_path, monkeypatch):
+    cfg = settings(
+        tmp_path,
+        SQLITE_PATH=tmp_path / "test.sqlite3",
+        PAPER_MODE=False,
+        LIVE_TRADING=True,
+    )
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    mt4_tick(
+        mt4,
+        "100",
+        "100.2",
+        trade_allowed=True,
+        symbol_trade_allowed=True,
+        terminal_trade_allowed=True,
+        ea_version=REQUIRED_MT4_EA_VERSION,
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), runtime())
+    monkeypatch.setattr("app.v2_executor.xau_weekend_entry_block_reason", lambda _now: "距离黄金周末/停盘过滤时段约 10 分钟")
+
+    assert "禁止币安开仓" in executor._mt4_trade_block_reason("开仓")
+    assert "禁止币安补仓" in executor._mt4_trade_block_reason("补仓")
+    assert executor._mt4_trade_block_reason("平仓") is None
+
+
 @pytest.mark.asyncio
-async def test_v2_live_requires_mt4_trade_allowed_before_add_order(tmp_path):
+async def test_v2_live_requires_mt4_trade_allowed_before_add_order(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.v2_executor.xau_weekend_entry_block_reason", lambda _now: None)
     cfg = settings(
         tmp_path,
         SQLITE_PATH=tmp_path / "test.sqlite3",
@@ -786,7 +813,8 @@ async def test_v2_live_requires_mt4_trade_allowed_before_add_order(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_v2_live_requires_current_mt4_ea_version_before_add_order(tmp_path):
+async def test_v2_live_requires_current_mt4_ea_version_before_add_order(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.v2_executor.xau_weekend_entry_block_reason", lambda _now: None)
     cfg = settings(
         tmp_path,
         SQLITE_PATH=tmp_path / "test.sqlite3",
