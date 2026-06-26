@@ -80,8 +80,52 @@ def test_v2_uses_upper_range_threshold_from_recent_spreads(tmp_path):
 
     assert status["short_range"]["discarded"] == 6
     assert status["short_entry"]["threshold"] == Decimal("3.10")
-    assert status["short_entry"]["ready"] is True
+    assert status["short_entry"]["model_ok"] is False
+    assert status["short_entry"]["ready"] is False
+    assert "只提示不自动开仓" in status["short_entry"]["reason"]
     assert status["selected_entry"]["direction"] == PairDirection.BINANCE_SHORT_MT4_LONG.value
+
+
+def test_v2_verified_model_allows_ready_entry(tmp_path, monkeypatch):
+    models = iter(
+        [
+            {
+                "enabled": True,
+                "selected": {
+                    "projected_daily_trades": Decimal("3.2"),
+                    "win_rate": Decimal("0.75"),
+                    "trades": 4,
+                    "threshold": Decimal("2.4"),
+                },
+                "suggested_threshold": Decimal("2.4"),
+            },
+            {
+                "enabled": True,
+                "reason": "最近样本没有证明 70% 以上回归胜率，沿用区间阈值。",
+                "suggested_threshold": None,
+            },
+        ]
+    )
+    monkeypatch.setattr(v2_planner, "build_entry_model", lambda **_: next(models))
+    cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.40"), MT4_SLIPPAGE_POINTS=0, MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("0"))
+    store = Storage(cfg.sqlite_path)
+    mt4_bars, binance_bars = recent_bars([Decimal("2.4")] * 12)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.4"), ask=Decimal("4003.6")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+    )
+
+    assert status["short_entry"]["model_ok"] is True
+    assert status["short_entry"]["ready"] is True
+    assert status["short_entry"]["model_win_rate"] == Decimal("0.75")
 
 
 def test_v2_blocks_entry_when_recent_range_has_no_safe_exit(tmp_path):
@@ -134,7 +178,8 @@ def test_v2_entry_feasibility_uses_aged_profit_when_cycle_window_is_short(tmp_pa
     assert status["short_entry"]["entry_viability_close_profit_usd_per_oz"] == Decimal("0.3")
     assert status["short_entry"]["recent_low_spread"] == Decimal("1.5")
     assert status["short_entry"]["estimated_exit_target_spread"] > Decimal("1.5")
-    assert status["short_entry"]["ready"] is True
+    assert status["short_entry"]["ready"] is False
+    assert "只提示不自动开仓" in status["short_entry"]["reason"]
 
 
 def test_v2_entry_feasibility_uses_aged_profit_for_short_cycle_model(tmp_path, monkeypatch):
@@ -191,7 +236,8 @@ def test_v2_can_quote_entry_before_visible_edge_covers_slippage_budget(tmp_path)
     assert status["short_entry"]["required_edge"] == Decimal("2.0")
     assert status["short_entry"]["locked_edge_floor"] == Decimal("2.3")
     assert status["short_entry"]["expected_locked_edge"] >= Decimal("2.3")
-    assert status["short_entry"]["ready"] is True
+    assert status["short_entry"]["ready"] is False
+    assert "只提示不自动开仓" in status["short_entry"]["reason"]
     assert "挂单触发位" in status["short_entry"]["reason"]
 
 
@@ -758,6 +804,30 @@ def test_v2_blocks_entry_when_exit_buffer_exceeds_locked_edge(tmp_path):
     assert status["short_entry"]["exit_viable"] is False
     assert status["short_entry"]["ready"] is False
     assert "安全平仓" in status["short_entry"]["reason"]
+
+
+def test_v2_blocks_unverified_direction_even_when_manual_threshold_is_reached(tmp_path):
+    cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.40"), MT4_SLIPPAGE_POINTS=0, MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("0"))
+    store = Storage(cfg.sqlite_path)
+    mt4_bars, binance_bars = recent_bars([Decimal("2.4"), Decimal("2.6"), Decimal("2.8"), Decimal("3.0")] * 3)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("3997.0"), ask=Decimal("3997.2")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("4000.0"), ask=Decimal("4000.2")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+    )
+
+    assert status["long_entry"]["current_edge"] == Decimal("3.0")
+    assert status["long_entry"]["threshold"] == Decimal("2.40")
+    assert status["long_entry"]["model_ok"] is False
+    assert status["long_entry"]["ready"] is False
+    assert "只提示不自动开仓" in status["long_entry"]["reason"]
 
 
 def test_v2_blocks_entry_when_mt4_rollover_time_is_stale(tmp_path):

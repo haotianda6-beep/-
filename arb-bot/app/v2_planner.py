@@ -94,9 +94,11 @@ def build_gold_v2_status(
     long_performance_cap = _performance_threshold_cap(long_model)
     short_threshold = _threshold_with_performance_penalty(short_threshold, short_performance_penalty, short_model)
     long_threshold = _threshold_with_performance_penalty(long_threshold, long_performance_penalty, long_model)
+    short_model_gate = _objective_model_direction("short", short_model, short_threshold)
+    long_model_gate = _objective_model_direction("long", long_model, long_threshold)
     move_budget_source = "实时tick" if mt4_tick_move_budget is not None else "1分钟K线"
 
-    short_plan = _entry_plan(
+    short_plan = _apply_entry_model_gate(_entry_plan(
         direction=PairDirection.BINANCE_SHORT_MT4_LONG,
         settings=settings,
         filters=filters,
@@ -109,8 +111,8 @@ def build_gold_v2_status(
         spread_range=short_range,
         metrics=metrics,
         entry_close_profit=entry_close_profit,
-    )
-    long_plan = _entry_plan(
+    ), short_model_gate)
+    long_plan = _apply_entry_model_gate(_entry_plan(
         direction=PairDirection.BINANCE_LONG_MT4_SHORT,
         settings=settings,
         filters=filters,
@@ -123,7 +125,7 @@ def build_gold_v2_status(
         spread_range=long_range,
         metrics=metrics,
         entry_close_profit=entry_close_profit,
-    )
+    ), long_model_gate)
     selected = _selected_entry_plan(short_plan, long_plan)
     objective_health = _objective_health(
         realized_performance=realized_performance,
@@ -536,6 +538,47 @@ def _entry_plan(
         entry_close_profit=entry_close_profit,
         settlement_adjustment=_entry_settlement_adjustment(settings, direction, qty, binance, metrics),
     )
+
+
+def _apply_entry_model_gate(plan: dict, model_gate: dict | None) -> dict:
+    if model_gate and model_gate.get("ok"):
+        return {
+            **plan,
+            "model_ok": True,
+            "model_direction": model_gate["direction"],
+            "model_win_rate": model_gate["win_rate"],
+            "model_projected_daily_trades": model_gate["projected_daily_trades"],
+            "model_trade_count": model_gate["trades"],
+        }
+    reason = _entry_model_gate_reason(model_gate)
+    return {
+        **plan,
+        "ready": False,
+        "reason": _append_reason(plan.get("reason"), reason),
+        "model_ok": False,
+        "model_direction": model_gate["direction"] if model_gate else None,
+        "model_win_rate": model_gate["win_rate"] if model_gate else None,
+        "model_projected_daily_trades": model_gate["projected_daily_trades"] if model_gate else None,
+        "model_trade_count": model_gate["trades"] if model_gate else None,
+    }
+
+
+def _entry_model_gate_reason(model_gate: dict | None) -> str:
+    if not model_gate:
+        return "该方向模型样本不足或未证明70%胜率和3-5单/天，只提示不自动开仓"
+    win_rate = model_gate["win_rate"]
+    projected = model_gate["projected_daily_trades"]
+    if win_rate < PERFORMANCE_TARGET_WIN_RATE:
+        return f"该方向模型胜率 {win_rate:.2%} 未达 70%，只提示不自动开仓"
+    return f"该方向模型预计日交易 {projected:.2f} 单，不在 3-5 单目标内，只提示不自动开仓"
+
+
+def _append_reason(original: str | None, extra: str) -> str:
+    if not original:
+        return extra
+    if extra in original:
+        return original
+    return f"{original}；{extra}"
 
 
 def _missing_plan(direction: PairDirection, threshold: Decimal, qty: Decimal, reason: str) -> dict:
