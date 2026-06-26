@@ -303,6 +303,56 @@ def test_v2_falls_back_when_model_threshold_exceeds_tradable_ceiling():
     assert threshold == Decimal("2.9610")
 
 
+def test_v2_realized_losses_raise_entry_threshold(tmp_path):
+    cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.40"), MT4_SLIPPAGE_POINTS=0)
+    store = Storage(cfg.sqlite_path)
+    for pnl in ["-1.0", "-0.5", "-2.0"]:
+        store.record_event("v2_pair_pnl_recorded", {"realized_pnl": pnl})
+    mt4_bars, binance_bars = recent_bars([Decimal("2.4"), Decimal("2.6"), Decimal("2.8"), Decimal("3.0")] * 3)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.4"), ask=Decimal("4003.6")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+    )
+
+    assert status["realized_performance"]["sample_count"] == 3
+    assert status["realized_performance"]["win_rate"] == Decimal("0")
+    assert status["performance_entry_penalty"] == Decimal("0.50")
+    assert status["short_entry"]["threshold"] == Decimal("3.320")
+    assert "自动抬高" in status["realized_performance"]["reason"]
+
+
+def test_v2_realized_positive_total_uses_small_entry_penalty(tmp_path):
+    cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.40"), MT4_SLIPPAGE_POINTS=0)
+    store = Storage(cfg.sqlite_path)
+    for pnl in ["1.0", "0.5", "-0.2"]:
+        store.record_event("v2_pair_pnl_recorded", {"realized_pnl": pnl})
+    mt4_bars, binance_bars = recent_bars([Decimal("2.4"), Decimal("2.6"), Decimal("2.8"), Decimal("3.0")] * 3)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.4"), ask=Decimal("4003.6")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+    )
+
+    assert status["realized_performance"]["win_rate"] == Decimal("0.6666666666666666666666666667")
+    assert status["performance_entry_penalty"] == Decimal("0.0333333333333333333333333333")
+    assert status["short_entry"]["threshold"] == Decimal("2.853333333333333333333333333")
+
+
 def test_v2_blocks_entry_when_next_triple_swap_makes_exit_unsafe(tmp_path):
     next_rollover_ms = utc_now_ms() + 10 * 60_000
     next_rollover_weekday = datetime.fromtimestamp(next_rollover_ms / 1000, timezone.utc).weekday()

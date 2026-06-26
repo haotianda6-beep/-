@@ -26,6 +26,10 @@ MAX_TRAINING_MT4_BAR_RANGE = Decimal("4")
 MAX_TRAINING_BINANCE_BAR_RANGE = Decimal("5")
 MAX_TRADABLE_ABS_SPREAD = MAX_REASONABLE_XAU_MID_GAP
 MAX_TRAINING_ABS_SPREAD = MAX_TRADABLE_ABS_SPREAD
+PERFORMANCE_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000
+PERFORMANCE_MIN_TRADES = 3
+PERFORMANCE_TARGET_WIN_RATE = Decimal("0.70")
+MAX_PERFORMANCE_ENTRY_PENALTY = Decimal("0.50")
 
 
 def build_gold_v2_status(
@@ -77,6 +81,10 @@ def build_gold_v2_status(
     )
     short_threshold = _entry_threshold(short_range, settings.open_min_edge, short_model)
     long_threshold = _entry_threshold(long_range, settings.open_min_edge, long_model)
+    realized_performance = _v2_realized_performance(storage, now_ms)
+    performance_penalty = _performance_entry_penalty(realized_performance)
+    short_threshold = _threshold_with_performance_penalty(short_threshold, performance_penalty)
+    long_threshold = _threshold_with_performance_penalty(long_threshold, performance_penalty)
     move_budget_source = "实时tick" if mt4_tick_move_budget is not None else "1分钟K线"
 
     short_plan = _entry_plan(
@@ -119,6 +127,8 @@ def build_gold_v2_status(
         "entry_model_lookback_minutes": 2880,
         "threshold_rule": "先剔除MT4停盘平线、周末和剧烈跳价样本；可信长周期模型负责胜率，只有模型阈值超过黄金正常上限时才回退到最近30分钟区间。",
         "entry_model": {"short": short_model, "long": long_model},
+        "realized_performance": realized_performance,
+        "performance_entry_penalty": performance_penalty,
         "mt4_slippage_budget": slippage_budget,
         "mt4_exit_follow_budget": exit_follow_budget,
         "mt4_move_budget_source": move_budget_source,
@@ -201,6 +211,12 @@ def _entry_threshold(spread_range: dict, manual_min: Decimal, model: dict | None
     return fallback
 
 
+def _threshold_with_performance_penalty(threshold: Decimal, penalty: Decimal) -> Decimal:
+    if penalty <= 0:
+        return threshold
+    return min(MAX_TRADABLE_ABS_SPREAD, threshold + penalty)
+
+
 def _range_threshold(spread_range: dict, manual_min: Decimal) -> Decimal:
     if spread_range["points"] < MIN_POINTS or spread_range["low"] is None or spread_range["high"] is None:
         return manual_min
@@ -208,6 +224,72 @@ def _range_threshold(spread_range: dict, manual_min: Decimal) -> Decimal:
     high = Decimal(str(spread_range["high"]))
     dynamic = low + (high - low) * RANGE_FACTOR
     return max(dynamic, manual_min)
+
+
+def _v2_realized_performance(storage: Storage, now_ms: int) -> dict:
+    try:
+        events = storage.get_events(now_ms - PERFORMANCE_LOOKBACK_MS, now_ms + 1000, limit=2000)
+    except Exception:  # noqa: BLE001
+        return {
+            "sample_count": 0,
+            "reason": "真实做单统计暂不可用，不参与阈值调整。",
+        }
+    pnls: list[Decimal] = []
+    for event in events:
+        if event.get("kind") != "v2_pair_pnl_recorded":
+            continue
+        payload = event.get("payload") or {}
+        try:
+            pnls.append(Decimal(str(payload.get("realized_pnl"))))
+        except Exception:  # noqa: BLE001
+            continue
+    if not pnls:
+        return {
+            "sample_count": 0,
+            "reason": "暂无 V2 真实闭环样本，不参与阈值调整。",
+        }
+    wins = sum(1 for pnl in pnls if pnl > 0)
+    losses = sum(1 for pnl in pnls if pnl < 0)
+    total = sum(pnls, Decimal("0"))
+    win_rate = Decimal(wins) / Decimal(len(pnls))
+    return {
+        "sample_count": len(pnls),
+        "wins": wins,
+        "losses": losses,
+        "win_rate": win_rate,
+        "target_win_rate": PERFORMANCE_TARGET_WIN_RATE,
+        "total_pnl": total,
+        "average_pnl": total / Decimal(len(pnls)),
+        "latest_pnl": pnls[-1],
+        "min_pnl": min(pnls),
+        "max_pnl": max(pnls),
+        "reason": _performance_reason(len(pnls), win_rate, total),
+    }
+
+
+def _performance_reason(sample_count: int, win_rate: Decimal, total_pnl: Decimal) -> str:
+    if sample_count < PERFORMANCE_MIN_TRADES:
+        return f"V2 真实闭环样本 {sample_count} 单，少于 {PERFORMANCE_MIN_TRADES} 单，暂不硬性调整阈值。"
+    if win_rate >= PERFORMANCE_TARGET_WIN_RATE:
+        return f"V2 真实胜率 {win_rate:.2%} 达到目标，不额外抬高开仓阈值。"
+    if total_pnl >= 0:
+        return f"V2 真实胜率 {win_rate:.2%} 未达目标，但总收益仍为正，只做小幅保护。"
+    return f"V2 真实胜率 {win_rate:.2%} 未达 {PERFORMANCE_TARGET_WIN_RATE:.0%} 且总收益为负，自动抬高开仓阈值保护本金。"
+
+
+def _performance_entry_penalty(performance: dict) -> Decimal:
+    sample_count = int(performance.get("sample_count") or 0)
+    if sample_count < PERFORMANCE_MIN_TRADES:
+        return Decimal("0")
+    win_rate = Decimal(str(performance.get("win_rate") or "0"))
+    if win_rate >= PERFORMANCE_TARGET_WIN_RATE:
+        return Decimal("0")
+    gap = PERFORMANCE_TARGET_WIN_RATE - win_rate
+    penalty = min(MAX_PERFORMANCE_ENTRY_PENALTY, max(Decimal("0"), gap))
+    total = Decimal(str(performance.get("total_pnl") or "0"))
+    if total >= 0:
+        penalty = min(penalty, Decimal("0.20"))
+    return penalty
 
 
 def _entry_plan(
