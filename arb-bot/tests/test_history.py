@@ -166,16 +166,16 @@ def test_spread_analysis_ignores_flat_mt4_stale_bars_and_large_workday_gaps():
     assert result.min_abs_diff == Decimal("3.00")
 
 
-def test_spread_analysis_ignores_china_calendar_weekend_spreads():
-    china_saturday = int(datetime(2026, 6, 26, 17, tzinfo=timezone.utc).timestamp() * 1000)
+def test_spread_analysis_allows_china_saturday_early_session_spreads():
+    china_saturday_early = int(datetime(2026, 6, 26, 17, tzinfo=timezone.utc).timestamp() * 1000)
     monday = int(datetime(2026, 6, 29, 1, tzinfo=timezone.utc).timestamp() * 1000)
-    mt4 = [bar(china_saturday, "4170"), bar(monday, "4170")]
-    binance = [bar(china_saturday, "4182.3"), bar(monday, "4173")]
+    mt4 = [bar(china_saturday_early, "4170"), bar(monday, "4170")]
+    binance = [bar(china_saturday_early, "4173"), bar(monday, "4173")]
 
     result = compare_spreads(mt4, binance, days=7, interval="1m", threshold=Decimal("0.50"))
 
     assert result.ready
-    assert result.matched_points == 1
+    assert result.matched_points == 2
     assert result.latest_diff == Decimal("3")
 
 

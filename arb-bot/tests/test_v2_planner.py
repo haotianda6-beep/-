@@ -284,24 +284,24 @@ def test_v2_ignores_weekend_training_bars(monkeypatch):
     assert discarded == 1
 
 
-def test_v2_ignores_china_calendar_weekend_training_bars(monkeypatch):
+def test_v2_allows_china_saturday_early_training_bars(monkeypatch):
     monkeypatch.setattr(v2_planner, "is_xau_weekend_ms", real_is_xau_weekend_ms)
-    china_saturday = int(datetime(2026, 6, 26, 17, tzinfo=timezone.utc).timestamp() * 1000)
+    china_saturday_early = int(datetime(2026, 6, 26, 17, tzinfo=timezone.utc).timestamp() * 1000)
     monday = int(datetime(2026, 6, 29, 1, tzinfo=timezone.utc).timestamp() * 1000)
     mt4_bars = [
-        ranged_bar(china_saturday, Decimal("4000"), Decimal("3999.9"), Decimal("4000.1")),
+        ranged_bar(china_saturday_early, Decimal("4000"), Decimal("3999.9"), Decimal("4000.1")),
         ranged_bar(monday, Decimal("4000"), Decimal("3999.9"), Decimal("4000.1")),
     ]
     binance_bars = [
-        ranged_bar(china_saturday, Decimal("4012.3"), Decimal("4012.2"), Decimal("4012.4")),
+        ranged_bar(china_saturday_early, Decimal("4003"), Decimal("4002.9"), Decimal("4003.1")),
         ranged_bar(monday, Decimal("4003"), Decimal("4002.9"), Decimal("4003.1")),
     ]
 
     short, long, discarded = _spread_values(mt4_bars, binance_bars)
 
-    assert short == [Decimal("3")]
-    assert long == [Decimal("-3")]
-    assert discarded == 1
+    assert short == [Decimal("3"), Decimal("3")]
+    assert long == [Decimal("-3"), Decimal("-3")]
+    assert discarded == 0
 
 
 def test_v2_ignores_stale_and_volatile_training_bars():
