@@ -57,6 +57,8 @@ class V2AddMixin:
         self.active_add_trigger_edge = Decimal(
             str(plan.get("next_locked_trigger_edge") or plan.get("next_trigger_edge") or plan.get("next_actionable_trigger_edge"))
         )
+        follow_edge = getattr(self, "_mt4_follow_min_edge_from_plan", None)
+        self.active_mt4_follow_min_edge = follow_edge(plan) if follow_edge else self.active_add_trigger_edge
         self.add_ready_since_ms = 0
         self.runtime.state = StrategyState.QUOTING_BINANCE_ENTRY
         self.runtime.last_error = None
@@ -120,14 +122,31 @@ class V2AddMixin:
             self.runtime.state = StrategyState.QUOTING_BINANCE_ENTRY
             return
         reason = "v2_add_follow" if self.adding_to_pair else "v2_entry_follow"
-        command = self.mt4.queue_market_order(self.entry_hedge_side, lots_from_qty(self.settings, order.executed_qty), reason)
+        price_limits = getattr(self, "_mt4_follow_price_limits", None)
+        max_price, min_price = price_limits(order) if price_limits else (None, None)
+        command = self.mt4.queue_market_order(
+            self.entry_hedge_side,
+            lots_from_qty(self.settings, order.executed_qty),
+            reason,
+            max_price=max_price,
+            min_price=min_price,
+        )
         self.hedge_command_id = command.command_id
         self.hedge_started_ms = utc_now_ms()
         self.runtime.state = StrategyState.HEDGING_MT4
         quote_at_command = self._capture_entry_mt4_quote() if hasattr(self, "_capture_entry_mt4_quote") else {}
         self.storage.record_event(
             "v2_mt4_add_queued" if self.adding_to_pair else "v2_mt4_entry_queued",
-            {"command_id": command.command_id, "lots": str(command.lots), "mt4_quote_at_command": quote_at_command},
+            {
+                "command_id": command.command_id,
+                "lots": str(command.lots),
+                "mt4_quote_at_command": quote_at_command,
+                "min_follow_edge": str(getattr(self, "active_mt4_follow_min_edge", None))
+                if getattr(self, "active_mt4_follow_min_edge", None) is not None
+                else None,
+                "max_price": str(max_price) if max_price is not None else None,
+                "min_price": str(min_price) if min_price is not None else None,
+            },
         )
 
     def _recover_entry_context_from_order(self, order: OrderUpdate) -> None:
@@ -210,6 +229,7 @@ class V2AddMixin:
         self.adding_to_pair = False
         self.active_add_base_edge = None
         self.active_add_trigger_edge = None
+        self.active_mt4_follow_min_edge = None
         self.runtime.state = StrategyState.PAIR_OPEN
         self.runtime.last_error = None
         return True

@@ -552,6 +552,35 @@ def _plan_dict(
         }
     visible_trigger_edge = threshold
     locked_edge_floor = threshold + slippage_budget
+    if locked_edge_floor > MAX_TRADABLE_ABS_SPREAD:
+        return {
+            "direction": direction.value,
+            "direction_text": _direction_text(direction),
+            "ready": False,
+            "reason": (
+                f"MT4跟随滑点预算过高，成交保护线 {locked_edge_floor} 超过黄金正常上限 "
+                f"{MAX_TRADABLE_ABS_SPREAD}，暂不追高开仓"
+            ),
+            "current_edge": current_edge,
+            "threshold": threshold,
+            "required_edge": visible_trigger_edge,
+            "visible_trigger_edge": visible_trigger_edge,
+            "locked_edge_floor": locked_edge_floor,
+            "quantity_oz": qty,
+            "binance_side": binance_side.value,
+            "binance_price": limit_price,
+            "mt4_follow_side": mt4_side.value,
+            "expected_locked_edge": None,
+            "estimated_exit_target_spread": None,
+            "recent_low_spread": Decimal(str(spread_range["low"])) if spread_range.get("low") is not None else None,
+            "exit_viable": False,
+            "initial_close_profit_usd_per_oz": close_profit,
+            "entry_viability_close_profit_usd_per_oz": entry_close_profit,
+            "next_settlement_adjustment": settlement_adjustment,
+            "mt4_reference_price": mt4_reference_price,
+            "mt4_slippage_budget": slippage_budget,
+            "mt4_exit_follow_budget": exit_follow_budget,
+        }
     ready = current_edge >= visible_trigger_edge
     locked_edge = limit_price - mt4_reference_price if binance_side == Side.SELL else mt4_reference_price - limit_price
     adjustment_value = Decimal("0")

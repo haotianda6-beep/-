@@ -365,6 +365,30 @@ async def test_v2_entry_and_exit_use_binance_post_only_then_mt4_follow(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_v2_entry_mt4_follow_carries_price_limit_from_locked_edge(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
+    store = Storage(cfg.sqlite_path)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(guarded_short_plan("101", locked_floor="2"))
+    client.set_quote(Decimal("101"), Decimal("101.2"))
+    await executor.step(guarded_short_plan("101", locked_floor="2"))
+
+    command = mt4.next_command()
+    assert command["action"] == "BUY"
+    assert Decimal(str(command["max_price"])) == Decimal("99")
+    assert command["min_price"] is None
+    queued_events = [event for event in store.get_events(0, utc_now_ms() + 1_000, limit=100) if event["kind"] == "v2_mt4_entry_queued"]
+    assert queued_events[-1]["payload"]["min_follow_edge"] == "2"
+    assert queued_events[-1]["payload"]["max_price"] == "99"
+
+
+@pytest.mark.asyncio
 async def test_v2_blocks_new_entry_during_min_entry_interval(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", GOLD_V2_MIN_ENTRY_INTERVAL_MS=10_000)
     store = Storage(cfg.sqlite_path)
@@ -1846,6 +1870,8 @@ async def test_v2_add_position_merges_pair_after_binance_fill_and_mt4_follow(tmp
     add_command = mt4.next_command()
     assert add_command["action"] == "BUY"
     assert add_command["reason"] == "v2_add_follow"
+    assert Decimal(str(add_command["max_price"])) == Decimal("101.2")
+    assert add_command["min_price"] is None
 
     mt4.submit_report(Mt4Report(command_id=add_command["command_id"], status="ok", action="BUY", ticket=8, fill_price=Decimal("101.5"), lots=Decimal("0.01")))
     await executor.step(add_plan("105", actionable="3.8"))

@@ -77,7 +77,7 @@ def test_v2_uses_upper_range_threshold_from_recent_spreads(tmp_path):
 
 
 def test_v2_blocks_entry_when_recent_range_has_no_safe_exit(tmp_path):
-    cfg = settings(tmp_path, CLOSE_PROFIT_USD_PER_OZ=Decimal("2.5"), MAX_PAIR_AGE_MINUTES=0)
+    cfg = settings(tmp_path, CLOSE_PROFIT_USD_PER_OZ=Decimal("2.5"), MAX_PAIR_AGE_MINUTES=0, MT4_SLIPPAGE_POINTS=0)
     store = Storage(cfg.sqlite_path)
     mt4_bars, binance_bars = recent_bars([Decimal("3.0"), Decimal("3.2"), Decimal("3.4"), Decimal("3.6"), Decimal("3.8"), Decimal("4.0")] * 2)
     store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
@@ -129,13 +129,15 @@ def test_v2_entry_feasibility_uses_aged_profit_when_cycle_window_is_short(tmp_pa
     assert status["short_entry"]["ready"] is True
 
 
-def test_v2_entry_feasibility_uses_aged_profit_for_short_cycle_model(tmp_path):
+def test_v2_entry_feasibility_uses_aged_profit_for_short_cycle_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(v2_planner, "is_xau_weekend_ms", lambda timestamp_ms: False)
     cfg = settings(
         tmp_path,
         OPEN_MIN_EDGE=Decimal("2.4"),
         CLOSE_PROFIT_USD_PER_OZ=Decimal("2.0"),
         AGED_CLOSE_PROFIT_USD_PER_OZ=Decimal("0.1"),
         MAX_PAIR_AGE_MINUTES=3,
+        MT4_SLIPPAGE_POINTS=0,
         MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("0"),
     )
     store = Storage(cfg.sqlite_path)
@@ -185,6 +187,29 @@ def test_v2_can_quote_entry_before_visible_edge_covers_slippage_budget(tmp_path)
     assert "挂单触发位" in status["short_entry"]["reason"]
 
 
+def test_v2_blocks_entry_when_follow_protection_exceeds_normal_gold_gap(tmp_path):
+    cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.0"), MT4_SLIPPAGE_POINTS=220, MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("0"))
+    store = Storage(cfg.sqlite_path)
+    mt4_bars, binance_bars = recent_bars([Decimal("1.0"), Decimal("2.0")] * 5)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.6"), ask=Decimal("4003.8")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+    )
+
+    assert status["short_entry"]["locked_edge_floor"] > Decimal("4")
+    assert status["short_entry"]["ready"] is False
+    assert "成交保护线" in status["short_entry"]["reason"]
+    assert "超过黄金正常上限" in status["short_entry"]["reason"]
+
+
 def test_v2_blocks_entry_when_quote_gap_is_unreasonable(tmp_path):
     cfg = settings(tmp_path)
     store = Storage(cfg.sqlite_path)
@@ -208,7 +233,8 @@ def test_v2_blocks_entry_when_quote_gap_is_unreasonable(tmp_path):
     assert status["selected_entry"]["reason"].startswith("报价异常")
 
 
-def test_v2_ignores_unreasonable_historical_bar_gap(tmp_path):
+def test_v2_ignores_unreasonable_historical_bar_gap(tmp_path, monkeypatch):
+    monkeypatch.setattr(v2_planner, "is_xau_weekend_ms", lambda timestamp_ms: False)
     cfg = settings(tmp_path)
     store = Storage(cfg.sqlite_path)
     mt4_bars, binance_bars = recent_bars([Decimal("2"), Decimal("3"), Decimal("999"), Decimal("4"), Decimal("5")] * 4)

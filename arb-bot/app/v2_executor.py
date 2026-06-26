@@ -66,6 +66,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.adding_to_pair = False
         self.active_add_base_edge: Decimal | None = None
         self.active_add_trigger_edge: Decimal | None = None
+        self.active_mt4_follow_min_edge: Decimal | None = None
         self.post_add_exit_block_until_ms = 0
         self.entry_requote_until_ms = 0
         self.repairing_binance_only = False
@@ -131,6 +132,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.adding_to_pair = False
         self.active_add_base_edge = None
         self.active_add_trigger_edge = None
+        self.active_mt4_follow_min_edge = None
         self.post_add_exit_block_until_ms = 0
         self.entry_requote_until_ms = 0
         self.repairing_binance_only = False
@@ -213,6 +215,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.order_created_ms = utc_now_ms()
         self.entry_direction = PairDirection(plan["direction"])
         self.entry_hedge_side = Side(plan["mt4_follow_side"])
+        self.active_mt4_follow_min_edge = self._mt4_follow_min_edge_from_plan(plan)
         self.runtime.state = StrategyState.QUOTING_BINANCE_ENTRY
         self.runtime.last_error = None
         self.storage.record_event("v2_entry_order", order.model_dump(mode="json"))
@@ -305,6 +308,33 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if required is None:
             return None
         return required + (self._plan_decimal(plan, "mt4_slippage_budget") or Decimal("0"))
+
+    def _mt4_follow_min_edge_from_plan(self, plan: dict[str, Any]) -> Decimal | None:
+        candidates = [
+            value
+            for value in (
+                self._plan_decimal(plan, "locked_edge_floor"),
+                self._plan_decimal(plan, "next_locked_trigger_edge"),
+                self._plan_decimal(plan, "required_locked_edge"),
+                self._plan_decimal(plan, "required_edge"),
+                self._plan_decimal(plan, "threshold"),
+            )
+            if value is not None
+        ]
+        actionable = self._plan_decimal(plan, "next_actionable_trigger_edge")
+        if actionable is not None:
+            candidates.append(actionable + max(Decimal("0"), self._plan_decimal(plan, "mt4_slippage_budget") or Decimal("0")))
+        return max(candidates) if candidates else None
+
+    def _mt4_follow_price_limits(self, order: OrderUpdate) -> tuple[Decimal | None, Decimal | None]:
+        min_edge = self.active_mt4_follow_min_edge
+        if min_edge is None or min_edge <= 0 or not self.entry_hedge_side:
+            return None, None
+        if self.entry_hedge_side == Side.BUY:
+            return order.avg_price - min_edge, None
+        if self.entry_hedge_side == Side.SELL:
+            return None, order.avg_price + min_edge
+        return None, None
 
     def _active_order_locked_edge(self, order: OrderUpdate, mt4_quote) -> Decimal | None:
         if order.side == Side.SELL:
@@ -531,6 +561,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
     def _clear_active_order_context(self) -> None:
         self.active_exit_order_risk_active = False
         self.active_exit_order_risk_reason = None
+        self.active_mt4_follow_min_edge = None
         self._clear_risk_exit_confirm()
 
     def _exit_profit_guard_reason(
@@ -854,6 +885,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.hedge_command_id = None
         self._clear_entry_quote()
         self._clear_entry_carry()
+        self.active_mt4_follow_min_edge = None
         self.runtime.state = StrategyState.PAIR_OPEN
         self.runtime.last_error = None
 
