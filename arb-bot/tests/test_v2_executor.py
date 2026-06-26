@@ -77,8 +77,8 @@ def short_plan(price: str = "101") -> dict:
     }
 
 
-def add_plan(price: str = "105") -> dict:
-    return {
+def add_plan(price: str = "105", actionable: str | None = None) -> dict:
+    plan = {
         "selected_entry": {"ready": False, "reason": "已有持仓"},
         "add_plan": {
             "enabled": True,
@@ -91,6 +91,9 @@ def add_plan(price: str = "105") -> dict:
             "mt4_follow_side": "BUY",
         },
     }
+    if actionable is not None:
+        plan["add_plan"]["next_actionable_trigger_edge"] = actionable
+    return plan
 
 
 def add_plan_temporarily_blocked_after_trigger(reason: str = "补仓后仍不安全") -> dict:
@@ -473,7 +476,7 @@ async def test_v2_mt4_trade_block_prevents_add_order(tmp_path):
     client.set_quote(Decimal("104"), Decimal("104.2"))
     mt4_tick(mt4, "100", "100.2", ea_version=REQUIRED_MT4_EA_VERSION)
 
-    await executor.step(add_plan("105"))
+    await executor.step(add_plan("105", actionable="3.8"))
 
     assert run.state == StrategyState.PAIR_OPEN
     assert executor.active_order is None
@@ -508,7 +511,7 @@ async def test_v2_live_requires_mt4_trade_allowed_before_add_order(tmp_path):
     client.set_quote(Decimal("104"), Decimal("104.2"))
     mt4_tick(mt4, "100", "100.2", ea_version=REQUIRED_MT4_EA_VERSION)
 
-    await executor.step(add_plan("105"))
+    await executor.step(add_plan("105", actionable="3.8"))
 
     assert run.state == StrategyState.PAIR_OPEN
     assert executor.active_order is None
@@ -552,7 +555,7 @@ async def test_v2_live_requires_current_mt4_ea_version_before_add_order(tmp_path
         ea_version="20260626-trade-guard",
     )
 
-    await executor.step(add_plan("105"))
+    await executor.step(add_plan("105", actionable="3.8"))
 
     assert run.state == StrategyState.PAIR_OPEN
     assert executor.active_order is None
@@ -1443,7 +1446,7 @@ async def test_v2_add_position_merges_pair_after_binance_fill_and_mt4_follow(tmp
 
     client.set_quote(Decimal("104"), Decimal("104.2"))
     mt4_tick(mt4, "100.8", "101")
-    await executor.step(add_plan("105"))
+    await executor.step(add_plan("105", actionable="3.8"))
     assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
     assert executor.adding_to_pair is True
 
@@ -1454,11 +1457,11 @@ async def test_v2_add_position_merges_pair_after_binance_fill_and_mt4_follow(tmp
     assert add_command["reason"] == "v2_add_follow"
 
     mt4.submit_report(Mt4Report(command_id=add_command["command_id"], status="ok", action="BUY", ticket=8, fill_price=Decimal("101.5"), lots=Decimal("0.01")))
-    await executor.step(add_plan("105"))
+    await executor.step(add_plan("105", actionable="3.8"))
     assert run.state == StrategyState.PAIR_OPEN
     assert run.open_pair.quantity_oz == Decimal("2")
     assert run.open_pair.add_count == 1
-    assert run.open_pair.last_add_trigger_edge == Decimal("3")
+    assert run.open_pair.last_add_trigger_edge == Decimal("3.8")
     assert run.open_pair.mt4_tickets == [7, 8]
 
     client.set_quote(Decimal("101"), Decimal("101.2"))
