@@ -820,6 +820,52 @@ async def test_v2_exit_order_is_canceled_when_limit_net_falls_below_min_profit(t
 
 
 @pytest.mark.asyncio
+async def test_v2_exit_order_uses_full_plan_net_when_rechecking_limit_profit(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, EXIT_CONFIRM_MS=0)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    store = Storage(cfg.sqlite_path)
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+    client.set_quote(Decimal("100"), Decimal("100.1"))
+    mt4_tick(mt4, "99", "99.2")
+
+    await executor.step(exit_plan("3.2", estimated_net="2"))
+    assert run.state == StrategyState.QUOTING_BINANCE_EXIT
+    assert executor.active_order is not None
+
+    await executor.step(
+        {
+            "selected_entry": {"ready": False},
+            "exit_plan": {
+                "enabled": True,
+                "target_exit_spread": "3.2",
+                "estimated_net": "0.6",
+                "current_exit_spread": "0.5",
+            },
+        }
+    )
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    events = store.get_events(0, utc_now_ms() + 1_000, limit=20)
+    canceled = [event for event in events if event["kind"] == "v2_order_canceled"]
+    assert canceled
+    assert "限价复算净利 0.2 低于最低 0.5" in canceled[-1]["payload"]["reason"]
+
+
+@pytest.mark.asyncio
 async def test_v2_live_cancels_unfilled_exit_order_when_mt4_becomes_untradable(tmp_path):
     cfg = settings(
         tmp_path,

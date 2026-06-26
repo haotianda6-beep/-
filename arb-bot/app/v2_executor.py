@@ -547,7 +547,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             return "V2 平仓利润保护：等待预估净值后再挂平仓单"
         if plan_net is not None and plan_net < min_net:
             return f"V2 平仓利润保护：计划净利 {plan_net} 低于最低 {min_net}，不挂平仓单"
-        projected = self._projected_exit_net_at_limit(pair, binance_exit_price, mt4_quote)
+        projected = self._projected_exit_net_at_limit(pair, binance_exit_price, mt4_quote, plan_status)
         if projected is None:
             return "V2 平仓利润保护：等待 MT4 可成交价后再评估平仓"
         if projected < min_net:
@@ -587,9 +587,18 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         recent = self.mt4.recent_move_budget(min(self.settings.max_hedge_delay_ms, 1000), percentile=90, min_points=4)
         return configured + (recent or Decimal("0"))
 
-    def _projected_exit_net_at_limit(self, pair: OpenPair, binance_exit_price: Decimal, mt4_quote) -> Decimal | None:
+    def _projected_exit_net_at_limit(
+        self,
+        pair: OpenPair,
+        binance_exit_price: Decimal,
+        mt4_quote,
+        plan_status: dict[str, Any] | None = None,
+    ) -> Decimal | None:
         if not mt4_quote:
             return None
+        plan_projected = self._projected_exit_net_from_plan_at_limit(pair, binance_exit_price, mt4_quote, plan_status)
+        if plan_projected is not None:
+            return plan_projected
         qty = pair.quantity_oz
         if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             mt4_exit_price = mt4_quote.bid
@@ -600,6 +609,28 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             binance_pnl = (binance_exit_price - pair.binance_entry_price) * qty
             mt4_pnl = (pair.mt4_entry_price - mt4_exit_price) * qty
         return pair.realized_pnl + binance_pnl + mt4_pnl
+
+    def _projected_exit_net_from_plan_at_limit(
+        self,
+        pair: OpenPair,
+        binance_exit_price: Decimal,
+        mt4_quote,
+        plan_status: dict[str, Any] | None,
+    ) -> Decimal | None:
+        exit_plan = (plan_status or {}).get("exit_plan") or {}
+        plan_net = self._planned_exit_net(plan_status or {})
+        current_spread = self._plan_decimal(exit_plan, "current_exit_spread")
+        limit_spread = self._limit_exit_spread(pair, binance_exit_price, mt4_quote)
+        if plan_net is None or current_spread is None or limit_spread is None:
+            return None
+        return plan_net + ((current_spread - limit_spread) * pair.quantity_oz)
+
+    def _limit_exit_spread(self, pair: OpenPair, binance_exit_price: Decimal, mt4_quote) -> Decimal | None:
+        if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            return binance_exit_price - mt4_quote.bid
+        if pair.direction == PairDirection.BINANCE_LONG_MT4_SHORT:
+            return mt4_quote.ask - binance_exit_price
+        return None
 
     def _exit_trigger_confirmed(self, current: Decimal, target: Decimal) -> bool:
         confirm_ms = self.settings.effective_exit_confirm_ms
