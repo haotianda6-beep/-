@@ -15,7 +15,29 @@ def load_monitor_module():
 
 
 monitor = load_monitor_module()
-args = SimpleNamespace(quantity_tolerance_oz="0.01", loss_warning_ratio=0.70, profit_window_min_usdt="0.50")
+args = SimpleNamespace(
+    quantity_tolerance_oz="0.01",
+    loss_warning_ratio=0.70,
+    profit_window_min_usdt="0.50",
+    objective_grace=30.0,
+    single_leg_grace=20.0,
+    profit_window_grace=30.0,
+)
+
+
+def disabled_alert_config():
+    return monitor.AlertConfig(
+        enabled=False,
+        host="",
+        port=587,
+        username="",
+        password="",
+        recipients=(),
+        sender="monitor@example.test",
+        use_tls=True,
+        use_ssl=False,
+        timeout=1.0,
+    )
 
 
 def test_exposure_issue_accepts_matched_short_pair():
@@ -118,6 +140,88 @@ def test_profit_window_ignores_active_order():
     }
 
     assert monitor.profit_window_reason(status, args) is None
+
+
+def test_objective_health_issue_detects_unready_goal():
+    status = {
+        "gold_v2": {
+            "objective_health": {
+                "ready_for_goal": False,
+                "reason": "当前保护版真实闭环样本 0 单，少于 3 单。",
+                "current_guard_sample_count": 0,
+                "projected_daily_trades": "3.2",
+                "maker_only_ok": True,
+                "binance_fee_or_taker_event_count": 0,
+            }
+        }
+    }
+
+    reason = monitor.objective_health_issue_reason(status)
+
+    assert "少于 3 单" in reason
+    assert "预计日交易 3.2" in reason
+
+
+def test_objective_hard_violation_detects_fee_or_taker_event():
+    status = {
+        "gold_v2": {
+            "objective_health": {
+                "maker_only_ok": False,
+                "binance_fee_or_taker_event_count": 1,
+            }
+        }
+    }
+
+    assert monitor.objective_hard_violation_active(status) is True
+
+
+def test_check_status_records_objective_reached_once(tmp_path):
+    state = monitor.MonitorState(start_event_id=0, opened_pairs=set(), closed_pairs=set())
+    log_path = tmp_path / "monitor.log"
+    status = {
+        "state": "IDLE",
+        "gold_v2": {
+            "objective_health": {
+                "ready_for_goal": True,
+                "reason": "达标",
+                "maker_only_ok": True,
+                "binance_fee_or_taker_event_count": 0,
+            }
+        },
+    }
+
+    monitor.check_status(status, state, args, log_path, 100.0, disabled_alert_config())
+    monitor.check_status(status, state, args, log_path, 101.0, disabled_alert_config())
+
+    content = log_path.read_text(encoding="utf-8")
+    assert state.objective_reached is True
+    assert content.count("monitor_objective_reached") == 1
+
+
+def test_check_status_deduplicates_objective_issue_over_grace(tmp_path):
+    state = monitor.MonitorState(start_event_id=0, opened_pairs=set(), closed_pairs=set())
+    log_path = tmp_path / "monitor.log"
+    status = {
+        "state": "IDLE",
+        "gold_v2": {
+            "objective_health": {
+                "ready_for_goal": False,
+                "reason": "当前保护版真实闭环样本 0 单，少于 3 单。",
+                "current_guard_sample_count": 0,
+                "projected_daily_trades": "3.2",
+                "maker_only_ok": True,
+                "binance_fee_or_taker_event_count": 0,
+            }
+        },
+    }
+
+    monitor.check_status(status, state, args, log_path, 100.0, disabled_alert_config())
+    monitor.check_status(status, state, args, log_path, 131.0, disabled_alert_config())
+    monitor.check_status(status, state, args, log_path, 132.0, disabled_alert_config())
+
+    content = log_path.read_text(encoding="utf-8")
+    assert "objective_issue_seen" in content
+    assert content.count("objective_issue_over_grace") == 1
 
 
 def test_summarize_status_includes_add_plan_fields():

@@ -32,10 +32,13 @@ class MonitorState:
     exposure_issue_reason: str | None = None
     risk_issue_since: float | None = None
     risk_issue_reason: str | None = None
+    objective_issue_since: float | None = None
+    objective_issue_reason: str | None = None
     profit_window_since: float | None = None
     profit_window_reason: str | None = None
     last_state: str | None = None
     target_reached: bool = False
+    objective_reached: bool = False
     alerted_keys: set[str] = field(default_factory=set)
 
 
@@ -140,6 +143,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--loss-warning-ratio", type=float, default=0.70)
     parser.add_argument("--profit-window-min-usdt", default="0.50")
     parser.add_argument("--profit-window-grace", type=float, default=30.0)
+    parser.add_argument("--objective-grace", type=float, default=300.0)
     parser.add_argument("--max-log-mb", type=float, default=20.0)
     parser.add_argument("--log-backups", type=int, default=3)
     parser.add_argument("--state-file", default="/root/perp-arb-bot/arb-bot/data/gold_v2_monitor_state.json")
@@ -157,6 +161,7 @@ def load_monitor_state(state_path: Path | None, db_path: Path) -> MonitorState:
                 opened_pairs=set(data.get("opened_pairs") or []),
                 closed_pairs=set(data.get("closed_pairs") or []),
                 target_reached=bool(data.get("target_reached")),
+                objective_reached=bool(data.get("objective_reached")),
                 alerted_keys=set(data.get("alerted_keys") or []),
             )
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
@@ -173,6 +178,7 @@ def save_monitor_state(state_path: Path | None, state: MonitorState) -> None:
         "opened_pairs": sorted(state.opened_pairs),
         "closed_pairs": sorted(state.closed_pairs),
         "target_reached": state.target_reached,
+        "objective_reached": state.objective_reached,
         "alerted_keys": sorted(state.alerted_keys),
     }
     tmp_path = state_path.with_suffix(state_path.suffix + ".tmp")
@@ -206,6 +212,56 @@ def check_status(
                 json.dumps(snapshot, ensure_ascii=False, sort_keys=True),
                 log_path,
             )
+
+    objective_issue = objective_health_issue_reason(status)
+    objective_hard_violation = objective_hard_violation_active(status)
+    if objective_issue:
+        issue_changed = state.objective_issue_reason != objective_issue
+        if state.objective_issue_since is None or issue_changed:
+            state.objective_issue_since = now
+            state.objective_issue_reason = objective_issue
+            write_log(log_path, {"type": "objective_issue_seen", "issue": objective_issue, **snapshot})
+        over_key = f"objective_over:{objective_issue}"
+        if (objective_hard_violation or now - state.objective_issue_since >= args.objective_grace) and over_key not in state.alerted_keys:
+            state.alerted_keys.add(over_key)
+            write_log(
+                log_path,
+                {
+                    "type": "objective_issue_over_grace",
+                    "issue": objective_issue,
+                    "seconds": round(now - state.objective_issue_since, 3),
+                    "hard_violation": objective_hard_violation,
+                    **snapshot,
+                },
+            )
+            send_alert_once(
+                alert_config,
+                state,
+                f"objective:{objective_issue}",
+                "黄金目标健康未达标",
+                f"{objective_issue}\n\n当前摘要：{json.dumps(snapshot, ensure_ascii=False, sort_keys=True)}",
+                log_path,
+            )
+    else:
+        if state.objective_issue_since is not None:
+            write_log(log_path, {"type": "objective_issue_recovered", "issue": state.objective_issue_reason, **snapshot})
+            state.alerted_keys.discard(f"objective:{state.objective_issue_reason}")
+            state.alerted_keys.discard(f"objective_over:{state.objective_issue_reason}")
+        state.objective_issue_since = None
+        state.objective_issue_reason = None
+
+    objective = ((status.get("gold_v2") or {}).get("objective_health") or {})
+    if bool(objective.get("ready_for_goal")) and not state.objective_reached:
+        state.objective_reached = True
+        write_log(log_path, {"type": "monitor_objective_reached", "objective": objective, **snapshot})
+        send_alert_once(
+            alert_config,
+            state,
+            "objective_reached",
+            "黄金套利目标已达标",
+            f"黄金 V2 目标已达标：胜率、日交易频率和 maker-only 约束均满足。\n\n{json.dumps(objective, ensure_ascii=False, sort_keys=True)}",
+            log_path,
+        )
 
     exposure_issue = exposure_issue_reason(status, args)
     if exposure_issue:
@@ -363,6 +419,25 @@ def profit_window_reason(status: dict[str, Any], args: argparse.Namespace) -> st
     return None
 
 
+def objective_health_issue_reason(status: dict[str, Any]) -> str | None:
+    objective = ((status.get("gold_v2") or {}).get("objective_health") or {})
+    if not objective:
+        return "目标健康数据未返回"
+    if bool(objective.get("ready_for_goal")):
+        return None
+    reason = str(objective.get("reason") or "目标健康未达标")
+    sample_count = objective.get("current_guard_sample_count")
+    projected = objective.get("projected_daily_trades")
+    maker_only = objective.get("maker_only_ok")
+    fee_count = objective.get("binance_fee_or_taker_event_count")
+    return f"{reason} 当前保护版样本 {sample_count}，预计日交易 {projected}，maker-only {maker_only}，手续费/吃单事件 {fee_count}。"
+
+
+def objective_hard_violation_active(status: dict[str, Any]) -> bool:
+    objective = ((status.get("gold_v2") or {}).get("objective_health") or {})
+    return objective.get("maker_only_ok") is False or parse_decimal(objective.get("binance_fee_or_taker_event_count")) > 0
+
+
 def mt4_side_issue(positions: list[dict[str, Any]], expected_side: str) -> str | None:
     sides = sorted(
         {
@@ -414,6 +489,10 @@ def summarize_status(status: dict[str, Any]) -> dict[str, Any]:
         "current_exit_spread": metrics.get("current_exit_spread"),
         "target_exit_spread": exit_plan.get("target_exit_spread"),
         "estimated_close_net": metrics.get("estimated_close_net"),
+        "objective_ready": (gold_v2.get("objective_health") or {}).get("ready_for_goal"),
+        "objective_reason": (gold_v2.get("objective_health") or {}).get("reason"),
+        "maker_only_ok": (gold_v2.get("objective_health") or {}).get("maker_only_ok"),
+        "fee_or_taker_count": (gold_v2.get("objective_health") or {}).get("binance_fee_or_taker_event_count"),
     }
 
 
