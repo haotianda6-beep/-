@@ -162,6 +162,22 @@ class V2AddMixin:
         tickets = list(pair.mt4_tickets or ([] if pair.mt4_ticket is None else [pair.mt4_ticket]))
         if report.ticket and report.ticket not in tickets:
             tickets.append(report.ticket)
+        previous_avg_edge = self._pair_average_edge(pair)
+        degraded_add = previous_avg_edge is not None and edge < previous_avg_edge
+        next_add_count = pair.add_count + 1
+        if degraded_add:
+            next_add_count = max(next_add_count, self.settings.max_add_count)
+            self.storage.record_event(
+                "v2_add_degraded_average_blocked",
+                {
+                    "pair_id": pair.pair_id,
+                    "previous_average_edge": str(previous_avg_edge),
+                    "add_edge": str(edge),
+                    "max_add_count": self.settings.max_add_count,
+                    "order": order.model_dump(mode="json"),
+                    "report": report.model_dump(mode="json"),
+                },
+            )
         self.runtime.open_pair = pair.model_copy(update={
             "quantity_oz": new_qty,
             "binance_entry_price": ((pair.binance_entry_price * old_qty) + (order.avg_price * add_qty)) / new_qty,
@@ -171,7 +187,7 @@ class V2AddMixin:
             "base_edge": self.active_add_base_edge or pair.base_edge,
             "last_add_edge": edge,
             "last_add_trigger_edge": self.active_add_trigger_edge,
-            "add_count": pair.add_count + 1,
+            "add_count": next_add_count,
         })
         self.storage.record_event("v2_pair_added", self.runtime.open_pair.model_dump(mode="json"))
         self.post_add_exit_block_until_ms = utc_now_ms() + max(5000, self.settings.max_hedge_delay_ms)
@@ -185,3 +201,10 @@ class V2AddMixin:
         self.runtime.state = StrategyState.PAIR_OPEN
         self.runtime.last_error = None
         return True
+
+    def _pair_average_edge(self, pair) -> Decimal | None:
+        if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
+            return pair.binance_entry_price - pair.mt4_entry_price
+        if pair.direction == PairDirection.BINANCE_LONG_MT4_SHORT:
+            return pair.mt4_entry_price - pair.binance_entry_price
+        return None

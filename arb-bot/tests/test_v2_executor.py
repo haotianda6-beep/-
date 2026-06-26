@@ -1513,6 +1513,55 @@ async def test_v2_add_position_merges_pair_after_binance_fill_and_mt4_follow(tmp
 
 
 @pytest.mark.asyncio
+async def test_v2_add_position_blocks_future_adds_when_actual_edge_degrades_average(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", MAX_ADD_COUNT=3)
+    store = Storage(cfg.sqlite_path)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(short_plan("101"))
+    client.set_quote(Decimal("101"), Decimal("101.2"))
+    await executor.step(short_plan("101"))
+    command = mt4.next_command()
+    mt4.submit_report(
+        Mt4Report(
+            command_id=command["command_id"],
+            status="ok",
+            action="BUY",
+            ticket=7,
+            fill_price=Decimal("99"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await executor.step(short_plan("101"))
+
+    await executor.step(add_plan("105", actionable="3.8"))
+    client.set_quote(Decimal("105"), Decimal("105.2"))
+    await executor.step(add_plan("105"))
+    add_command = mt4.next_command()
+    mt4.submit_report(
+        Mt4Report(
+            command_id=add_command["command_id"],
+            status="ok",
+            action="BUY",
+            ticket=8,
+            fill_price=Decimal("104"),
+            lots=Decimal("0.01"),
+        )
+    )
+    await executor.step(add_plan("105", actionable="3.8"))
+
+    assert run.open_pair.add_count == cfg.max_add_count
+    assert run.open_pair.last_add_edge == Decimal("1")
+    events = store.get_events(0, 4_102_444_800_000)
+    assert any(event["kind"] == "v2_add_degraded_average_blocked" for event in events)
+
+
+@pytest.mark.asyncio
 async def test_v2_add_position_waits_for_confirm_before_order(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", MAX_ADD_COUNT=1, ENTRY_CONFIRM_MS=1500)
     client = PaperBinanceClient(cfg)
