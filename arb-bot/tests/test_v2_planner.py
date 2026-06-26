@@ -538,6 +538,39 @@ def test_v2_add_plan_uses_real_first_edge_plus_step(tmp_path):
     assert status["add_plan"]["ready"] is False
 
 
+def test_v2_add_plan_allows_near_four_dollar_trigger(tmp_path):
+    cfg = settings(tmp_path, ADD_EDGE_GROWTH_USD=Decimal("1"), MT4_SLIPPAGE_POINTS=0, MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("0"))
+    store = Storage(cfg.sqlite_path)
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("2"),
+        binance_entry_price=Decimal("4059.61"),
+        mt4_entry_price=Decimal("4057.96"),
+        binance_order_id="entry/add",
+        base_edge=Decimal("2.08"),
+        add_count=1,
+    )
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.9"), ask=Decimal("4004.1")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=[],
+        open_pair=pair,
+        metrics=PositionMetrics(actual_entry_spread=Decimal("1.65"), close_profit_usd_per_oz=Decimal("0.10")),
+        mt4_tick_move_budget=Decimal("0"),
+    )
+
+    add_plan = status["add_plan"]
+    assert add_plan["next_trigger_edge"] == Decimal("4.08")
+    assert add_plan["current_edge"] == Decimal("4.1")
+    assert add_plan["next_actionable_trigger_edge"] == Decimal("4.08")
+    assert add_plan["ready"] is True
+    assert add_plan["estimated_blended_edge"] > Decimal("1.65")
+
+
 def test_v2_add_plan_does_not_lower_current_average_edge(tmp_path):
     cfg = settings(tmp_path, ADD_EDGE_GROWTH_USD=Decimal("1"), MT4_SLIPPAGE_POINTS=37)
     store = Storage(cfg.sqlite_path)

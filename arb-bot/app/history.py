@@ -10,6 +10,7 @@ import httpx
 from app.config import Settings
 from app.models import HistoryBar, SpreadAnalysis, SpreadAnalysisPoint
 from app.storage import Storage
+from app.quote_guard import MAX_REASONABLE_XAU_MID_GAP
 
 
 INTERVAL_MS = {
@@ -18,7 +19,7 @@ INTERVAL_MS = {
     "15m": 900_000,
     "1h": 3_600_000,
 }
-MAX_ANALYSIS_ABS_SPREAD = Decimal("4")
+MAX_ANALYSIS_ABS_SPREAD = MAX_REASONABLE_XAU_MID_GAP
 
 
 async def build_spread_analysis(
