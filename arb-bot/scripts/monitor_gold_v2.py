@@ -428,9 +428,16 @@ def objective_health_issue_reason(status: dict[str, Any]) -> str | None:
     reason = str(objective.get("reason") or "目标健康未达标")
     sample_count = objective.get("current_guard_sample_count")
     projected = objective.get("projected_daily_trades")
+    model_direction = objective.get("model_direction")
+    model_win_rate = objective.get("model_win_rate")
+    model_threshold = objective.get("model_threshold")
     maker_only = objective.get("maker_only_ok")
     fee_count = objective.get("binance_fee_or_taker_event_count")
-    return f"{reason} 当前保护版样本 {sample_count}，预计日交易 {projected}，maker-only {maker_only}，手续费/吃单事件 {fee_count}。"
+    return (
+        f"{reason} 当前保护版样本 {sample_count}，预计日交易 {projected}，"
+        f"模型方向 {model_direction}，模型胜率 {model_win_rate}，模型阈值 {model_threshold}，"
+        f"maker-only {maker_only}，手续费/吃单事件 {fee_count}。"
+    )
 
 
 def objective_hard_violation_active(status: dict[str, Any]) -> bool:
@@ -491,6 +498,9 @@ def summarize_status(status: dict[str, Any]) -> dict[str, Any]:
         "estimated_close_net": metrics.get("estimated_close_net"),
         "objective_ready": (gold_v2.get("objective_health") or {}).get("ready_for_goal"),
         "objective_reason": (gold_v2.get("objective_health") or {}).get("reason"),
+        "objective_model_direction": (gold_v2.get("objective_health") or {}).get("model_direction"),
+        "objective_model_win_rate": (gold_v2.get("objective_health") or {}).get("model_win_rate"),
+        "objective_model_threshold": (gold_v2.get("objective_health") or {}).get("model_threshold"),
         "maker_only_ok": (gold_v2.get("objective_health") or {}).get("maker_only_ok"),
         "fee_or_taker_count": (gold_v2.get("objective_health") or {}).get("binance_fee_or_taker_event_count"),
     }

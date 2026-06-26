@@ -150,6 +150,9 @@ def test_objective_health_issue_detects_unready_goal():
                 "reason": "当前保护版真实闭环样本 0 单，少于 3 单。",
                 "current_guard_sample_count": 0,
                 "projected_daily_trades": "3.2",
+                "model_direction": "short",
+                "model_win_rate": "0.75",
+                "model_threshold": "3.4",
                 "maker_only_ok": True,
                 "binance_fee_or_taker_event_count": 0,
             }
@@ -160,6 +163,8 @@ def test_objective_health_issue_detects_unready_goal():
 
     assert "少于 3 单" in reason
     assert "预计日交易 3.2" in reason
+    assert "模型方向 short" in reason
+    assert "模型胜率 0.75" in reason
 
 
 def test_objective_hard_violation_detects_fee_or_taker_event():
@@ -209,6 +214,9 @@ def test_check_status_deduplicates_objective_issue_over_grace(tmp_path):
                 "reason": "当前保护版真实闭环样本 0 单，少于 3 单。",
                 "current_guard_sample_count": 0,
                 "projected_daily_trades": "3.2",
+                "model_direction": "short",
+                "model_win_rate": "0.75",
+                "model_threshold": "3.4",
                 "maker_only_ok": True,
                 "binance_fee_or_taker_event_count": 0,
             }

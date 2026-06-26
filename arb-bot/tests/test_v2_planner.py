@@ -544,17 +544,37 @@ def test_v2_directional_performance_penalty_only_hits_losing_side(tmp_path):
 def test_v2_objective_health_reports_ready_only_when_real_and_projected_targets_pass():
     health = _objective_health(
         realized_performance={"sample_count": 5, "win_rate": Decimal("0.8")},
-        short_model={"selected": {"projected_daily_trades": Decimal("3.2")}},
-        long_model={"selected": {"projected_daily_trades": Decimal("2.1")}},
+        short_model={"selected": {"projected_daily_trades": Decimal("3.2"), "win_rate": Decimal("0.75"), "trades": 4}},
+        long_model={"selected": {"projected_daily_trades": Decimal("2.1"), "win_rate": Decimal("0.9"), "trades": 2}},
         short_threshold=Decimal("3.8"),
         long_threshold=Decimal("2.4"),
     )
 
     assert health["realized_ok"] is True
     assert health["projected_ok"] is True
+    assert health["model_ok"] is True
+    assert health["model_direction"] == "short"
+    assert health["model_win_rate"] == Decimal("0.75")
+    assert health["model_trade_count"] == 4
     assert health["ready_for_goal"] is True
     assert health["target_daily_trades_min"] == Decimal("3")
     assert health["target_daily_trades_max"] == Decimal("5")
+
+
+def test_v2_objective_health_blocks_when_model_win_rate_is_low():
+    health = _objective_health(
+        realized_performance={"sample_count": 5, "win_rate": Decimal("0.8")},
+        short_model={"selected": {"projected_daily_trades": Decimal("3.2"), "win_rate": Decimal("0.6"), "trades": 4}},
+        long_model={"selected": {"projected_daily_trades": Decimal("2.1"), "win_rate": Decimal("0.9"), "trades": 2}},
+        short_threshold=Decimal("3.8"),
+        long_threshold=Decimal("2.4"),
+    )
+
+    assert health["realized_ok"] is True
+    assert health["projected_ok"] is True
+    assert health["model_ok"] is False
+    assert health["ready_for_goal"] is False
+    assert "70%胜率" in health["reason"]
 
 
 def test_v2_objective_health_uses_current_guard_samples_when_available():
@@ -569,8 +589,8 @@ def test_v2_objective_health_uses_current_guard_samples_when_available():
                 "start_ms": 1_000,
             },
         },
-        short_model={"selected": {"projected_daily_trades": Decimal("3.2")}},
-        long_model={"selected": {"projected_daily_trades": Decimal("2.1")}},
+        short_model={"selected": {"projected_daily_trades": Decimal("3.2"), "win_rate": Decimal("0.75"), "trades": 4}},
+        long_model={"selected": {"projected_daily_trades": Decimal("2.1"), "win_rate": Decimal("0.9"), "trades": 2}},
         short_threshold=Decimal("3.8"),
         long_threshold=Decimal("2.4"),
     )
@@ -594,8 +614,8 @@ def test_v2_objective_health_blocks_until_current_guard_has_samples():
                 "start_ms": 1_000,
             },
         },
-        short_model={"selected": {"projected_daily_trades": Decimal("3.2")}},
-        long_model={"selected": {"projected_daily_trades": Decimal("2.1")}},
+        short_model={"selected": {"projected_daily_trades": Decimal("3.2"), "win_rate": Decimal("0.75"), "trades": 4}},
+        long_model={"selected": {"projected_daily_trades": Decimal("2.1"), "win_rate": Decimal("0.9"), "trades": 2}},
         short_threshold=Decimal("3.8"),
         long_threshold=Decimal("2.4"),
     )

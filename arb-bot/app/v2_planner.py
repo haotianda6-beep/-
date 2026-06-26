@@ -375,15 +375,19 @@ def _objective_health(
     projected_daily = max(projected_short or Decimal("0"), projected_long or Decimal("0"))
     realized_ok = realized_samples >= PERFORMANCE_MIN_TRADES and realized_win_rate is not None and realized_win_rate >= PERFORMANCE_TARGET_WIN_RATE
     projected_ok = PERFORMANCE_MIN_PROJECTED_DAILY_TRADES <= projected_daily <= Decimal("5")
+    model_candidate = _objective_model_candidate(short_model, long_model, short_threshold, long_threshold)
+    model_ok = bool(model_candidate)
     reasons = []
     if not realized_ok:
         if realized_samples < PERFORMANCE_MIN_TRADES:
             reasons.append(f"{scope_label}样本 {realized_samples} 单，少于 {PERFORMANCE_MIN_TRADES} 单。")
         else:
             reasons.append(f"{scope_label}胜率 {realized_win_rate:.2%} 未达 {PERFORMANCE_TARGET_WIN_RATE:.0%}。")
-    if not projected_ok:
+    if not model_ok:
+        reasons.append("模型没有找到同时满足70%胜率和3-5单/天的方向。")
+    elif not projected_ok:
         reasons.append(f"模型预计日交易 {projected_daily:.2f} 单，不在 3-5 单目标内。")
-    if realized_ok and projected_ok:
+    if realized_ok and model_ok:
         reasons.append(f"{scope_label}胜率和模型日交易频率均达到目标。")
     return {
         "target_win_rate": PERFORMANCE_TARGET_WIN_RATE,
@@ -402,10 +406,52 @@ def _objective_health(
         "projected_daily_trades_short": projected_short,
         "projected_daily_trades_long": projected_long,
         "projected_ok": projected_ok,
-        "ready_for_goal": realized_ok and projected_ok,
+        "model_ok": model_ok,
+        "model_direction": model_candidate["direction"] if model_candidate else None,
+        "model_win_rate": model_candidate["win_rate"] if model_candidate else None,
+        "model_trade_count": model_candidate["trades"] if model_candidate else None,
+        "model_threshold": model_candidate["threshold"] if model_candidate else None,
+        "ready_for_goal": realized_ok and model_ok,
         "short_threshold": short_threshold,
         "long_threshold": long_threshold,
         "reason": " ".join(reasons),
+    }
+
+
+def _objective_model_candidate(
+    short_model: dict | None,
+    long_model: dict | None,
+    short_threshold: Decimal,
+    long_threshold: Decimal,
+) -> dict | None:
+    candidates = [
+        _objective_model_direction("short", short_model, short_threshold),
+        _objective_model_direction("long", long_model, long_threshold),
+    ]
+    eligible = [candidate for candidate in candidates if candidate and candidate["ok"]]
+    if not eligible:
+        return None
+    return max(eligible, key=lambda item: (item["projected_daily_trades"], item["win_rate"]))
+
+
+def _objective_model_direction(direction: str, model: dict | None, threshold: Decimal) -> dict | None:
+    selected = model.get("selected") if isinstance(model, dict) else None
+    if not isinstance(selected, dict):
+        return None
+    projected = _dict_decimal(selected, "projected_daily_trades")
+    win_rate = _dict_decimal(selected, "win_rate")
+    trades = selected.get("trades")
+    if projected is None or win_rate is None:
+        return None
+    projected_ok = PERFORMANCE_MIN_PROJECTED_DAILY_TRADES <= projected <= Decimal("5")
+    win_rate_ok = win_rate >= PERFORMANCE_TARGET_WIN_RATE
+    return {
+        "direction": direction,
+        "projected_daily_trades": projected,
+        "win_rate": win_rate,
+        "trades": trades,
+        "threshold": threshold,
+        "ok": projected_ok and win_rate_ok,
     }
 
 
