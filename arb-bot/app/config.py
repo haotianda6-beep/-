@@ -27,6 +27,7 @@ CONFIG_FIELD_TO_ENV = {
     "exit_confirm_ms": "EXIT_CONFIRM_MS",
     "min_order_live_ms": "MIN_ORDER_LIVE_MS",
     "requote_cooldown_ms": "REQUOTE_COOLDOWN_MS",
+    "risk_exit_confirm_ms": "RISK_EXIT_CONFIRM_MS",
     "post_exit_reentry_cooldown_ms": "POST_EXIT_REENTRY_COOLDOWN_MS",
     "max_order_age_ms": "MAX_ORDER_AGE_MS",
     "max_quote_age_ms": "MAX_QUOTE_AGE_MS",
@@ -96,6 +97,7 @@ class Settings(BaseSettings):
     exit_confirm_ms: int | None = Field(default=None, alias="EXIT_CONFIRM_MS")
     min_order_live_ms: int = Field(default=3000, alias="MIN_ORDER_LIVE_MS")
     requote_cooldown_ms: int = Field(default=2000, alias="REQUOTE_COOLDOWN_MS")
+    risk_exit_confirm_ms: int = Field(default=800, alias="RISK_EXIT_CONFIRM_MS")
     post_exit_reentry_cooldown_ms: int = Field(default=60000, alias="POST_EXIT_REENTRY_COOLDOWN_MS")
     max_order_age_ms: int = Field(default=300, alias="MAX_ORDER_AGE_MS")
     max_quote_age_ms: int = Field(default=1500, alias="MAX_QUOTE_AGE_MS")
@@ -163,6 +165,7 @@ class Settings(BaseSettings):
         "exit_confirm_ms",
         "min_order_live_ms",
         "requote_cooldown_ms",
+        "risk_exit_confirm_ms",
         "post_exit_reentry_cooldown_ms",
         "max_order_age_ms",
         "max_quote_age_ms",

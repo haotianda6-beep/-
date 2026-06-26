@@ -27,6 +27,7 @@ def settings(tmp_path, **kwargs) -> Settings:
         "MAX_ORDER_AGE_MS": 0,
         "MAX_HEDGE_DELAY_MS": 1000,
         "ENTRY_CONFIRM_MS": 0,
+        "RISK_EXIT_CONFIRM_MS": 0,
         "CLOSE_PROFIT_USD_PER_OZ": Decimal("0.5"),
         "MT4_SLIPPAGE_POINTS": 0,
         "MT4_CLOSE_EXTRA_BUFFER_USD": Decimal("0"),
@@ -733,6 +734,57 @@ async def test_v2_loss_limit_exit_skips_confirm_time(tmp_path, monkeypatch):
         }
     )
 
+    assert run.state == StrategyState.QUOTING_BINANCE_EXIT
+    assert executor.active_order is not None
+
+
+@pytest.mark.asyncio
+async def test_v2_loss_limit_requires_risk_confirm_time(tmp_path, monkeypatch):
+    cfg = settings(
+        tmp_path,
+        SQLITE_PATH=tmp_path / "test.sqlite3",
+        PAPER_AUTO_FILL=False,
+        RISK_EXIT_CONFIRM_MS=800,
+    )
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    client.set_quote(Decimal("104"), Decimal("104.2"))
+    mt4_tick(mt4, "100", "100.2")
+    now = {"value": 10_000}
+    monkeypatch.setattr("app.v2_executor.utc_now_ms", lambda: now["value"])
+    loss_plan = {
+        "selected_entry": {"ready": False},
+        "exit_plan": {
+            "enabled": True,
+            "target_exit_spread": "3",
+            "loss_limit": {"active": True, "reason": "最大亏损触发"},
+        },
+    }
+
+    await executor.step(loss_plan)
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    assert "风控平仓确认中" in run.last_error
+
+    now["value"] = 10_500
+    await executor.step(loss_plan)
+    assert executor.active_order is None
+
+    now["value"] = 10_850
+    await executor.step(loss_plan)
     assert run.state == StrategyState.QUOTING_BINANCE_EXIT
     assert executor.active_order is not None
 

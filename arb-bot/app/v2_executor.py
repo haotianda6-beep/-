@@ -49,6 +49,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.exit_ready_since_ms = 0
         self.add_ready_since_ms = 0
         self.add_confirm_event_ms = 0
+        self.risk_exit_ready_since_ms = 0
+        self.risk_exit_confirm_reason: str | None = None
         self.hedge_started_ms = 0
         self.close_started_ms = 0
         self.last_closed_ms = 0
@@ -110,6 +112,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.exit_ready_since_ms = 0
         self.add_ready_since_ms = 0
         self.add_confirm_event_ms = 0
+        self.risk_exit_ready_since_ms = 0
+        self.risk_exit_confirm_reason = None
         self.hedge_started_ms = 0
         self.close_started_ms = 0
         self.exit_target_spread = None
@@ -276,6 +280,11 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.exit_target_spread = target
         risk_exit_active = self._risk_exit_active(plan_status)
         risk_exit_reason = self._risk_exit_reason(plan_status) if risk_exit_active else None
+        if risk_exit_active:
+            if not self._risk_exit_trigger_confirmed(risk_exit_reason):
+                return
+        else:
+            self._clear_risk_exit_confirm()
         if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             current = quote.ask - mt4_quote.bid
             if current > target and not risk_exit_active:
@@ -409,9 +418,29 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             return str(negative_swap.get("reason") or "负隔夜费风险触发")
         return None
 
+    def _risk_exit_trigger_confirmed(self, reason: str | None) -> bool:
+        confirm_ms = max(0, self.settings.risk_exit_confirm_ms)
+        if confirm_ms == 0:
+            return True
+        now = utc_now_ms()
+        marker = reason or "风控平仓触发"
+        if self.risk_exit_confirm_reason != marker or self.risk_exit_ready_since_ms <= 0:
+            self.risk_exit_confirm_reason = marker
+            self.risk_exit_ready_since_ms = now
+        elapsed = max(0, now - self.risk_exit_ready_since_ms)
+        if elapsed >= confirm_ms:
+            return True
+        self.runtime.last_error = f"V2 风控平仓确认中 {elapsed}/{confirm_ms}ms：{marker}"
+        return False
+
+    def _clear_risk_exit_confirm(self) -> None:
+        self.risk_exit_ready_since_ms = 0
+        self.risk_exit_confirm_reason = None
+
     def _clear_active_order_context(self) -> None:
         self.active_exit_order_risk_active = False
         self.active_exit_order_risk_reason = None
+        self._clear_risk_exit_confirm()
 
     def _exit_profit_guard_reason(
         self,
