@@ -4,8 +4,10 @@ from decimal import Decimal
 
 MIN_MODEL_TRADES = 1
 TARGET_DAILY_TRADES = Decimal("4")
+MIN_DAILY_TRADES = Decimal("3")
+MAX_DAILY_TRADES = Decimal("5")
 MIN_TARGET_WIN_RATE = Decimal("0.70")
-PERCENTILES = (55, 60, 65, 70, 75, 80, 85, 90)
+PERCENTILES = (55, 60, 65, 70, 75, 80, 85, 90, 92, 94, 95, 96, 97, 98, 99, 100)
 
 
 def build_entry_model(
@@ -47,7 +49,7 @@ def build_entry_model(
         }
     return {
         "enabled": True,
-        "reason": "已按最近样本选择兼顾胜率和开单频率的入场阈值。",
+        "reason": _selection_reason(selected),
         "points": len(values),
         "suggested_threshold": selected["threshold"],
         "selected": selected,
@@ -126,6 +128,9 @@ def _select_candidate(results: list[dict]) -> dict | None:
     ]
     if not eligible:
         return None
+    target_rate = [result for result in eligible if _daily_trade_in_target(result)]
+    if target_rate:
+        return max(target_rate, key=_target_candidate_score)
     return max(eligible, key=_candidate_score)
 
 
@@ -134,3 +139,21 @@ def _candidate_score(result: dict) -> tuple[Decimal, Decimal, Decimal]:
     win_rate = Decimal(str(result["win_rate"]))
     trade_gap = abs(projected - TARGET_DAILY_TRADES)
     return (win_rate, -trade_gap, -Decimal(str(result["threshold"])))
+
+
+def _target_candidate_score(result: dict) -> tuple[Decimal, Decimal, Decimal]:
+    projected = Decimal(str(result["projected_daily_trades"]))
+    win_rate = Decimal(str(result["win_rate"]))
+    trade_gap = abs(projected - TARGET_DAILY_TRADES)
+    return (win_rate, -trade_gap, -Decimal(str(result["threshold"])))
+
+
+def _daily_trade_in_target(result: dict) -> bool:
+    projected = Decimal(str(result["projected_daily_trades"]))
+    return MIN_DAILY_TRADES <= projected <= MAX_DAILY_TRADES
+
+
+def _selection_reason(selected: dict) -> str:
+    if _daily_trade_in_target(selected):
+        return "已按最近样本选择满足70%胜率且接近日开3-5单的入场阈值。"
+    return "已按最近样本选择70%胜率以上的入场阈值，但预计开单频率不在3-5单/天内。"

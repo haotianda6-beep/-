@@ -458,7 +458,7 @@ async def _gold_v2_recent_binance_bars() -> list[HistoryBar]:
     if now - _gold_v2_binance_bars_failure_ms <= GOLD_V2_BAR_FAILURE_RETRY_MS:
         return _gold_v2_binance_bars_cache
     end_ms = utc_now_ms()
-    start_ms = end_ms - 4 * 60 * 60 * 1000
+    start_ms = end_ms - 8 * 60 * 60 * 1000
     try:
         bars = await asyncio.wait_for(fetch_binance_klines(settings, "1m", start_ms, end_ms), timeout=5)
     except Exception as exc:  # noqa: BLE001

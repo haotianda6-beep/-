@@ -13,7 +13,7 @@ from app.v2_tuning import build_entry_model
 
 
 RANGE_LOOKBACK_MS = 30 * 60 * 1000
-MODEL_LOOKBACK_MS = 4 * 60 * 60 * 1000
+MODEL_LOOKBACK_MS = 8 * 60 * 60 * 1000
 MIN_POINTS = 8
 RANGE_FACTOR = Decimal("0.70")
 DEFAULT_SLIPPAGE_BUDGET = Decimal("0.30")
@@ -102,7 +102,7 @@ def build_gold_v2_status(
         "add_enabled": bool(open_pair and settings.max_add_count > 0),
         "reason": "V2 执行器已解锁，会按币安全限价和 MT4 跟随执行。" if not settings.gold_v2_observation_only else "新版七步方案处于观察阶段，只计算机会和挂单位置，不会自动下单。",
         "lookback_minutes": 30,
-        "entry_model_lookback_minutes": 240,
+        "entry_model_lookback_minutes": 480,
         "threshold_rule": "优先按最近样本估算70%以上回归胜率和日开单次数；证据不足时取最近30分钟区间70%位置，并且不能低于手动最小开仓价差。",
         "entry_model": {"short": short_model, "long": long_model},
         "mt4_slippage_budget": slippage_budget,
