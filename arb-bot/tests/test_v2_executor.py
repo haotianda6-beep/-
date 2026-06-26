@@ -789,6 +789,56 @@ async def test_v2_loss_limit_places_resting_exit_before_spread_recovers(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_v2_stale_weak_pair_places_limit_exit_even_when_net_negative(tmp_path):
+    cfg = settings(
+        tmp_path,
+        SQLITE_PATH=tmp_path / "test.sqlite3",
+        PAPER_AUTO_FILL=False,
+        OPEN_MIN_EDGE=Decimal("2.40"),
+        CLOSE_PROFIT_USD_PER_OZ=Decimal("1.21"),
+        AGED_CLOSE_PROFIT_USD_PER_OZ=Decimal("0.10"),
+    )
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    client.set_quote(Decimal("103"), Decimal("103.2"))
+    mt4_tick(mt4, "100", "100.2")
+
+    await executor.step(
+        {
+            "selected_entry": {"ready": False},
+            "exit_plan": {
+                "enabled": True,
+                "target_exit_spread": "3.2",
+                "estimated_net": "-1",
+                "stale_weak": {"active": True, "reason": "低质量旧仓受控释放"},
+            },
+        }
+    )
+
+    assert run.state == StrategyState.QUOTING_BINANCE_EXIT
+    assert executor.active_order is not None
+    assert executor.active_order.side == Side.BUY
+    assert executor.active_order.price == Decimal("102.9")
+    events = Storage(cfg.sqlite_path).get_events(0, utc_now_ms() + 1_000, limit=10)
+    exit_events = [event for event in events if event["kind"] == "v2_exit_order"]
+    assert exit_events[-1]["payload"]["exit_context"]["risk_exit_active"] is True
+    assert exit_events[-1]["payload"]["exit_context"]["risk_exit_reason"] == "低质量旧仓受控释放"
+
+
+@pytest.mark.asyncio
 async def test_v2_risk_exit_order_cancels_when_risk_condition_recovers(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False)
     client = PaperBinanceClient(cfg)

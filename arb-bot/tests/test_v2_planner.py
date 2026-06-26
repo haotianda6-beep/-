@@ -759,6 +759,78 @@ def test_v2_loss_limit_relaxes_exit_to_max_loss_target(tmp_path):
     assert "最大亏损" in exit_plan["reason"]
 
 
+def test_v2_stale_weak_pair_can_exit_within_loss_limit(tmp_path):
+    cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.40"), MAX_PAIR_AGE_MINUTES=60, MAX_PAIR_LOSS_USDT=Decimal("5"))
+    store = Storage(cfg.sqlite_path)
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("2"),
+        binance_entry_price=Decimal("4059.61"),
+        mt4_entry_price=Decimal("4057.96"),
+        binance_order_id="entry/add",
+        base_edge=Decimal("1.65"),
+        opened_ms=utc_now_ms() - 61 * 60_000,
+    )
+    metrics = PositionMetrics(
+        actual_entry_spread=Decimal("1.65"),
+        current_exit_spread=Decimal("2.80"),
+        profitable_spread_threshold=Decimal("1.34"),
+        dynamic_close_spread=Decimal("0.64"),
+        estimated_close_net=Decimal("-3.00"),
+    )
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4002.6"), ask=Decimal("4002.8")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=[],
+        open_pair=pair,
+        metrics=metrics,
+    )
+
+    exit_plan = status["exit_plan"]
+    assert exit_plan["stale_weak"]["active"] is True
+    assert exit_plan["target_exit_spread"] == Decimal("3.84")
+    assert exit_plan["reason"].startswith("低质量旧仓已超过")
+
+
+def test_v2_stale_weak_pair_waits_before_max_age(tmp_path):
+    cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.40"), MAX_PAIR_AGE_MINUTES=60, MAX_PAIR_LOSS_USDT=Decimal("5"))
+    store = Storage(cfg.sqlite_path)
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("2"),
+        binance_entry_price=Decimal("4059.61"),
+        mt4_entry_price=Decimal("4057.96"),
+        binance_order_id="entry/add",
+        base_edge=Decimal("1.65"),
+        opened_ms=utc_now_ms() - 30 * 60_000,
+    )
+    metrics = PositionMetrics(
+        actual_entry_spread=Decimal("1.65"),
+        current_exit_spread=Decimal("2.80"),
+        profitable_spread_threshold=Decimal("1.34"),
+        dynamic_close_spread=Decimal("0.64"),
+        estimated_close_net=Decimal("-3.00"),
+    )
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4002.6"), ask=Decimal("4002.8")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=[],
+        open_pair=pair,
+        metrics=metrics,
+    )
+
+    assert status["exit_plan"]["stale_weak"]["active"] is False
+    assert status["exit_plan"]["target_exit_spread"] == Decimal("0.64")
+
+
 def test_v2_negative_swap_safe_target_does_not_go_negative(tmp_path):
     cfg = settings(
         tmp_path,

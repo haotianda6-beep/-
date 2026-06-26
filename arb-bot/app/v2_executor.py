@@ -415,14 +415,22 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         negative_swap = exit_plan.get("negative_swap") or {}
         return bool(negative_swap.get("active"))
 
+    def _stale_weak_exit_active(self, plan_status: dict[str, Any]) -> bool:
+        exit_plan = (plan_status or {}).get("exit_plan") or {}
+        stale_weak = exit_plan.get("stale_weak") or {}
+        return bool(stale_weak.get("active"))
+
     def _risk_exit_active(self, plan_status: dict[str, Any]) -> bool:
-        return self._loss_limit_active(plan_status) or self._negative_swap_exit_active(plan_status)
+        return self._loss_limit_active(plan_status) or self._stale_weak_exit_active(plan_status) or self._negative_swap_exit_active(plan_status)
 
     def _risk_exit_reason(self, plan_status: dict[str, Any]) -> str | None:
         exit_plan = (plan_status or {}).get("exit_plan") or {}
         loss_limit = exit_plan.get("loss_limit") or {}
         if loss_limit.get("active"):
             return str(loss_limit.get("reason") or "最大亏损触发")
+        stale_weak = exit_plan.get("stale_weak") or {}
+        if stale_weak.get("active"):
+            return str(stale_weak.get("reason") or "低质量旧仓受控释放")
         negative_swap = exit_plan.get("negative_swap") or {}
         if negative_swap.get("active"):
             return str(negative_swap.get("reason") or "负隔夜费风险触发")

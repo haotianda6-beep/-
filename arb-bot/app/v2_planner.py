@@ -468,10 +468,14 @@ def _exit_plan(settings: Settings, pair: OpenPair | None, metrics: PositionMetri
     if not metrics or metrics.dynamic_close_spread is None:
         return {"enabled": False, "reason": "等待真实均价、资金费和隔夜费数据后再计算平仓价差。"}
     loss_limit = _loss_limit_exit_plan(settings, pair, metrics)
+    stale_weak = _stale_weak_exit_plan(settings, pair, metrics)
     negative_swap = _negative_swap_exit_plan(settings, pair, metrics)
     target_exit_spread = (
         loss_limit["target_exit_spread"]
         if loss_limit.get("active") and loss_limit.get("target_exit_spread") is not None
+        else
+        stale_weak["target_exit_spread"]
+        if stale_weak.get("active") and stale_weak.get("target_exit_spread") is not None
         else
         negative_swap["target_exit_spread"]
         if negative_swap.get("active") and negative_swap.get("target_exit_spread") is not None
@@ -480,6 +484,8 @@ def _exit_plan(settings: Settings, pair: OpenPair | None, metrics: PositionMetri
     reason = "平仓目标来自真实均价、已产生费用和额外利润空间。"
     if loss_limit.get("active"):
         reason = loss_limit["reason"]
+    elif stale_weak.get("active"):
+        reason = stale_weak["reason"]
     elif negative_swap.get("active"):
         reason = negative_swap["reason"]
     return {
@@ -492,6 +498,7 @@ def _exit_plan(settings: Settings, pair: OpenPair | None, metrics: PositionMetri
         "reason": reason,
         "normal_target_exit_spread": metrics.dynamic_close_spread,
         "loss_limit": loss_limit,
+        "stale_weak": stale_weak,
         "negative_swap": negative_swap,
     }
 
@@ -515,6 +522,38 @@ def _loss_limit_exit_plan(settings: Settings, pair: OpenPair, metrics: PositionM
         "target_exit_spread": target,
         "estimated_net": metrics.estimated_close_net,
         "max_loss_usdt": max_loss,
+    }
+
+
+def _stale_weak_exit_plan(settings: Settings, pair: OpenPair, metrics: PositionMetrics) -> dict:
+    if settings.max_pair_age_minutes <= 0 or settings.max_pair_loss_usdt <= 0 or pair.quantity_oz <= 0:
+        return {"active": False, "reason": "低质量旧仓释放未启用。"}
+    if metrics.actual_entry_spread is None or metrics.estimated_close_net is None or metrics.profitable_spread_threshold is None:
+        return {"active": False, "reason": "等待真实价差和净值后再判断低质量旧仓释放。"}
+    if settings.open_min_edge <= 0 or metrics.actual_entry_spread >= settings.open_min_edge:
+        return {"active": False, "reason": "当前组合不属于低于现行开仓标准的旧仓。"}
+    age_ms = utc_now_ms() - int(pair.opened_ms)
+    max_age_ms = settings.max_pair_age_minutes * 60_000
+    if age_ms < max_age_ms:
+        minutes_left = max(1, (max_age_ms - age_ms + 59_999) // 60_000)
+        return {"active": False, "reason": f"低质量旧仓仍在等待回归，约 {minutes_left} 分钟后允许受控释放。"}
+    if metrics.estimated_close_net <= -settings.max_pair_loss_usdt:
+        return {
+            "active": False,
+            "reason": "已达到最大亏损风控，由最大亏损逻辑接管。",
+            "max_loss_usdt": settings.max_pair_loss_usdt,
+        }
+    target = max(Decimal("0"), metrics.profitable_spread_threshold + (settings.max_pair_loss_usdt / pair.quantity_oz))
+    return {
+        "active": True,
+        "reason": (
+            f"低质量旧仓已超过 {settings.max_pair_age_minutes} 分钟且真实进场价差 "
+            f"{metrics.actual_entry_spread} 低于当前开仓线 {settings.open_min_edge}，"
+            f"允许在最大亏损 {settings.max_pair_loss_usdt} 内用币安限价释放仓位。"
+        ),
+        "target_exit_spread": target,
+        "estimated_net": metrics.estimated_close_net,
+        "max_loss_usdt": settings.max_pair_loss_usdt,
     }
 
 
