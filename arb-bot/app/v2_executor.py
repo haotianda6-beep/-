@@ -1013,7 +1013,41 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if self.mt4_follow_rollback_remaining_qty > 0 and self.mt4_follow_rollback_remaining_qty >= self.binance.filters.min_qty:
             self.active_order = self.mt4_follow_rollback_source_order
             return
+        if self.mt4_follow_rollback_remaining_qty > 0:
+            self._defer_mt4_follow_rollback_dust(order)
+            return
         self._finish_mt4_follow_rollback(order)
+
+    def _defer_mt4_follow_rollback_dust(self, order: OrderUpdate) -> None:
+        source = self.mt4_follow_rollback_source_order
+        remaining = self.mt4_follow_rollback_remaining_qty
+        self.storage.record_event(
+            "v2_mt4_follow_rollback_dust_remaining",
+            {
+                "reason": self.mt4_follow_rollback_reason,
+                "remaining_qty": str(remaining),
+                "min_qty": str(self.binance.filters.min_qty),
+                "source_order": source.model_dump(mode="json") if source else None,
+                "rollback_order": order.model_dump(mode="json"),
+            },
+        )
+        self.active_order = None
+        self.rollbacking_mt4_follow = False
+        self.mt4_follow_rollback_source_order = None
+        self.mt4_follow_rollback_remaining_qty = Decimal("0")
+        self.mt4_follow_rollback_reason = None
+        self.hedge_command_id = None
+        self._clear_entry_quote()
+        self._clear_entry_carry()
+        self.adding_to_pair = False
+        self.active_add_base_edge = None
+        self.active_add_trigger_edge = None
+        self.active_mt4_follow_min_edge = None
+        self.runtime.state = StrategyState.IDLE if self.runtime.open_pair is None else StrategyState.PAIR_OPEN
+        self.runtime.last_error = (
+            f"MT4 跟随价格越界，币安限价撤回后仍剩余 {remaining} XAU，"
+            f"小于最小下单量 {self.binance.filters.min_qty}，已交给实盘对账守卫继续监控。"
+        )
 
     def _finish_mt4_follow_rollback(self, order: OrderUpdate | None) -> None:
         source = self.mt4_follow_rollback_source_order

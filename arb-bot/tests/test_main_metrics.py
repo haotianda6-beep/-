@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import app.main as main
 import app.mt4_rollover as mt4_rollover
-from app.models import OpenPair, PairDirection, TradeHistoryItem
+from app.models import OpenPair, PairDirection, StrategyState, TradeHistoryItem
 from app.main import (
     _binance_transient_cooldown_ms,
     _dynamic_close_spread,
@@ -13,6 +13,7 @@ from app.main import (
     _estimate_mt4_swap,
     _gold_v2_realized_performance_from_items,
     _immediate_close_net,
+    _live_mismatch_wait_state,
     _projected_close_net_after_next_settlement,
 )
 
@@ -23,6 +24,25 @@ def event_at(timestamp_ms: int, kind: str, payload: dict) -> dict:
         "kind": kind,
         "payload": payload,
     }
+
+
+def test_live_mismatch_wait_state_without_pair_stays_idle(monkeypatch):
+    monkeypatch.setattr(main.strategy, "open_pair", None)
+
+    assert _live_mismatch_wait_state() == StrategyState.IDLE
+
+
+def test_live_mismatch_wait_state_with_pair_keeps_pair_open(monkeypatch):
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry",
+    )
+    monkeypatch.setattr(main.strategy, "open_pair", pair)
+
+    assert _live_mismatch_wait_state() == StrategyState.PAIR_OPEN
 
 
 def test_immediate_close_net_excludes_future_funding_and_swap():

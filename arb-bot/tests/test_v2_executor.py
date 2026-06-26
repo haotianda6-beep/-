@@ -440,6 +440,56 @@ async def test_v2_mt4_price_bound_failure_rolls_back_entry_with_post_only(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_v2_mt4_price_bound_rollback_dust_is_not_marked_completed(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, BINANCE_MIN_QTY=Decimal("0.01"))
+    store = Storage(cfg.sqlite_path)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(guarded_short_plan("101", locked_floor="2"))
+    client.set_quote(Decimal("101"), Decimal("101.2"))
+    await client.simulate_fill(executor.active_order.order_id, Decimal("1"), Decimal("101"))
+    await executor.step(guarded_short_plan("101", locked_floor="2"))
+    command = mt4.next_command()
+
+    mt4.submit_report(
+        Mt4Report(
+            command_id=command["command_id"],
+            status="error",
+            action="BUY",
+            ticket=-1,
+            fill_price=None,
+            lots=Decimal("0.01"),
+            error_code=9001,
+            message="max price exceeded",
+        )
+    )
+    await executor.step(guarded_short_plan("101", locked_floor="2"))
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    await executor.step({})
+    rollback = executor.active_order
+    assert rollback is not None
+
+    await client.simulate_fill(rollback.order_id, Decimal("0.995"), rollback.price)
+    client._orders[rollback.order_id] = client._orders[rollback.order_id].model_copy(update={"status": OrderStatus.CANCELED})
+    await executor.step({})
+
+    assert run.state == StrategyState.IDLE
+    assert run.open_pair is None
+    assert executor.active_order is None
+    assert executor.rollbacking_mt4_follow is False
+    events = store.get_events(0, utc_now_ms() + 1_000, limit=100)
+    assert any(event["kind"] == "v2_mt4_follow_rollback_dust_remaining" for event in events)
+    assert not any(event["kind"] == "v2_mt4_follow_rollback_completed" for event in events)
+    assert "小于最小下单量" in run.last_error
+
+
+@pytest.mark.asyncio
 async def test_v2_blocks_new_entry_during_min_entry_interval(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", GOLD_V2_MIN_ENTRY_INTERVAL_MS=10_000)
     store = Storage(cfg.sqlite_path)

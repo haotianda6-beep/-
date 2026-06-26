@@ -2147,7 +2147,7 @@ async def _queue_binance_flatten_after_live_mismatch(binance_qty: Decimal, reaso
         return True
     quote = binance_client.latest_quote()
     if quote is None:
-        strategy.state = StrategyState.PAIR_OPEN
+        strategy.state = _live_mismatch_wait_state()
         strategy.last_error = f"{reason}；币安报价暂缺，等待报价恢复后继续挂平仓单。"
         storage.record_event("live_mismatch_flatten_wait_quote", {"reason": reason, "binance_position_qty": str(binance_qty)})
         return True
@@ -2171,7 +2171,7 @@ async def _queue_binance_flatten_after_live_mismatch(binance_qty: Decimal, reaso
             )
         )
     except BinanceError as exc:
-        strategy.state = StrategyState.PAIR_OPEN
+        strategy.state = _live_mismatch_wait_state()
         strategy.last_error = f"{reason}；币安平仓挂单暂时失败，持续重试：{str(exc)[:160]}"
         storage.record_event(
             "live_mismatch_flatten_order_failed",
@@ -2187,6 +2187,10 @@ async def _queue_binance_flatten_after_live_mismatch(binance_qty: Decimal, reaso
         {"reason": reason, "binance_position_qty": str(binance_qty), **order.model_dump(mode="json")},
     )
     return True
+
+
+def _live_mismatch_wait_state() -> StrategyState:
+    return StrategyState.PAIR_OPEN if strategy.open_pair is not None else StrategyState.IDLE
 
 
 def _paused_for_transient_reconcile() -> bool:
