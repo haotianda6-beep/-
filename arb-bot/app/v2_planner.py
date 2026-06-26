@@ -22,7 +22,8 @@ MT4_MOVE_PERCENTILE = 70
 ENTRY_AGED_PROFIT_WINDOW_MINUTES = 120
 MAX_TRAINING_MT4_BAR_RANGE = Decimal("4")
 MAX_TRAINING_BINANCE_BAR_RANGE = Decimal("5")
-MAX_TRAINING_ABS_SPREAD = Decimal("8")
+MAX_TRADABLE_ABS_SPREAD = Decimal("4")
+MAX_TRAINING_ABS_SPREAD = MAX_TRADABLE_ABS_SPREAD
 
 
 def build_gold_v2_status(
@@ -157,6 +158,8 @@ def _untradable_training_bar(
     diff: Decimal,
     previous_mt4_close: Decimal | None = None,
 ) -> bool:
+    if _weekend_bar(mt4_bar.open_time_ms):
+        return True
     if abs(diff) > min(MAX_REASONABLE_XAU_MID_GAP, MAX_TRAINING_ABS_SPREAD):
         return True
     if mt4_bar.high <= mt4_bar.low and previous_mt4_close == mt4_bar.close:
@@ -166,6 +169,11 @@ def _untradable_training_bar(
     if binance_bar.high > binance_bar.low and binance_bar.high - binance_bar.low > MAX_TRAINING_BINANCE_BAR_RANGE:
         return True
     return False
+
+
+def _weekend_bar(open_time_ms: int) -> bool:
+    weekday = datetime.fromtimestamp(open_time_ms / 1000, timezone.utc).weekday()
+    return weekday >= 5
 
 
 def _range(values: list[Decimal], discarded: int = 0) -> dict:
@@ -290,6 +298,32 @@ def _plan_dict(
     entry_close_profit: Decimal,
     settlement_adjustment: dict | None = None,
 ) -> dict:
+    if current_edge > MAX_TRADABLE_ABS_SPREAD:
+        return {
+            "direction": direction.value,
+            "direction_text": _direction_text(direction),
+            "ready": False,
+            "reason": f"当前价差 {current_edge} 超过黄金正常上限 {MAX_TRADABLE_ABS_SPREAD}，按停盘或错位报价过滤",
+            "current_edge": current_edge,
+            "threshold": threshold,
+            "required_edge": threshold,
+            "visible_trigger_edge": threshold,
+            "locked_edge_floor": threshold + slippage_budget,
+            "quantity_oz": qty,
+            "binance_side": binance_side.value,
+            "binance_price": limit_price,
+            "mt4_follow_side": mt4_side.value,
+            "expected_locked_edge": None,
+            "estimated_exit_target_spread": None,
+            "recent_low_spread": Decimal(str(spread_range["low"])) if spread_range.get("low") is not None else None,
+            "exit_viable": False,
+            "initial_close_profit_usd_per_oz": close_profit,
+            "entry_viability_close_profit_usd_per_oz": entry_close_profit,
+            "next_settlement_adjustment": settlement_adjustment,
+            "mt4_reference_price": mt4_reference_price,
+            "mt4_slippage_budget": slippage_budget,
+            "mt4_exit_follow_budget": exit_follow_budget,
+        }
     visible_trigger_edge = threshold
     locked_edge_floor = threshold + slippage_budget
     ready = current_edge >= visible_trigger_edge
@@ -593,15 +627,34 @@ def _add_plan(
         edge = mt4.bid - binance.bid
         price = _round_down(min(binance.bid - settings.binance_entry_offset_usd, mt4.bid - actionable_trigger - slippage_budget), filters.tick_size)
         side, mt4_side, locked = Side.BUY, Side.SELL, mt4.bid - price
+    if edge > MAX_TRADABLE_ABS_SPREAD:
+        return {
+            **data,
+            "ready": False,
+            "reason": f"当前补仓价差 {edge} 超过黄金正常上限 {MAX_TRADABLE_ABS_SPREAD}，按停盘或错位报价过滤。",
+            "current_edge": edge,
+            "next_actionable_trigger_edge": actionable_trigger,
+            "required_blended_edge": required_blended_edge,
+            "required_locked_edge": required_locked_edge,
+            "average_protection_edge": average_protection_edge,
+            "binance_side": side.value,
+            "binance_price": price,
+            "mt4_follow_side": mt4_side.value,
+            "expected_locked_edge": locked,
+            "estimated_blended_edge": None,
+            "exit_viable": False,
+            "mt4_slippage_budget": slippage_budget,
+            "mt4_exit_follow_budget": exit_follow_budget,
+        }
     blended_edge = None
     exit_viable = False
     if current_avg_edge is not None:
         blended_edge = ((current_avg_edge * pair.quantity_oz) + (locked * qty)) / (pair.quantity_oz + qty)
         exit_viable = blended_edge >= required_blended_edge and blended_edge >= current_avg_edge
-    ready = edge >= trigger and exit_viable
+    ready = edge >= actionable_trigger and exit_viable
     reason = "达到补仓触发位，可以挂补仓限价单。"
-    if edge < trigger:
-        reason = "当前价差未到补仓阶梯触发位。"
+    if edge < actionable_trigger:
+        reason = "当前价差未到补仓保护触发位。"
     elif not exit_viable:
         reason = "补仓后均价差仍不足以覆盖平仓缓冲和目标利润，暂不补仓。"
     return {**data,

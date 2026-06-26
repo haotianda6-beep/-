@@ -104,6 +104,21 @@ def test_spread_analysis_detects_return_to_threshold():
     assert result.latest_diff == Decimal("3")
 
 
+def test_spread_analysis_ignores_weekend_and_abnormal_spreads():
+    friday = 1_787_899_200_000
+    saturday = 1_787_985_600_000
+    monday = 1_788_158_400_000
+    mt4 = [bar(friday, "4170"), bar(saturday, "4170"), bar(monday, "4170")]
+    binance = [bar(friday, "4173"), bar(saturday, "4182.3"), bar(monday, "4177.8")]
+
+    result = compare_spreads(mt4, binance, days=7, interval="1m", threshold=Decimal("0.50"))
+
+    assert result.ready
+    assert result.matched_points == 1
+    assert result.latest_diff == Decimal("3")
+    assert result.min_abs_diff == Decimal("3")
+
+
 def test_spread_analysis_reports_unaligned_bars():
     result = compare_spreads(
         [bar(60_038, "4170")],

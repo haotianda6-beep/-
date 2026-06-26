@@ -48,22 +48,22 @@ def recent_bars(diffs: list[Decimal]) -> tuple[list[HistoryBar], list[HistoryBar
 def test_v2_uses_upper_range_threshold_from_recent_spreads(tmp_path):
     cfg = settings(tmp_path)
     store = Storage(cfg.sqlite_path)
-    mt4_bars, binance_bars = recent_bars([Decimal(i) for i in range(1, 11)])
+    mt4_bars, binance_bars = recent_bars([Decimal("1"), Decimal("2"), Decimal("3"), Decimal("4"), Decimal("5"), Decimal("6")] * 3)
     store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
 
     status = build_gold_v2_status(
         settings=cfg,
         storage=store,
         filters=filters(),
-        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4007.8"), ask=Decimal("4008.0")),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.5"), ask=Decimal("4003.7")),
         mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("4000"), ask=Decimal("4000.2")),
         binance_bars=binance_bars,
         open_pair=None,
         metrics=PositionMetrics(),
     )
 
-    assert status["short_range"]["discarded"] == 2
-    assert status["short_entry"]["threshold"] == Decimal("5.90")
+    assert status["short_range"]["discarded"] == 6
+    assert status["short_entry"]["threshold"] == Decimal("3.10")
     assert status["short_entry"]["ready"] is True
     assert status["selected_entry"]["direction"] == PairDirection.BINANCE_SHORT_MT4_LONG.value
 
@@ -78,7 +78,7 @@ def test_v2_blocks_entry_when_recent_range_has_no_safe_exit(tmp_path):
         settings=cfg,
         storage=store,
         filters=filters(),
-        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4005.0"), ask=Decimal("4005.2")),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.6"), ask=Decimal("4003.8")),
         mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
         binance_bars=binance_bars,
         open_pair=None,
@@ -202,7 +202,7 @@ def test_v2_blocks_entry_when_quote_gap_is_unreasonable(tmp_path):
 def test_v2_ignores_unreasonable_historical_bar_gap(tmp_path):
     cfg = settings(tmp_path)
     store = Storage(cfg.sqlite_path)
-    mt4_bars, binance_bars = recent_bars([Decimal("2"), Decimal("3"), Decimal("999"), Decimal("4"), Decimal("5")] * 2)
+    mt4_bars, binance_bars = recent_bars([Decimal("2"), Decimal("3"), Decimal("999"), Decimal("4"), Decimal("5")] * 4)
     store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
 
     status = build_gold_v2_status(
@@ -216,9 +216,28 @@ def test_v2_ignores_unreasonable_historical_bar_gap(tmp_path):
         metrics=PositionMetrics(),
     )
 
-    assert status["short_range"]["discarded"] == 2
-    assert status["short_range"]["high"] == Decimal("5")
-    assert status["short_entry"]["threshold"] == Decimal("4.1")
+    assert status["short_range"]["discarded"] == 8
+    assert status["short_range"]["high"] == Decimal("4")
+    assert status["short_entry"]["threshold"] <= Decimal("4")
+
+
+def test_v2_ignores_weekend_training_bars():
+    saturday = 1_787_985_600_000
+    monday = 1_788_158_400_000
+    mt4_bars = [
+        ranged_bar(saturday, Decimal("4000"), Decimal("3999.9"), Decimal("4000.1")),
+        ranged_bar(monday, Decimal("4000"), Decimal("3999.9"), Decimal("4000.1")),
+    ]
+    binance_bars = [
+        ranged_bar(saturday, Decimal("4012.3"), Decimal("4012.2"), Decimal("4012.4")),
+        ranged_bar(monday, Decimal("4003"), Decimal("4002.9"), Decimal("4003.1")),
+    ]
+
+    short, long, discarded = _spread_values(mt4_bars, binance_bars)
+
+    assert short == [Decimal("3")]
+    assert long == [Decimal("-3")]
+    assert discarded == 1
 
 
 def test_v2_ignores_stale_and_volatile_training_bars():
@@ -516,7 +535,7 @@ def test_v2_add_plan_does_not_lower_current_average_edge(tmp_path):
         binance_entry_price=Decimal("4030.76"),
         mt4_entry_price=Decimal("4022.49"),
         binance_order_id="entry/add",
-        base_edge=Decimal("2.42"),
+        base_edge=Decimal("2.00"),
         add_count=1,
     )
 
@@ -524,7 +543,7 @@ def test_v2_add_plan_does_not_lower_current_average_edge(tmp_path):
         settings=cfg,
         storage=store,
         filters=filters(),
-        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4021.0"), ask=Decimal("4021.2")),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4020.5"), ask=Decimal("4020.7")),
         mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("4016.4"), ask=Decimal("4016.7")),
         binance_bars=[],
         open_pair=pair,
@@ -533,13 +552,13 @@ def test_v2_add_plan_does_not_lower_current_average_edge(tmp_path):
     )
 
     add_plan = status["add_plan"]
-    assert add_plan["next_trigger_edge"] == Decimal("4.42")
+    assert add_plan["next_trigger_edge"] == Decimal("4.00")
     assert add_plan["average_protection_edge"] == Decimal("8.27")
     assert add_plan["next_actionable_trigger_edge"] == Decimal("8.27")
     assert add_plan["current_edge"] >= add_plan["next_trigger_edge"]
     assert add_plan["current_edge"] < add_plan["next_actionable_trigger_edge"]
     assert add_plan["estimated_blended_edge"] >= Decimal("8.27")
-    assert add_plan["ready"] is True
+    assert add_plan["ready"] is False
     assert add_plan["binance_price"] - Decimal("4016.7") >= add_plan["next_actionable_trigger_edge"]
 
 
@@ -571,7 +590,7 @@ def test_v2_add_plan_blocks_when_blended_edge_cannot_cover_exit_buffer(tmp_path)
     assert status["add_plan"]["current_edge"] < status["add_plan"]["next_actionable_trigger_edge"]
     assert status["add_plan"]["required_locked_edge"] > status["add_plan"]["next_trigger_edge"]
     assert status["add_plan"]["exit_viable"] is True
-    assert status["add_plan"]["ready"] is True
+    assert status["add_plan"]["ready"] is False
     assert status["add_plan"]["expected_locked_edge"] >= status["add_plan"]["required_locked_edge"]
 
 

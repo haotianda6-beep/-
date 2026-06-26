@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -17,6 +18,7 @@ INTERVAL_MS = {
     "15m": 900_000,
     "1h": 3_600_000,
 }
+MAX_ANALYSIS_ABS_SPREAD = Decimal("4")
 
 
 async def build_spread_analysis(
@@ -95,6 +97,8 @@ def compare_spreads(
         if not binance_bar:
             continue
         diff = binance_bar.close - mt4_bar.close
+        if _weekend_bar(aligned_time) or abs(diff) > MAX_ANALYSIS_ABS_SPREAD:
+            continue
         points.append(
             SpreadAnalysisPoint(
                 timestamp_ms=aligned_time,
@@ -155,3 +159,8 @@ def _parse_binance_bar(row: list[Any]) -> HistoryBar:
 
 def _bucket_time(timestamp_ms: int, interval_ms: int) -> int:
     return timestamp_ms - (timestamp_ms % interval_ms)
+
+
+def _weekend_bar(open_time_ms: int) -> bool:
+    weekday = datetime.fromtimestamp(open_time_ms / 1000, timezone.utc).weekday()
+    return weekday >= 5
