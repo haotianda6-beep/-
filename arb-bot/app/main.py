@@ -128,6 +128,8 @@ GOLD_V2_EXIT_BUFFER_MOVE_PERCENTILE = 70
 GOLD_V2_EXIT_BUFFER_MIN_POINTS = 8
 GOLD_V2_ENTRY_MOVE_BUDGET_MS = 10_000
 GOLD_V2_FOLLOW_MOVE_BUDGET_MS = 1000
+GOLD_V2_CURRENT_GUARD_VERSION = "2026-06-26 22:54 CST"
+GOLD_V2_CURRENT_GUARD_START_MS = 1_782_485_640_000
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 MT4_DIR = Path(__file__).resolve().parents[1] / "mt4"
 RUNTIME_STATE_PATH = settings.sqlite_path.parent / "runtime_state.json"
@@ -505,29 +507,46 @@ async def _gold_v2_realized_trade_performance() -> dict | None:
 
 def _gold_v2_realized_performance_from_items(items: list[TradeHistoryItem]) -> dict:
     v2_items = [item for item in items if item.strategy_version == "v2.0" and item.net_pnl is not None]
-    pnls = [item.net_pnl for item in v2_items if item.net_pnl is not None]
+    summary = _gold_v2_realized_performance_detail(v2_items, "V2")
+    current_guard_items = [
+        item
+        for item in v2_items
+        if _gold_v2_trade_time_ms(item) >= GOLD_V2_CURRENT_GUARD_START_MS
+    ]
+    summary["current_guard"] = _gold_v2_realized_performance_detail(current_guard_items, "当前保护版")
+    summary["current_guard"]["version"] = GOLD_V2_CURRENT_GUARD_VERSION
+    summary["current_guard"]["start_ms"] = GOLD_V2_CURRENT_GUARD_START_MS
+    return summary
+
+
+def _gold_v2_realized_performance_detail(items: list[TradeHistoryItem], label: str) -> dict:
+    pnls = [item.net_pnl for item in items if item.net_pnl is not None]
     if not pnls:
         return {
             "sample_count": 0,
-            "reason": "暂无 V2 真实做单历史，不参与阈值调整。",
+            "reason": f"暂无 {label} 真实做单历史，不参与阈值调整。",
             "directions": {
-                "short": _gold_v2_realized_performance_summary([], "做空方向暂无 V2 真实做单历史。"),
-                "long": _gold_v2_realized_performance_summary([], "做多方向暂无 V2 真实做单历史。"),
+                "short": _gold_v2_realized_performance_summary([], f"{label} 做空方向暂无真实做单历史。"),
+                "long": _gold_v2_realized_performance_summary([], f"{label} 做多方向暂无真实做单历史。"),
             },
         }
     summary = _gold_v2_realized_performance_summary(pnls, "")
     summary["reason"] = _gold_v2_performance_reason(summary["sample_count"], summary["win_rate"], summary["total_pnl"])
     summary["directions"] = {
         "short": _gold_v2_realized_performance_summary(
-            [item.net_pnl for item in v2_items if item.binance_entry_side == Side.SELL and item.net_pnl is not None],
-            "做空方向暂无 V2 真实做单历史。",
+            [item.net_pnl for item in items if item.binance_entry_side == Side.SELL and item.net_pnl is not None],
+            f"{label} 做空方向暂无真实做单历史。",
         ),
         "long": _gold_v2_realized_performance_summary(
-            [item.net_pnl for item in v2_items if item.binance_entry_side == Side.BUY and item.net_pnl is not None],
-            "做多方向暂无 V2 真实做单历史。",
+            [item.net_pnl for item in items if item.binance_entry_side == Side.BUY and item.net_pnl is not None],
+            f"{label} 做多方向暂无真实做单历史。",
         ),
     }
     return summary
+
+
+def _gold_v2_trade_time_ms(item: TradeHistoryItem) -> int:
+    return item.open_time_ms or item.close_time_ms or 0
 
 
 def _gold_v2_realized_performance_summary(pnls: list[Decimal], empty_reason: str) -> dict:

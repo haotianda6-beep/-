@@ -56,6 +56,44 @@ def test_gold_v2_realized_performance_uses_true_v2_trade_history_only():
     assert performance["directions"]["short"]["total_pnl"] == Decimal("-2.0")
     assert performance["directions"]["long"]["sample_count"] == 1
     assert performance["directions"]["long"]["win_rate"] == Decimal("1")
+    assert performance["current_guard"]["sample_count"] == 0
+    assert performance["current_guard"]["version"] == main.GOLD_V2_CURRENT_GUARD_VERSION
+
+
+def test_gold_v2_realized_performance_splits_current_guard_history():
+    guard_start = main.GOLD_V2_CURRENT_GUARD_START_MS
+    performance = _gold_v2_realized_performance_from_items(
+        [
+            TradeHistoryItem(
+                strategy_version="v2.0",
+                open_time_ms=guard_start - 60_000,
+                binance_entry_side=main.Side.SELL,
+                net_pnl=Decimal("-5.0"),
+                status="旧保护",
+            ),
+            TradeHistoryItem(
+                strategy_version="v2.0",
+                open_time_ms=guard_start,
+                binance_entry_side=main.Side.SELL,
+                net_pnl=Decimal("1.0"),
+                status="当前保护",
+            ),
+            TradeHistoryItem(
+                strategy_version="v2.0",
+                close_time_ms=guard_start + 60_000,
+                binance_entry_side=main.Side.BUY,
+                net_pnl=Decimal("-0.5"),
+                status="当前保护",
+            ),
+        ]
+    )
+
+    assert performance["sample_count"] == 3
+    assert performance["total_pnl"] == Decimal("-4.5")
+    assert performance["current_guard"]["sample_count"] == 2
+    assert performance["current_guard"]["total_pnl"] == Decimal("0.5")
+    assert performance["current_guard"]["directions"]["short"]["sample_count"] == 1
+    assert performance["current_guard"]["directions"]["long"]["sample_count"] == 1
 
 
 def test_gold_v2_realized_performance_handles_empty_history():

@@ -422,7 +422,7 @@ def test_v2_directional_performance_penalty_only_hits_losing_side(tmp_path):
     assert status["long_entry"]["threshold"] == Decimal("2.4")
     assert status["objective_health"]["realized_ok"] is False
     assert status["objective_health"]["ready_for_goal"] is False
-    assert "真实胜率" in status["objective_health"]["reason"]
+    assert "真实闭环胜率" in status["objective_health"]["reason"]
 
 
 def test_v2_objective_health_reports_ready_only_when_real_and_projected_targets_pass():
@@ -439,6 +439,55 @@ def test_v2_objective_health_reports_ready_only_when_real_and_projected_targets_
     assert health["ready_for_goal"] is True
     assert health["target_daily_trades_min"] == Decimal("3")
     assert health["target_daily_trades_max"] == Decimal("5")
+
+
+def test_v2_objective_health_uses_current_guard_samples_when_available():
+    health = _objective_health(
+        realized_performance={
+            "sample_count": 14,
+            "win_rate": Decimal("0.28"),
+            "current_guard": {
+                "sample_count": 5,
+                "win_rate": Decimal("0.8"),
+                "version": "guard",
+                "start_ms": 1_000,
+            },
+        },
+        short_model={"selected": {"projected_daily_trades": Decimal("3.2")}},
+        long_model={"selected": {"projected_daily_trades": Decimal("2.1")}},
+        short_threshold=Decimal("3.8"),
+        long_threshold=Decimal("2.4"),
+    )
+
+    assert health["realized_ok"] is True
+    assert health["ready_for_goal"] is True
+    assert health["realized_sample_count"] == 5
+    assert health["current_guard_sample_count"] == 5
+    assert health["overall_realized_sample_count"] == 14
+    assert health["current_guard_version"] == "guard"
+
+
+def test_v2_objective_health_blocks_until_current_guard_has_samples():
+    health = _objective_health(
+        realized_performance={
+            "sample_count": 14,
+            "win_rate": Decimal("0.8"),
+            "current_guard": {
+                "sample_count": 0,
+                "version": "guard",
+                "start_ms": 1_000,
+            },
+        },
+        short_model={"selected": {"projected_daily_trades": Decimal("3.2")}},
+        long_model={"selected": {"projected_daily_trades": Decimal("2.1")}},
+        short_threshold=Decimal("3.8"),
+        long_threshold=Decimal("2.4"),
+    )
+
+    assert health["realized_ok"] is False
+    assert health["ready_for_goal"] is False
+    assert health["current_guard_sample_count"] == 0
+    assert "当前保护版" in health["reason"]
 
 
 def test_v2_performance_penalty_keeps_daily_trade_cap():

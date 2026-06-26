@@ -1632,11 +1632,7 @@
       function objectiveHealthText(health) {
         if (!health) return "等待真实胜率和模型频率";
         const state = health.ready_for_goal ? "达标" : "未达标";
-        const win =
-          health.realized_win_rate !== null &&
-          health.realized_win_rate !== undefined
-            ? `${fmt(Number(health.realized_win_rate) * 100)}%`
-            : "-";
+        const win = percentText(health.realized_win_rate);
         const targetWin =
           health.target_win_rate !== null &&
           health.target_win_rate !== undefined
@@ -1647,7 +1643,25 @@
           health.projected_daily_trades !== undefined
             ? `${fmt(health.projected_daily_trades)} 单/天`
             : "-";
-        return `${state}；真实 ${fmt(health.realized_sample_count || 0)} 单，胜率 ${win}/${targetWin}；模型预计 ${daily}；${health.reason || ""}`;
+        const scope =
+          health.current_guard_sample_count !== null &&
+          health.current_guard_sample_count !== undefined
+            ? `当前保护版 ${fmt(health.current_guard_sample_count || 0)} 单，胜率 ${win}/${targetWin}`
+            : `真实 ${fmt(health.realized_sample_count || 0)} 单，胜率 ${win}/${targetWin}`;
+        const overall =
+          health.overall_realized_sample_count !== null &&
+          health.overall_realized_sample_count !== undefined &&
+          Number(health.overall_realized_sample_count) !==
+            Number(health.realized_sample_count || 0)
+            ? `；总体 ${fmt(health.overall_realized_sample_count || 0)} 单，胜率 ${percentText(health.overall_realized_win_rate)}`
+            : "";
+        return `${state}；${scope}${overall}；模型预计 ${daily}；${health.reason || ""}`;
+      }
+
+      function percentText(value) {
+        return value !== null && value !== undefined
+          ? `${fmt(Number(value) * 100)}%`
+          : "-";
       }
 
       function renderLimitOrder(data) {

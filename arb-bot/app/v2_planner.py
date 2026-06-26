@@ -349,8 +349,13 @@ def _objective_health(
     short_threshold: Decimal,
     long_threshold: Decimal,
 ) -> dict:
-    realized_win_rate = _dict_decimal(realized_performance, "win_rate")
-    realized_samples = int(realized_performance.get("sample_count") or 0)
+    current_guard = realized_performance.get("current_guard")
+    evaluated_performance = current_guard if isinstance(current_guard, dict) else realized_performance
+    scope_label = "当前保护版真实闭环" if isinstance(current_guard, dict) else "真实闭环"
+    realized_win_rate = _dict_decimal(evaluated_performance, "win_rate")
+    realized_samples = int(evaluated_performance.get("sample_count") or 0)
+    overall_win_rate = _dict_decimal(realized_performance, "win_rate")
+    overall_samples = int(realized_performance.get("sample_count") or 0)
     projected_short = _selected_model_decimal(short_model, "projected_daily_trades")
     projected_long = _selected_model_decimal(long_model, "projected_daily_trades")
     projected_daily = max(projected_short or Decimal("0"), projected_long or Decimal("0"))
@@ -359,19 +364,25 @@ def _objective_health(
     reasons = []
     if not realized_ok:
         if realized_samples < PERFORMANCE_MIN_TRADES:
-            reasons.append(f"真实闭环样本 {realized_samples} 单，少于 {PERFORMANCE_MIN_TRADES} 单。")
+            reasons.append(f"{scope_label}样本 {realized_samples} 单，少于 {PERFORMANCE_MIN_TRADES} 单。")
         else:
-            reasons.append(f"真实胜率 {realized_win_rate:.2%} 未达 {PERFORMANCE_TARGET_WIN_RATE:.0%}。")
+            reasons.append(f"{scope_label}胜率 {realized_win_rate:.2%} 未达 {PERFORMANCE_TARGET_WIN_RATE:.0%}。")
     if not projected_ok:
         reasons.append(f"模型预计日交易 {projected_daily:.2f} 单，不在 3-5 单目标内。")
     if realized_ok and projected_ok:
-        reasons.append("真实胜率和模型日交易频率均达到目标。")
+        reasons.append(f"{scope_label}胜率和模型日交易频率均达到目标。")
     return {
         "target_win_rate": PERFORMANCE_TARGET_WIN_RATE,
         "target_daily_trades_min": PERFORMANCE_MIN_PROJECTED_DAILY_TRADES,
         "target_daily_trades_max": Decimal("5"),
         "realized_sample_count": realized_samples,
         "realized_win_rate": realized_win_rate,
+        "overall_realized_sample_count": overall_samples,
+        "overall_realized_win_rate": overall_win_rate,
+        "current_guard_sample_count": realized_samples if isinstance(current_guard, dict) else None,
+        "current_guard_win_rate": realized_win_rate if isinstance(current_guard, dict) else None,
+        "current_guard_version": current_guard.get("version") if isinstance(current_guard, dict) else None,
+        "current_guard_start_ms": current_guard.get("start_ms") if isinstance(current_guard, dict) else None,
         "realized_ok": realized_ok,
         "projected_daily_trades": projected_daily,
         "projected_daily_trades_short": projected_short,
