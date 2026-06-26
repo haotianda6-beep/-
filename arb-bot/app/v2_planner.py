@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
 from app.config import Settings
 from app.execution_slippage import mt4_close_slippage_budget_usd_per_oz, mt4_entry_slippage_budget_usd_per_oz
-from app.market_calendar import is_xau_weekend_ms
+from app.market_calendar import is_xau_weekend_ms, xau_weekend_entry_block_reason
 from app.models import ExchangeFilters, HistoryBar, MarketQuote, OpenPair, PairDirection, PositionMetrics, Side, utc_now_ms
 from app.mt4_costs import live_spread_usd_per_oz, recent_move_budget_usd_per_oz, slippage_budget_usd_per_oz
 from app.mt4_rollover import normalize_mt4_rollover_ms
@@ -104,6 +104,7 @@ def build_gold_v2_status(
         filters=filters,
         binance=binance_quote,
         mt4=mt4_quote,
+        now_ms=now_ms,
         threshold=short_threshold,
         slippage_budget=slippage_budget,
         exit_follow_budget=exit_follow_budget,
@@ -118,6 +119,7 @@ def build_gold_v2_status(
         filters=filters,
         binance=binance_quote,
         mt4=mt4_quote,
+        now_ms=now_ms,
         threshold=long_threshold,
         slippage_budget=slippage_budget,
         exit_follow_budget=exit_follow_budget,
@@ -179,7 +181,7 @@ def build_gold_v2_status(
         "partial_fill_policy": [
             "币安只允许挂单成交，禁止市价开仓和平仓。",
             "补仓按真实首仓价差加阶梯触发，币安仍只允许挂单成交。",
-            "部分成交先不让MT4跟随，继续等待原挂单补齐；若交易所终止部分成交单，会自动重挂剩余数量。",
+            "部分成交先不让MT4跟随，继续等待原挂单补齐；超过最长等待或交易所终止后，会自动撤剩余并重挂剩余数量。",
             "MT4跟随失败或超时会先按实盘持仓恢复，仍未完成则自动重发命令，不等待人工处理。",
         ],
     }
@@ -492,6 +494,7 @@ def _entry_plan(
     filters: ExchangeFilters,
     binance: MarketQuote | None,
     mt4: MarketQuote | None,
+    now_ms: int,
     threshold: Decimal,
     slippage_budget: Decimal,
     exit_follow_budget: Decimal,
@@ -503,6 +506,9 @@ def _entry_plan(
     qty = max(_round_down(settings.target_oz, filters.qty_step), filters.min_qty)
     if not binance or not mt4:
         return _missing_plan(direction, threshold, qty, "等待币安和MT4同时返回报价")
+    weekend_reason = xau_weekend_entry_block_reason(now_ms)
+    if weekend_reason:
+        return _missing_plan(direction, threshold, qty, f"{weekend_reason}，实时价差不参与开仓判断")
     gap_reason = xau_quote_gap_reason(binance, mt4)
     if gap_reason:
         return _missing_plan(direction, threshold, qty, f"报价异常：{gap_reason}")

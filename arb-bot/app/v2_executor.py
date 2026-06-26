@@ -510,6 +510,9 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             if order.status in TERMINAL:
                 await self._replace_remaining_exit_order(order)
                 return
+            if utc_now_ms() - self.order_created_ms > max(self.settings.min_order_live_ms, self.settings.max_order_age_ms):
+                await self._cancel_partial_exit_for_requote(order)
+                return
             self.runtime.last_error = f"币安平仓部分成交 {order.executed_qty}/{order.orig_qty} XAU，继续等待完全成交。"
             return
         pair = self.runtime.open_pair
@@ -1548,6 +1551,23 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.order_created_ms = utc_now_ms()
         self.runtime.last_error = f"币安平仓部分成交后已重挂剩余 {remaining} XAU。"
         self.storage.record_event("v2_exit_remaining_order", new_order.model_dump(mode="json"))
+
+    async def _cancel_partial_exit_for_requote(self, order: OrderUpdate) -> None:
+        try:
+            canceled = await self.binance.cancel_order(order.order_id)
+        except Exception as exc:  # noqa: BLE001
+            self.runtime.last_error = f"币安平仓部分成交单撤剩余失败，继续重试：{str(exc)[:160]}"
+            self.storage.record_event(
+                "v2_exit_partial_requote_cancel_failed",
+                {"error": str(exc)[:160], "order": order.model_dump(mode="json")},
+            )
+            return
+        checked = canceled or order
+        self.storage.record_event(
+            "v2_exit_partial_requote_cancelled",
+            {"order": checked.model_dump(mode="json"), "reason": "平仓部分成交超过最长等待，撤剩余后重挂。"},
+        )
+        await self._replace_remaining_exit_order(checked)
 
     def _carry_entry_fill(self, order: OrderUpdate) -> None:
         if order.order_id in self.carry_entry_order_ids or order.executed_qty <= 0:

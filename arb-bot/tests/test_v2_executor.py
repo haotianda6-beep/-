@@ -1715,6 +1715,45 @@ async def test_v2_stale_partial_entry_cancels_remaining_and_requotes(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_v2_stale_partial_exit_cancels_remaining_and_requotes(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, MAX_ORDER_AGE_MS=0)
+    store = Storage(cfg.sqlite_path)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry-1",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "99", "99.2")
+    await executor.step({"exit_plan": {"enabled": True, "target_exit_spread": "2", "estimated_net": "2"}})
+    first_order_id = executor.active_order.order_id
+    await client.simulate_fill(first_order_id, Decimal("0.4"), Decimal("100"))
+    executor.order_created_ms = utc_now_ms() - 1
+
+    await executor.step({"exit_plan": {"enabled": True, "target_exit_spread": "2", "estimated_net": "2"}})
+
+    assert run.state == StrategyState.QUOTING_BINANCE_EXIT
+    assert executor.active_order is not None
+    assert executor.active_order.order_id != first_order_id
+    assert executor.active_order.orig_qty == Decimal("0.6")
+    assert mt4.next_command() == {"command": "NONE"}
+    events = store.get_events(0, utc_now_ms() + 1_000, limit=50)
+    assert any(event["kind"] == "v2_exit_partial_requote_cancelled" for event in events)
+    assert any(event["kind"] == "v2_exit_remaining_order" for event in events)
+
+
+@pytest.mark.asyncio
 async def test_v2_clears_stale_post_add_wait_message_after_cooldown(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
     client = PaperBinanceClient(cfg)

@@ -5,7 +5,10 @@ import pytest
 
 import app.v2_planner as v2_planner
 from app.config import Settings
-from app.market_calendar import is_xau_weekend_ms as real_is_xau_weekend_ms
+from app.market_calendar import (
+    is_xau_weekend_ms as real_is_xau_weekend_ms,
+    xau_weekend_entry_block_reason as real_xau_weekend_entry_block_reason,
+)
 from app.models import ExchangeFilters, HistoryBar, MarketQuote, OpenPair, PairDirection, PositionMetrics, utc_now_ms
 from app.storage import Storage
 from app.v2_planner import (
@@ -20,6 +23,7 @@ from app.v2_planner import (
 @pytest.fixture(autouse=True)
 def open_market_calendar(monkeypatch):
     monkeypatch.setattr(v2_planner, "is_xau_weekend_ms", lambda timestamp_ms: False)
+    monkeypatch.setattr(v2_planner, "xau_weekend_entry_block_reason", lambda timestamp_ms: None)
 
 
 def settings(tmp_path, **kwargs) -> Settings:
@@ -372,6 +376,31 @@ def test_v2_allows_china_saturday_early_training_bars(monkeypatch):
     assert short == [Decimal("3"), Decimal("3")]
     assert long == [Decimal("-3"), Decimal("-3")]
     assert discarded == 0
+
+
+def test_v2_live_weekend_plan_hides_untradable_spread(tmp_path, monkeypatch):
+    closed_ms = int(datetime(2026, 6, 26, 22, 10, tzinfo=timezone.utc).timestamp() * 1000)
+    monkeypatch.setattr(v2_planner, "utc_now_ms", lambda: closed_ms)
+    monkeypatch.setattr(v2_planner, "xau_weekend_entry_block_reason", real_xau_weekend_entry_block_reason)
+    cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.40"))
+    store = Storage(cfg.sqlite_path)
+    mt4_bars, binance_bars = recent_bars([Decimal("3.0")] * 12)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4012.2"), ask=Decimal("4012.3")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("4000.0"), ask=Decimal("4000.1")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+    )
+
+    assert status["short_entry"]["ready"] is False
+    assert status["short_entry"]["current_edge"] is None
+    assert "停盘过滤" in status["short_entry"]["reason"]
 
 
 def test_v2_ignores_stale_and_volatile_training_bars():
