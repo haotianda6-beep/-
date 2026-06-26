@@ -367,6 +367,55 @@ def test_v2_realized_performance_override_replaces_event_samples(tmp_path):
     assert status["short_entry"]["threshold"] == Decimal("2.820")
 
 
+def test_v2_directional_performance_penalty_only_hits_losing_side(tmp_path):
+    cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.40"), MT4_SLIPPAGE_POINTS=0)
+    store = Storage(cfg.sqlite_path)
+    mt4_bars, binance_bars = recent_bars([Decimal("2.4"), Decimal("2.6"), Decimal("2.8"), Decimal("3.0")] * 3)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.4"), ask=Decimal("4003.6")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+        realized_performance={
+            "sample_count": 6,
+            "wins": 3,
+            "losses": 3,
+            "win_rate": Decimal("0.5"),
+            "target_win_rate": Decimal("0.70"),
+            "total_pnl": Decimal("-3"),
+            "average_pnl": Decimal("-0.5"),
+            "latest_pnl": Decimal("-1"),
+            "min_pnl": Decimal("-2"),
+            "max_pnl": Decimal("1"),
+            "reason": "总表现不达标",
+            "directions": {
+                "short": {
+                    "sample_count": 3,
+                    "wins": 0,
+                    "losses": 3,
+                    "win_rate": Decimal("0"),
+                    "total_pnl": Decimal("-4"),
+                },
+                "long": {
+                    "sample_count": 0,
+                    "reason": "做多方向暂无 V2 真实做单历史。",
+                },
+            },
+        },
+    )
+
+    assert status["directional_performance_entry_penalty"]["short"] == Decimal("0.50")
+    assert status["directional_performance_entry_penalty"]["long"] == Decimal("0")
+    assert status["short_entry"]["threshold"] == Decimal("3.0")
+    assert status["long_entry"]["threshold"] == Decimal("2.4")
+
+
 def test_v2_performance_penalty_keeps_daily_trade_cap():
     model = {
         "candidates": [
@@ -1029,6 +1078,52 @@ def test_v2_stale_weak_pair_waits_before_max_age(tmp_path):
 
     assert status["exit_plan"]["stale_weak"]["active"] is False
     assert status["exit_plan"]["target_exit_spread"] == Decimal("0.64")
+
+
+def test_v2_critical_weak_pair_exits_without_waiting_for_max_age(tmp_path):
+    cfg = settings(
+        tmp_path,
+        OPEN_MIN_EDGE=Decimal("2.40"),
+        CLOSE_PROFIT_USD_PER_OZ=Decimal("1.21"),
+        AGED_CLOSE_PROFIT_USD_PER_OZ=Decimal("0.10"),
+        MAX_PAIR_AGE_MINUTES=60,
+        MAX_PAIR_LOSS_USDT=Decimal("5"),
+    )
+    store = Storage(cfg.sqlite_path)
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("4000.50"),
+        mt4_entry_price=Decimal("4000.00"),
+        binance_order_id="entry",
+        opened_ms=utc_now_ms() - 5 * 60_000,
+    )
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4001"), ask=Decimal("4001.1")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.5"), ask=Decimal("3999.8")),
+        binance_bars=[],
+        open_pair=pair,
+        metrics=PositionMetrics(
+            actual_entry_spread=Decimal("0.50"),
+            current_exit_spread=Decimal("1.5"),
+            profitable_spread_threshold=Decimal("0.50"),
+            dynamic_close_spread=Decimal("0"),
+            estimated_close_net=Decimal("-1.0"),
+            exit_follow_buffer_usd_per_oz=Decimal("0.95"),
+            close_profit_usd_per_oz=Decimal("0.10"),
+        ),
+    )
+
+    stale_weak = status["exit_plan"]["stale_weak"]
+    assert stale_weak["active"] is True
+    assert stale_weak["critical_min_edge"] == Decimal("1.05")
+    assert stale_weak["target_exit_spread"] == Decimal("5.50")
+    assert status["exit_plan"]["target_exit_spread"] == Decimal("5.50")
+    assert "严重低质量进场" in status["exit_plan"]["reason"]
 
 
 def test_v2_negative_swap_safe_target_does_not_go_negative(tmp_path):

@@ -504,15 +504,37 @@ async def _gold_v2_realized_trade_performance() -> dict | None:
 
 
 def _gold_v2_realized_performance_from_items(items: list[TradeHistoryItem]) -> dict:
-    pnls = [
-        item.net_pnl
-        for item in items
-        if item.strategy_version == "v2.0" and item.net_pnl is not None
-    ]
+    v2_items = [item for item in items if item.strategy_version == "v2.0" and item.net_pnl is not None]
+    pnls = [item.net_pnl for item in v2_items if item.net_pnl is not None]
     if not pnls:
         return {
             "sample_count": 0,
             "reason": "暂无 V2 真实做单历史，不参与阈值调整。",
+            "directions": {
+                "short": _gold_v2_realized_performance_summary([], "做空方向暂无 V2 真实做单历史。"),
+                "long": _gold_v2_realized_performance_summary([], "做多方向暂无 V2 真实做单历史。"),
+            },
+        }
+    summary = _gold_v2_realized_performance_summary(pnls, "")
+    summary["reason"] = _gold_v2_performance_reason(summary["sample_count"], summary["win_rate"], summary["total_pnl"])
+    summary["directions"] = {
+        "short": _gold_v2_realized_performance_summary(
+            [item.net_pnl for item in v2_items if item.binance_entry_side == Side.SELL and item.net_pnl is not None],
+            "做空方向暂无 V2 真实做单历史。",
+        ),
+        "long": _gold_v2_realized_performance_summary(
+            [item.net_pnl for item in v2_items if item.binance_entry_side == Side.BUY and item.net_pnl is not None],
+            "做多方向暂无 V2 真实做单历史。",
+        ),
+    }
+    return summary
+
+
+def _gold_v2_realized_performance_summary(pnls: list[Decimal], empty_reason: str) -> dict:
+    if not pnls:
+        return {
+            "sample_count": 0,
+            "reason": empty_reason,
         }
     wins = sum(1 for pnl in pnls if pnl > 0)
     losses = sum(1 for pnl in pnls if pnl < 0)

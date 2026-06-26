@@ -86,10 +86,12 @@ def build_gold_v2_status(
     long_threshold = _entry_threshold(long_range, settings.open_min_edge, long_model)
     realized_performance = realized_performance or _v2_realized_performance(storage, now_ms)
     performance_penalty = _performance_entry_penalty(realized_performance)
+    short_performance_penalty = _directional_performance_entry_penalty(realized_performance, "short", performance_penalty)
+    long_performance_penalty = _directional_performance_entry_penalty(realized_performance, "long", performance_penalty)
     short_performance_cap = _performance_threshold_cap(short_model)
     long_performance_cap = _performance_threshold_cap(long_model)
-    short_threshold = _threshold_with_performance_penalty(short_threshold, performance_penalty, short_model)
-    long_threshold = _threshold_with_performance_penalty(long_threshold, performance_penalty, long_model)
+    short_threshold = _threshold_with_performance_penalty(short_threshold, short_performance_penalty, short_model)
+    long_threshold = _threshold_with_performance_penalty(long_threshold, long_performance_penalty, long_model)
     move_budget_source = "实时tick" if mt4_tick_move_budget is not None else "1分钟K线"
 
     short_plan = _entry_plan(
@@ -134,6 +136,10 @@ def build_gold_v2_status(
         "entry_model": {"short": short_model, "long": long_model},
         "realized_performance": realized_performance,
         "performance_entry_penalty": performance_penalty,
+        "directional_performance_entry_penalty": {
+            "short": short_performance_penalty,
+            "long": long_performance_penalty,
+        },
         "performance_threshold_cap": {"short": short_performance_cap, "long": long_performance_cap},
         "mt4_slippage_budget": slippage_budget,
         "mt4_exit_follow_budget": exit_follow_budget,
@@ -316,6 +322,16 @@ def _performance_entry_penalty(performance: dict) -> Decimal:
     if total >= 0:
         penalty = min(penalty, Decimal("0.20"))
     return penalty
+
+
+def _directional_performance_entry_penalty(performance: dict, direction: str, fallback: Decimal) -> Decimal:
+    directions = performance.get("directions")
+    if not isinstance(directions, dict):
+        return fallback
+    direction_performance = directions.get(direction)
+    if not isinstance(direction_performance, dict):
+        return Decimal("0")
+    return _performance_entry_penalty(direction_performance)
 
 
 def _entry_plan(
@@ -643,6 +659,20 @@ def _stale_weak_exit_plan(settings: Settings, pair: OpenPair, metrics: PositionM
         return {"active": False, "reason": "等待真实价差和净值后再判断低质量旧仓释放。"}
     if settings.open_min_edge <= 0 or metrics.actual_entry_spread >= settings.open_min_edge:
         return {"active": False, "reason": "当前组合不属于低于现行开仓标准的旧仓。"}
+    critical_min_edge = _critical_weak_entry_min_edge(settings, metrics)
+    if metrics.actual_entry_spread < critical_min_edge:
+        target = max(Decimal("0"), metrics.profitable_spread_threshold + (settings.max_pair_loss_usdt / pair.quantity_oz))
+        return {
+            "active": True,
+            "reason": (
+                f"严重低质量进场：真实进场价差 {metrics.actual_entry_spread} 低于最低可盈利保护线 "
+                f"{critical_min_edge}，立即进入受控离场，避免坏价差继续放大。"
+            ),
+            "target_exit_spread": target,
+            "estimated_net": metrics.estimated_close_net,
+            "critical_min_edge": critical_min_edge,
+            "max_loss_usdt": settings.max_pair_loss_usdt,
+        }
     age_ms = utc_now_ms() - int(pair.opened_ms)
     max_age_ms = settings.max_pair_age_minutes * 60_000
     if age_ms < max_age_ms:
@@ -666,6 +696,12 @@ def _stale_weak_exit_plan(settings: Settings, pair: OpenPair, metrics: PositionM
         "estimated_net": metrics.estimated_close_net,
         "max_loss_usdt": settings.max_pair_loss_usdt,
     }
+
+
+def _critical_weak_entry_min_edge(settings: Settings, metrics: PositionMetrics) -> Decimal:
+    close_profit = _entry_viability_close_profit(settings)
+    exit_follow = metrics.exit_follow_buffer_usd_per_oz or Decimal("0")
+    return close_profit + exit_follow
 
 
 def _negative_swap_exit_plan(settings: Settings, pair: OpenPair, metrics: PositionMetrics) -> dict:

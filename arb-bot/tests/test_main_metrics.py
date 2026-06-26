@@ -37,11 +37,11 @@ def test_immediate_close_net_excludes_future_funding_and_swap():
 def test_gold_v2_realized_performance_uses_true_v2_trade_history_only():
     performance = _gold_v2_realized_performance_from_items(
         [
-            TradeHistoryItem(strategy_version="v2.0", net_pnl=Decimal("-2.0"), status="真实"),
-            TradeHistoryItem(strategy_version="v1.0", net_pnl=Decimal("100.0"), status="旧版"),
-            TradeHistoryItem(strategy_version="v2.0", net_pnl=Decimal("1.5"), status="真实"),
-            TradeHistoryItem(strategy_version="v2.0", net_pnl=None, status="缺少币安成交匹配"),
-            TradeHistoryItem(strategy_version="v2.0", net_pnl=Decimal("0"), status="真实"),
+            TradeHistoryItem(strategy_version="v2.0", binance_entry_side=main.Side.SELL, net_pnl=Decimal("-2.0"), status="真实"),
+            TradeHistoryItem(strategy_version="v1.0", binance_entry_side=main.Side.SELL, net_pnl=Decimal("100.0"), status="旧版"),
+            TradeHistoryItem(strategy_version="v2.0", binance_entry_side=main.Side.BUY, net_pnl=Decimal("1.5"), status="真实"),
+            TradeHistoryItem(strategy_version="v2.0", binance_entry_side=main.Side.SELL, net_pnl=None, status="缺少币安成交匹配"),
+            TradeHistoryItem(strategy_version="v2.0", binance_entry_side=main.Side.SELL, net_pnl=Decimal("0"), status="真实"),
         ]
     )
 
@@ -52,6 +52,10 @@ def test_gold_v2_realized_performance_uses_true_v2_trade_history_only():
     assert performance["total_pnl"] == Decimal("-0.5")
     assert performance["latest_pnl"] == Decimal("-2.0")
     assert "自动抬高" in performance["reason"]
+    assert performance["directions"]["short"]["sample_count"] == 2
+    assert performance["directions"]["short"]["total_pnl"] == Decimal("-2.0")
+    assert performance["directions"]["long"]["sample_count"] == 1
+    assert performance["directions"]["long"]["win_rate"] == Decimal("1")
 
 
 def test_gold_v2_realized_performance_handles_empty_history():
@@ -61,6 +65,7 @@ def test_gold_v2_realized_performance_handles_empty_history():
 
     assert performance["sample_count"] == 0
     assert "暂无 V2" in performance["reason"]
+    assert performance["directions"]["short"]["sample_count"] == 0
 
 
 def test_binance_too_many_requests_uses_long_cooldown():
