@@ -565,6 +565,10 @@
                 <span class="wrap" id="v2ThresholdLine">-</span>
               </div>
               <div class="compact-row">
+                <strong>目标达成度</strong>
+                <span class="wrap" id="v2ObjectiveLine">-</span>
+              </div>
+              <div class="compact-row">
                 <strong>当前方向</strong>
                 <span class="wrap" id="v2SelectedLine">-</span>
               </div>
@@ -1518,6 +1522,7 @@
         if (!plan) {
           $("v2ModeLine").textContent = "等待新版观察计划";
           $("v2ThresholdLine").textContent = "-";
+          $("v2ObjectiveLine").textContent = "-";
           $("v2SelectedLine").textContent = "-";
           $("v2OrderLine").textContent = "-";
           $("v2AddPlanLine").textContent = "-";
@@ -1535,6 +1540,9 @@
         const modelText = entryModelText(plan.entry_model);
         $("v2ThresholdLine").textContent =
           `币安高 ${fmt(shortThreshold)} 美元；币安低 ${fmt(longThreshold)} 美元；样本 ${fmt(points)} 根${modelText}`;
+        $("v2ObjectiveLine").textContent = objectiveHealthText(
+          plan.objective_health,
+        );
 
         const selected = plan.selected_entry;
         if (!selected) {
@@ -1619,6 +1627,27 @@
         const winRate = Number(selected.win_rate);
         const winText = Number.isFinite(winRate) ? `${fmt(winRate * 100)}%` : "-";
         return `${label}胜率${winText}/日${fmt(selected.projected_daily_trades)}单`;
+      }
+
+      function objectiveHealthText(health) {
+        if (!health) return "等待真实胜率和模型频率";
+        const state = health.ready_for_goal ? "达标" : "未达标";
+        const win =
+          health.realized_win_rate !== null &&
+          health.realized_win_rate !== undefined
+            ? `${fmt(Number(health.realized_win_rate) * 100)}%`
+            : "-";
+        const targetWin =
+          health.target_win_rate !== null &&
+          health.target_win_rate !== undefined
+            ? `${fmt(Number(health.target_win_rate) * 100)}%`
+            : "70%";
+        const daily =
+          health.projected_daily_trades !== null &&
+          health.projected_daily_trades !== undefined
+            ? `${fmt(health.projected_daily_trades)} 单/天`
+            : "-";
+        return `${state}；真实 ${fmt(health.realized_sample_count || 0)} 单，胜率 ${win}/${targetWin}；模型预计 ${daily}；${health.reason || ""}`;
       }
 
       function renderLimitOrder(data) {

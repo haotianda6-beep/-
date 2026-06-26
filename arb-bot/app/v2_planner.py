@@ -123,6 +123,13 @@ def build_gold_v2_status(
         entry_close_profit=entry_close_profit,
     )
     selected = _selected_entry_plan(short_plan, long_plan)
+    objective_health = _objective_health(
+        realized_performance=realized_performance,
+        short_model=short_model,
+        long_model=long_model,
+        short_threshold=short_threshold,
+        long_threshold=long_threshold,
+    )
 
     return {
         "mode": "V2 实盘执行" if not settings.gold_v2_observation_only else "只读观察",
@@ -134,6 +141,7 @@ def build_gold_v2_status(
         "entry_model_lookback_minutes": 2880,
         "threshold_rule": "先剔除MT4停盘平线、周末和剧烈跳价样本；可信长周期模型负责胜率，只有模型阈值超过黄金正常上限时才回退到最近30分钟区间。",
         "entry_model": {"short": short_model, "long": long_model},
+        "objective_health": objective_health,
         "realized_performance": realized_performance,
         "performance_entry_penalty": performance_penalty,
         "directional_performance_entry_penalty": {
@@ -332,6 +340,67 @@ def _directional_performance_entry_penalty(performance: dict, direction: str, fa
     if not isinstance(direction_performance, dict):
         return Decimal("0")
     return _performance_entry_penalty(direction_performance)
+
+
+def _objective_health(
+    realized_performance: dict,
+    short_model: dict | None,
+    long_model: dict | None,
+    short_threshold: Decimal,
+    long_threshold: Decimal,
+) -> dict:
+    realized_win_rate = _dict_decimal(realized_performance, "win_rate")
+    realized_samples = int(realized_performance.get("sample_count") or 0)
+    projected_short = _selected_model_decimal(short_model, "projected_daily_trades")
+    projected_long = _selected_model_decimal(long_model, "projected_daily_trades")
+    projected_daily = max(projected_short or Decimal("0"), projected_long or Decimal("0"))
+    realized_ok = realized_samples >= PERFORMANCE_MIN_TRADES and realized_win_rate is not None and realized_win_rate >= PERFORMANCE_TARGET_WIN_RATE
+    projected_ok = PERFORMANCE_MIN_PROJECTED_DAILY_TRADES <= projected_daily <= Decimal("5")
+    reasons = []
+    if not realized_ok:
+        if realized_samples < PERFORMANCE_MIN_TRADES:
+            reasons.append(f"真实闭环样本 {realized_samples} 单，少于 {PERFORMANCE_MIN_TRADES} 单。")
+        else:
+            reasons.append(f"真实胜率 {realized_win_rate:.2%} 未达 {PERFORMANCE_TARGET_WIN_RATE:.0%}。")
+    if not projected_ok:
+        reasons.append(f"模型预计日交易 {projected_daily:.2f} 单，不在 3-5 单目标内。")
+    if realized_ok and projected_ok:
+        reasons.append("真实胜率和模型日交易频率均达到目标。")
+    return {
+        "target_win_rate": PERFORMANCE_TARGET_WIN_RATE,
+        "target_daily_trades_min": PERFORMANCE_MIN_PROJECTED_DAILY_TRADES,
+        "target_daily_trades_max": Decimal("5"),
+        "realized_sample_count": realized_samples,
+        "realized_win_rate": realized_win_rate,
+        "realized_ok": realized_ok,
+        "projected_daily_trades": projected_daily,
+        "projected_daily_trades_short": projected_short,
+        "projected_daily_trades_long": projected_long,
+        "projected_ok": projected_ok,
+        "ready_for_goal": realized_ok and projected_ok,
+        "short_threshold": short_threshold,
+        "long_threshold": long_threshold,
+        "reason": " ".join(reasons),
+    }
+
+
+def _selected_model_decimal(model: dict | None, key: str) -> Decimal | None:
+    if not model:
+        return None
+    selected = model.get("selected")
+    if not isinstance(selected, dict):
+        return None
+    return _dict_decimal(selected, key)
+
+
+def _dict_decimal(data: dict, key: str) -> Decimal | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _entry_plan(

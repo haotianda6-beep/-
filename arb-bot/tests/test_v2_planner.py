@@ -4,7 +4,13 @@ from datetime import datetime, timezone
 from app.config import Settings
 from app.models import ExchangeFilters, HistoryBar, MarketQuote, OpenPair, PairDirection, PositionMetrics, utc_now_ms
 from app.storage import Storage
-from app.v2_planner import _entry_threshold, _spread_values, _threshold_with_performance_penalty, build_gold_v2_status
+from app.v2_planner import (
+    _entry_threshold,
+    _objective_health,
+    _spread_values,
+    _threshold_with_performance_penalty,
+    build_gold_v2_status,
+)
 
 
 def settings(tmp_path, **kwargs) -> Settings:
@@ -414,6 +420,25 @@ def test_v2_directional_performance_penalty_only_hits_losing_side(tmp_path):
     assert status["directional_performance_entry_penalty"]["long"] == Decimal("0")
     assert status["short_entry"]["threshold"] == Decimal("3.0")
     assert status["long_entry"]["threshold"] == Decimal("2.4")
+    assert status["objective_health"]["realized_ok"] is False
+    assert status["objective_health"]["ready_for_goal"] is False
+    assert "真实胜率" in status["objective_health"]["reason"]
+
+
+def test_v2_objective_health_reports_ready_only_when_real_and_projected_targets_pass():
+    health = _objective_health(
+        realized_performance={"sample_count": 5, "win_rate": Decimal("0.8")},
+        short_model={"selected": {"projected_daily_trades": Decimal("3.2")}},
+        long_model={"selected": {"projected_daily_trades": Decimal("2.1")}},
+        short_threshold=Decimal("3.8"),
+        long_threshold=Decimal("2.4"),
+    )
+
+    assert health["realized_ok"] is True
+    assert health["projected_ok"] is True
+    assert health["ready_for_goal"] is True
+    assert health["target_daily_trades_min"] == Decimal("3")
+    assert health["target_daily_trades_max"] == Decimal("5")
 
 
 def test_v2_performance_penalty_keeps_daily_trade_cap():
