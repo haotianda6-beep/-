@@ -386,6 +386,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             return None
         min_net = self._minimum_exit_net(pair)
         plan_net = self._planned_exit_net(plan_status)
+        if plan_net is None:
+            return "V2 平仓利润保护：等待预估净值后再挂平仓单"
         if plan_net is not None and plan_net < min_net:
             return f"V2 平仓利润保护：计划净利 {plan_net} 低于最低 {min_net}，不挂平仓单"
         projected = self._projected_exit_net_at_limit(pair, binance_exit_price, mt4_quote)

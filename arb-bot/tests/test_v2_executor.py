@@ -90,8 +90,11 @@ def add_plan_temporarily_blocked_after_trigger(reason: str = "补仓后仍不安
     }
 
 
-def exit_plan(target: str = "2") -> dict:
-    return {"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": target}}
+def exit_plan(target: str = "2", estimated_net: str = "2") -> dict:
+    return {
+        "selected_entry": {"ready": False},
+        "exit_plan": {"enabled": True, "target_exit_spread": target, "estimated_net": estimated_net},
+    }
 
 
 class MissingOrderBinanceClient(PaperBinanceClient):
@@ -237,6 +240,34 @@ async def test_v2_does_not_place_exit_until_real_exit_plan_is_ready(tmp_path):
     assert run.state == StrategyState.PAIR_OPEN
     assert executor.active_order is None
     assert "真实均价" in run.last_error
+
+
+@pytest.mark.asyncio
+async def test_v2_regular_exit_requires_estimated_net_before_order(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, EXIT_CONFIRM_MS=0)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("101"),
+        mt4_entry_price=Decimal("99"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("2"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    client.set_quote(Decimal("100"), Decimal("100.1"))
+    mt4_tick(mt4, "99", "99.2")
+
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2"}})
+
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    assert "等待预估净值" in run.last_error
 
 
 @pytest.mark.asyncio
@@ -764,7 +795,7 @@ async def test_v2_clears_stale_post_add_wait_message_after_cooldown(tmp_path):
     client.set_quote(Decimal("100"), Decimal("100.1"))
     mt4_tick(mt4, "99", "99.2")
 
-    await executor.step({"exit_plan": {"enabled": True, "target_exit_spread": "0.5"}})
+    await executor.step({"exit_plan": {"enabled": True, "target_exit_spread": "0.5", "estimated_net": "2"}})
 
     assert run.state == StrategyState.PAIR_OPEN
     assert run.last_error is None
@@ -935,9 +966,9 @@ async def test_v2_mt4_close_timeout_waits_pending_command_without_duplicate(tmp_
     )
 
     client.set_quote(Decimal("100"), Decimal("100.1"))
-    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2"}})
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2", "estimated_net": "2"}})
     client.set_quote(Decimal("99.8"), executor.active_order.price)
-    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2"}})
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2", "estimated_net": "2"}})
     close_command = mt4.next_command()
     assert close_command["action"] == "CLOSE"
 
@@ -985,9 +1016,9 @@ async def test_v2_mt4_close_failure_retries_after_report_without_pause(tmp_path)
     )
 
     client.set_quote(Decimal("100"), Decimal("100.1"))
-    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2"}})
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2", "estimated_net": "2"}})
     client.set_quote(Decimal("99.8"), executor.active_order.price)
-    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2"}})
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2", "estimated_net": "2"}})
     failed_command = mt4.next_command()
     mt4.submit_report(
         Mt4Report(
@@ -1143,7 +1174,7 @@ async def test_v2_add_position_merges_pair_after_binance_fill_and_mt4_follow(tmp
 
     client.set_quote(Decimal("101"), Decimal("101.2"))
     mt4_tick(mt4, "101", "101.2")
-    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "10"}})
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "10", "estimated_net": "2"}})
     assert run.state == StrategyState.PAIR_OPEN
     assert executor.active_order is None
 
@@ -1275,11 +1306,11 @@ async def test_v2_exit_closes_all_mt4_tickets_before_clearing_pair(tmp_path):
         )
     )
     client.set_quote(Decimal("101"), Decimal("101.2"))
-    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "10"}})
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "10", "estimated_net": "2"}})
     assert run.state == StrategyState.QUOTING_BINANCE_EXIT
 
     client.set_quote(Decimal("100.8"), executor.active_order.price)
-    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "10"}})
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "10", "estimated_net": "2"}})
     first_close = mt4.next_command()
     second_close = mt4.next_command()
     assert {first_close["ticket"], second_close["ticket"]} == {7, 8}

@@ -70,7 +70,7 @@ async def test_v2_regular_exit_never_quotes_when_spread_is_above_target(tmp_path
     executor.exit_ready_since_ms = utc_now_ms() - 10_000
     set_quotes(client, mt4, "104", "104.2", "100", "100.2")
 
-    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2"}})
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2", "estimated_net": "2"}})
 
     assert run.state == StrategyState.PAIR_OPEN
     assert executor.active_order is None
@@ -82,14 +82,14 @@ async def test_v2_open_exit_order_is_canceled_when_spread_worsens_before_fill(tm
     executor, client, mt4, run = make_executor(tmp_path)
     set_quotes(client, mt4, "100", "100.1", "99", "99.2")
 
-    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2"}})
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2", "estimated_net": "2"}})
 
     assert run.state == StrategyState.QUOTING_BINANCE_EXIT
     assert executor.active_order is not None
     assert executor.active_order.side == Side.BUY
 
     set_quotes(client, mt4, "104", "104.2", "100", "100.2")
-    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2"}})
+    await executor.step({"selected_entry": {"ready": False}, "exit_plan": {"enabled": True, "target_exit_spread": "2", "estimated_net": "2"}})
 
     assert run.state == StrategyState.PAIR_OPEN
     assert executor.active_order is None
