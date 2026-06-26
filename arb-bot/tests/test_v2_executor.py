@@ -222,6 +222,47 @@ async def test_v2_entry_and_exit_use_binance_post_only_then_mt4_follow(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_v2_blocks_new_entry_during_min_entry_interval(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", GOLD_V2_MIN_ENTRY_INTERVAL_MS=10_000)
+    store = Storage(cfg.sqlite_path)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+    executor.last_entry_ms = utc_now_ms()
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(short_plan("101"))
+
+    assert run.state == StrategyState.IDLE
+    assert executor.active_order is None
+    assert "开仓频率控制中" in run.last_error
+
+
+@pytest.mark.asyncio
+async def test_v2_updates_last_entry_time_after_mt4_follow(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", GOLD_V2_MIN_ENTRY_INTERVAL_MS=10_000)
+    store = Storage(cfg.sqlite_path)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(short_plan("101"))
+    client.set_quote(Decimal("101"), Decimal("101.2"))
+    await executor.step(short_plan("101"))
+    command = mt4.next_command()
+    mt4.submit_report(Mt4Report(command_id=command["command_id"], status="ok", action="BUY", ticket=7, fill_price=Decimal("99"), lots=Decimal("0.01")))
+    await executor.step(short_plan("101"))
+
+    assert run.open_pair is not None
+    assert executor.last_entry_ms == run.open_pair.opened_ms
+
+
+@pytest.mark.asyncio
 async def test_v2_entry_sets_short_exit_cooldown_after_mt4_follow(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3")
     store = Storage(cfg.sqlite_path)

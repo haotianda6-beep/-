@@ -55,6 +55,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.hedge_started_ms = 0
         self.close_started_ms = 0
         self.last_closed_ms = 0
+        self.last_entry_ms = self._load_last_entry_ms()
         self.exit_target_spread: Decimal | None = None
         self.adding_to_pair = False
         self.active_add_base_edge: Decimal | None = None
@@ -175,6 +176,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         mt4_block_reason = self._mt4_trade_block_reason("开仓")
         if mt4_block_reason:
             self.runtime.last_error = mt4_block_reason
+            return
+        if self._entry_interval_blocked():
             return
         if self.last_closed_ms and utc_now_ms() - self.last_closed_ms < self.settings.post_exit_reentry_cooldown_ms:
             self.runtime.last_error = "V2 平仓后冷却中，暂不重新开仓"
@@ -724,6 +727,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             return
         edge = self.active_order.avg_price - report.fill_price if self.entry_direction == PairDirection.BINANCE_SHORT_MT4_LONG else report.fill_price - self.active_order.avg_price
         self.runtime.open_pair = OpenPair(direction=self.entry_direction, quantity_oz=self.active_order.executed_qty, binance_entry_price=self.active_order.avg_price, mt4_entry_price=report.fill_price, binance_order_id=self.active_order.order_id, mt4_ticket=report.ticket, mt4_tickets=[report.ticket] if report.ticket else [], base_edge=edge)
+        self.last_entry_ms = int(self.runtime.open_pair.opened_ms)
         self.storage.record_event("v2_pair_open", self.runtime.open_pair.model_dump(mode="json"))
         self.post_add_exit_block_until_ms = utc_now_ms() + max(5000, self.settings.max_hedge_delay_ms)
         self.active_order = None
@@ -731,6 +735,33 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self._clear_entry_carry()
         self.runtime.state = StrategyState.PAIR_OPEN
         self.runtime.last_error = None
+
+    def _entry_interval_blocked(self) -> bool:
+        interval_ms = max(0, self.settings.gold_v2_min_entry_interval_ms)
+        if interval_ms <= 0 or self.last_entry_ms <= 0:
+            return False
+        elapsed = utc_now_ms() - self.last_entry_ms
+        if elapsed >= interval_ms:
+            return False
+        minutes_left = max(1, (interval_ms - elapsed + 59_999) // 60_000)
+        self.runtime.last_error = f"V2 开仓频率控制中，约 {minutes_left} 分钟后再允许新首仓；已有持仓的补仓和平仓不受影响。"
+        return True
+
+    def _load_last_entry_ms(self) -> int:
+        try:
+            now = utc_now_ms()
+            events = self.storage.get_events(now - 7 * 24 * 60 * 60 * 1000, now + 1000, limit=2000)
+        except Exception:  # noqa: BLE001
+            return 0
+        for event in reversed(events):
+            if event.get("kind") != "v2_pair_open":
+                continue
+            payload = event.get("payload") or {}
+            try:
+                return int(payload.get("opened_ms") or 0)
+            except (TypeError, ValueError):
+                return 0
+        return 0
 
     def _handle_close_report(self, report) -> None:
         if report.status != "ok":

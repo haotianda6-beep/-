@@ -906,6 +906,17 @@
                   </td>
                 </tr>
                 <tr>
+                  <th>新首仓最小间隔</th>
+                  <td>
+                    <div class="input-row">
+                      <input
+                        id="cfgGoldV2MinEntryIntervalMs"
+                        inputmode="numeric"
+                      /><small>毫秒</small>
+                    </div>
+                  </td>
+                </tr>
+                <tr>
                   <th>补仓增加价差</th>
                   <td>
                     <div class="input-row">
@@ -1148,6 +1159,11 @@
           "post_exit_reentry_cooldown_ms",
           "number",
         ],
+        [
+          "cfgGoldV2MinEntryIntervalMs",
+          "gold_v2_min_entry_interval_ms",
+          "number",
+        ],
         ["cfgAddEdgeGrowthUsd", "add_edge_growth_usd", "number"],
         ["cfgMaxAddCount", "max_add_count", "number"],
         [
@@ -1185,6 +1201,7 @@
         "cfgOpenMinEdge",
         "cfgMinOrderLiveMs",
         "cfgPostExitReentryCooldownMs",
+        "cfgGoldV2MinEntryIntervalMs",
         "cfgCloseProfitUsdPerOz",
         "cfgMaxPairLossUsdt",
         "cfgMaxOrderAge",

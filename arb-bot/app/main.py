@@ -2042,6 +2042,7 @@ def _runtime_config() -> RuntimeConfig:
         min_order_live_ms=settings.min_order_live_ms,
         requote_cooldown_ms=settings.requote_cooldown_ms,
         post_exit_reentry_cooldown_ms=settings.post_exit_reentry_cooldown_ms,
+        gold_v2_min_entry_interval_ms=settings.gold_v2_min_entry_interval_ms,
         max_order_age_ms=settings.max_order_age_ms,
         max_quote_age_ms=settings.max_quote_age_ms,
         max_hedge_delay_ms=settings.max_hedge_delay_ms,

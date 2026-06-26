@@ -29,6 +29,7 @@ CONFIG_FIELD_TO_ENV = {
     "requote_cooldown_ms": "REQUOTE_COOLDOWN_MS",
     "risk_exit_confirm_ms": "RISK_EXIT_CONFIRM_MS",
     "post_exit_reentry_cooldown_ms": "POST_EXIT_REENTRY_COOLDOWN_MS",
+    "gold_v2_min_entry_interval_ms": "GOLD_V2_MIN_ENTRY_INTERVAL_MS",
     "max_order_age_ms": "MAX_ORDER_AGE_MS",
     "max_quote_age_ms": "MAX_QUOTE_AGE_MS",
     "max_hedge_delay_ms": "MAX_HEDGE_DELAY_MS",
@@ -99,6 +100,7 @@ class Settings(BaseSettings):
     requote_cooldown_ms: int = Field(default=2000, alias="REQUOTE_COOLDOWN_MS")
     risk_exit_confirm_ms: int = Field(default=800, alias="RISK_EXIT_CONFIRM_MS")
     post_exit_reentry_cooldown_ms: int = Field(default=60000, alias="POST_EXIT_REENTRY_COOLDOWN_MS")
+    gold_v2_min_entry_interval_ms: int = Field(default=16_200_000, alias="GOLD_V2_MIN_ENTRY_INTERVAL_MS")
     max_order_age_ms: int = Field(default=300, alias="MAX_ORDER_AGE_MS")
     max_quote_age_ms: int = Field(default=1500, alias="MAX_QUOTE_AGE_MS")
     max_hedge_delay_ms: int = Field(default=10000, alias="MAX_HEDGE_DELAY_MS")
@@ -167,6 +169,7 @@ class Settings(BaseSettings):
         "requote_cooldown_ms",
         "risk_exit_confirm_ms",
         "post_exit_reentry_cooldown_ms",
+        "gold_v2_min_entry_interval_ms",
         "max_order_age_ms",
         "max_quote_age_ms",
         "max_hedge_delay_ms",
