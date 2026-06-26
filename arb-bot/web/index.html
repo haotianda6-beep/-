@@ -2280,7 +2280,7 @@
           return;
         }
         $("historyStatus").textContent =
-          `已对齐 ${fmt(data.matched_points)} 根K线，MT4 ${fmt(data.mt4_bars)} 根，币安 ${fmt(data.binance_bars)} 根`;
+          `有效 ${fmt(data.matched_points)} 根K线，已过滤周末、停报价平线和超过4美元异常差；MT4 ${fmt(data.mt4_bars)} 根，币安 ${fmt(data.binance_bars)} 根`;
         $("historyMin").textContent =
           `${fmt(data.min_abs_diff)} 美元，时间 ${timeText(data.min_abs_diff_time_ms)}`;
         $("historyLatest").textContent =

@@ -20,6 +20,8 @@ INTERVAL_MS = {
     "1h": 3_600_000,
 }
 MAX_ANALYSIS_ABS_SPREAD = MAX_REASONABLE_XAU_MID_GAP
+MAX_ANALYSIS_MT4_BAR_RANGE = Decimal("4")
+MAX_ANALYSIS_BINANCE_BAR_RANGE = Decimal("5")
 
 
 async def build_spread_analysis(
@@ -114,13 +116,25 @@ def compare_spreads(
         raise ValueError("不支持的K线周期")
     binance_by_time = {_bucket_time(bar.open_time_ms, interval_ms): bar for bar in binance_bars}
     points: list[SpreadAnalysisPoint] = []
+    previous_mt4_close: Decimal | None = None
+    previous_aligned_time: int | None = None
     for mt4_bar in mt4_bars:
         aligned_time = _bucket_time(mt4_bar.open_time_ms, interval_ms)
         binance_bar = binance_by_time.get(aligned_time)
         if not binance_bar:
             continue
         diff = binance_bar.close - mt4_bar.close
-        if _weekend_bar(aligned_time) or abs(diff) > MAX_ANALYSIS_ABS_SPREAD:
+        if _untradable_analysis_bar(
+            mt4_bar,
+            binance_bar,
+            diff,
+            previous_mt4_close,
+            previous_aligned_time,
+            aligned_time,
+            interval_ms,
+        ):
+            previous_mt4_close = mt4_bar.close
+            previous_aligned_time = aligned_time
             continue
         points.append(
             SpreadAnalysisPoint(
@@ -131,6 +145,8 @@ def compare_spreads(
                 abs_diff=abs(diff),
             )
         )
+        previous_mt4_close = mt4_bar.close
+        previous_aligned_time = aligned_time
 
     if not points:
         return SpreadAnalysis(
@@ -186,3 +202,26 @@ def _bucket_time(timestamp_ms: int, interval_ms: int) -> int:
 
 def _weekend_bar(open_time_ms: int) -> bool:
     return is_xau_weekend_ms(open_time_ms)
+
+
+def _untradable_analysis_bar(
+    mt4_bar: HistoryBar,
+    binance_bar: HistoryBar,
+    diff: Decimal,
+    previous_mt4_close: Decimal | None,
+    previous_aligned_time: int | None,
+    aligned_time: int,
+    interval_ms: int,
+) -> bool:
+    if _weekend_bar(mt4_bar.open_time_ms):
+        return True
+    if abs(diff) > MAX_ANALYSIS_ABS_SPREAD:
+        return True
+    adjacent_to_previous = previous_aligned_time is not None and aligned_time - previous_aligned_time == interval_ms
+    if adjacent_to_previous and mt4_bar.high <= mt4_bar.low and previous_mt4_close == mt4_bar.close:
+        return True
+    if mt4_bar.high > mt4_bar.low and mt4_bar.high - mt4_bar.low > MAX_ANALYSIS_MT4_BAR_RANGE:
+        return True
+    if binance_bar.high > binance_bar.low and binance_bar.high - binance_bar.low > MAX_ANALYSIS_BINANCE_BAR_RANGE:
+        return True
+    return False
