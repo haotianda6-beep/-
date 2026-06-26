@@ -56,7 +56,7 @@ def build_gold_v2_status(
     short_range, long_range = _range(short_values, discarded), _range(long_values, discarded)
     slippage_budget = _mt4_slippage_budget(settings, storage, now_ms, mt4_quote, mt4_bars, mt4_tick_move_budget)
     exit_follow_budget = _mt4_exit_follow_budget(settings, storage, now_ms)
-    entry_close_profit = _entry_viability_close_profit(settings)
+    entry_close_profit = _entry_required_close_profit(settings)
     short_model = build_entry_model(
         values=model_short_values,
         manual_min=settings.open_min_edge,
@@ -1038,7 +1038,7 @@ def _add_plan(
     if not binance or not mt4:
         return {**data, "ready": False, "reason": "等待币安和MT4同时返回报价。"}
     qty = data["quantity_oz"]
-    close_profit = metrics.close_profit_usd_per_oz if metrics and metrics.close_profit_usd_per_oz is not None else _entry_viability_close_profit(settings)
+    close_profit = metrics.close_profit_usd_per_oz if metrics and metrics.close_profit_usd_per_oz is not None else _entry_required_close_profit(settings)
     current_avg_edge = metrics.actual_entry_spread if metrics and metrics.actual_entry_spread is not None else pair.base_edge
     required_blended_edge = close_profit + exit_follow_budget
     required_locked_edge = None
@@ -1157,6 +1157,10 @@ def _add_improvement_buffer(average_edge: Decimal, slippage_budget: Decimal) -> 
 def _entry_viability_close_profit(settings: Settings) -> Decimal:
     if 0 < settings.max_pair_age_minutes <= ENTRY_AGED_PROFIT_WINDOW_MINUTES:
         return min(settings.close_profit_usd_per_oz, settings.aged_close_profit_usd_per_oz)
+    return settings.close_profit_usd_per_oz
+
+
+def _entry_required_close_profit(settings: Settings) -> Decimal:
     return settings.close_profit_usd_per_oz
 
 

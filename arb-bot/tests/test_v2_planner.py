@@ -155,7 +155,7 @@ def test_v2_blocks_entry_when_recent_range_has_no_safe_exit(tmp_path):
     assert "安全平仓" in status["short_entry"]["reason"]
 
 
-def test_v2_entry_feasibility_uses_aged_profit_when_cycle_window_is_short(tmp_path):
+def test_v2_entry_feasibility_keeps_full_profit_when_cycle_window_is_short(tmp_path):
     cfg = settings(
         tmp_path,
         OPEN_MIN_EDGE=Decimal("2.4"),
@@ -179,14 +179,14 @@ def test_v2_entry_feasibility_uses_aged_profit_when_cycle_window_is_short(tmp_pa
         metrics=PositionMetrics(),
     )
 
-    assert status["short_entry"]["entry_viability_close_profit_usd_per_oz"] == Decimal("0.3")
+    assert status["short_entry"]["entry_viability_close_profit_usd_per_oz"] == Decimal("2.0")
     assert status["short_entry"]["recent_low_spread"] == Decimal("1.5")
-    assert status["short_entry"]["estimated_exit_target_spread"] > Decimal("1.5")
+    assert status["short_entry"]["estimated_exit_target_spread"] < Decimal("1.5")
     assert status["short_entry"]["ready"] is False
     assert "只提示不自动开仓" in status["short_entry"]["reason"]
 
 
-def test_v2_entry_feasibility_uses_aged_profit_for_short_cycle_model(tmp_path, monkeypatch):
+def test_v2_entry_feasibility_keeps_full_profit_for_short_cycle_model(tmp_path, monkeypatch):
     monkeypatch.setattr(v2_planner, "is_xau_weekend_ms", lambda timestamp_ms: False)
     cfg = settings(
         tmp_path,
@@ -212,9 +212,9 @@ def test_v2_entry_feasibility_uses_aged_profit_for_short_cycle_model(tmp_path, m
         metrics=PositionMetrics(),
     )
 
-    assert status["short_entry"]["entry_viability_close_profit_usd_per_oz"] == Decimal("0.1")
-    assert status["entry_model"]["short"]["suggested_threshold"] is not None
-    assert status["entry_model"]["short"]["selected"]["aged_close_profit"] == Decimal("0.1")
+    assert status["short_entry"]["entry_viability_close_profit_usd_per_oz"] == Decimal("2.0")
+    assert status["entry_model"]["short"]["suggested_threshold"] is None
+    assert "没有证明" in status["entry_model"]["short"]["reason"]
 
 
 def test_v2_can_quote_entry_before_visible_edge_covers_slippage_budget(tmp_path):
@@ -795,7 +795,7 @@ def test_v2_blocks_entry_when_next_triple_swap_makes_exit_unsafe(tmp_path):
 
     assert status["short_entry"]["current_edge"] >= status["short_entry"]["threshold"]
     assert status["short_entry"]["next_settlement_adjustment"]["mt4_swap"] == Decimal("-1.9788")
-    assert status["short_entry"]["estimated_exit_target_spread"] == Decimal("0.8212")
+    assert status["short_entry"]["estimated_exit_target_spread"] == Decimal("0.7212")
     assert status["short_entry"]["exit_viable"] is False
     assert status["short_entry"]["ready"] is False
     assert "隔夜费" in status["short_entry"]["reason"]
@@ -831,7 +831,7 @@ def test_v2_entry_ignores_settlement_outside_expected_cycle(tmp_path):
     )
 
     assert status["short_entry"]["next_settlement_adjustment"] is None
-    assert status["short_entry"]["entry_viability_close_profit_usd_per_oz"] == Decimal("0.10")
+    assert status["short_entry"]["entry_viability_close_profit_usd_per_oz"] == Decimal("0.20")
 
 
 def test_v2_blocks_entry_when_exit_buffer_exceeds_locked_edge(tmp_path):
