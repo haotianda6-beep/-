@@ -495,6 +495,9 @@ def _add_plan(
     actionable_trigger = trigger
     if required_locked_edge is not None:
         actionable_trigger = max(trigger, required_locked_edge - slippage_budget)
+    average_protection_edge = current_avg_edge
+    if average_protection_edge is not None:
+        actionable_trigger = max(actionable_trigger, average_protection_edge)
     if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
         edge = binance.ask - mt4.ask
         price = _round_up(max(binance.ask + settings.binance_entry_offset_usd, mt4.ask + actionable_trigger + slippage_budget), filters.tick_size)
@@ -507,7 +510,7 @@ def _add_plan(
     exit_viable = False
     if current_avg_edge is not None:
         blended_edge = ((current_avg_edge * pair.quantity_oz) + (locked * qty)) / (pair.quantity_oz + qty)
-        exit_viable = blended_edge >= required_blended_edge
+        exit_viable = blended_edge >= required_blended_edge and blended_edge >= current_avg_edge
     ready = edge >= actionable_trigger and exit_viable
     reason = "达到补仓触发位，可以挂补仓限价单。"
     if edge < actionable_trigger:
@@ -521,6 +524,7 @@ def _add_plan(
         "next_actionable_trigger_edge": actionable_trigger,
         "required_blended_edge": required_blended_edge,
         "required_locked_edge": required_locked_edge,
+        "average_protection_edge": average_protection_edge,
         "binance_side": side.value,
         "binance_price": price,
         "mt4_follow_side": mt4_side.value,
