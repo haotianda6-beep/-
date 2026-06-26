@@ -85,9 +85,10 @@ def build_gold_v2_status(
     short_threshold = _entry_threshold(short_range, settings.open_min_edge, short_model)
     long_threshold = _entry_threshold(long_range, settings.open_min_edge, long_model)
     realized_performance = realized_performance or _v2_realized_performance(storage, now_ms)
-    performance_penalty = _performance_entry_penalty(realized_performance)
-    short_performance_penalty = _directional_performance_entry_penalty(realized_performance, "short", performance_penalty)
-    long_performance_penalty = _directional_performance_entry_penalty(realized_performance, "long", performance_penalty)
+    adjustment_performance, adjustment_scope = _performance_for_entry_adjustment(realized_performance)
+    performance_penalty = _performance_entry_penalty(adjustment_performance)
+    short_performance_penalty = _directional_performance_entry_penalty(adjustment_performance, "short", performance_penalty)
+    long_performance_penalty = _directional_performance_entry_penalty(adjustment_performance, "long", performance_penalty)
     short_performance_cap = _performance_threshold_cap(short_model)
     long_performance_cap = _performance_threshold_cap(long_model)
     short_threshold = _threshold_with_performance_penalty(short_threshold, short_performance_penalty, short_model)
@@ -144,6 +145,8 @@ def build_gold_v2_status(
         "objective_health": objective_health,
         "realized_performance": realized_performance,
         "performance_entry_penalty": performance_penalty,
+        "performance_adjustment_scope": adjustment_scope,
+        "performance_adjustment_sample_count": int(adjustment_performance.get("sample_count") or 0),
         "directional_performance_entry_penalty": {
             "short": short_performance_penalty,
             "long": long_performance_penalty,
@@ -330,6 +333,13 @@ def _performance_entry_penalty(performance: dict) -> Decimal:
     if total >= 0:
         penalty = min(penalty, Decimal("0.20"))
     return penalty
+
+
+def _performance_for_entry_adjustment(performance: dict) -> tuple[dict, str]:
+    current_guard = performance.get("current_guard")
+    if isinstance(current_guard, dict) and int(current_guard.get("sample_count") or 0) >= PERFORMANCE_MIN_TRADES:
+        return current_guard, "current_guard"
+    return performance, "overall"
 
 
 def _directional_performance_entry_penalty(performance: dict, direction: str, fallback: Decimal) -> Decimal:

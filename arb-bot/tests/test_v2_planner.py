@@ -373,6 +373,85 @@ def test_v2_realized_performance_override_replaces_event_samples(tmp_path):
     assert status["short_entry"]["threshold"] == Decimal("2.820")
 
 
+def test_v2_current_guard_performance_replaces_old_losses_for_entry_penalty(tmp_path):
+    cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.40"), MT4_SLIPPAGE_POINTS=0)
+    store = Storage(cfg.sqlite_path)
+    mt4_bars, binance_bars = recent_bars([Decimal("2.4"), Decimal("2.6"), Decimal("2.8"), Decimal("3.0")] * 3)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.4"), ask=Decimal("4003.6")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+        realized_performance={
+            "sample_count": 14,
+            "wins": 4,
+            "losses": 10,
+            "win_rate": Decimal("0.28"),
+            "total_pnl": Decimal("-5"),
+            "directions": {
+                "short": {"sample_count": 14, "win_rate": Decimal("0.28"), "total_pnl": Decimal("-5")},
+            },
+            "current_guard": {
+                "sample_count": 4,
+                "wins": 4,
+                "losses": 0,
+                "win_rate": Decimal("1"),
+                "total_pnl": Decimal("3"),
+            },
+        },
+    )
+
+    assert status["performance_adjustment_scope"] == "current_guard"
+    assert status["performance_entry_penalty"] == Decimal("0")
+    assert status["directional_performance_entry_penalty"]["short"] == Decimal("0")
+    assert status["short_entry"]["threshold"] == Decimal("2.820")
+
+
+def test_v2_entry_penalty_uses_overall_until_current_guard_has_enough_samples(tmp_path):
+    cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.40"), MT4_SLIPPAGE_POINTS=0)
+    store = Storage(cfg.sqlite_path)
+    mt4_bars, binance_bars = recent_bars([Decimal("2.4"), Decimal("2.6"), Decimal("2.8"), Decimal("3.0")] * 3)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.4"), ask=Decimal("4003.6")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+        realized_performance={
+            "sample_count": 6,
+            "wins": 0,
+            "losses": 6,
+            "win_rate": Decimal("0"),
+            "total_pnl": Decimal("-6"),
+            "directions": {
+                "short": {"sample_count": 6, "win_rate": Decimal("0"), "total_pnl": Decimal("-6")},
+            },
+            "current_guard": {
+                "sample_count": 2,
+                "wins": 2,
+                "losses": 0,
+                "win_rate": Decimal("1"),
+                "total_pnl": Decimal("2"),
+            },
+        },
+    )
+
+    assert status["performance_adjustment_scope"] == "overall"
+    assert status["performance_entry_penalty"] == Decimal("0.50")
+    assert status["short_entry"]["threshold"] == Decimal("3.0")
+
+
 def test_v2_directional_performance_penalty_only_hits_losing_side(tmp_path):
     cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.40"), MT4_SLIPPAGE_POINTS=0)
     store = Storage(cfg.sqlite_path)
