@@ -46,8 +46,30 @@ async def build_spread_analysis(
             return_count=0,
         )
 
-    binance_bars = await fetch_binance_klines(settings, interval, start_ms, end_ms)
+    binance_bars = await fetch_and_store_binance_klines(settings, storage, interval, start_ms, end_ms)
     return compare_spreads(mt4_bars, binance_bars, days, interval, threshold)
+
+
+async def fetch_and_store_binance_klines(
+    settings: Settings,
+    storage: Storage,
+    interval: str,
+    start_ms: int,
+    end_ms: int,
+) -> list[HistoryBar]:
+    bars = await fetch_binance_klines(settings, interval, start_ms, end_ms)
+    storage.upsert_bars("binance", settings.binance_symbol, interval, bars)
+    return bars
+
+
+def stored_binance_klines(
+    settings: Settings,
+    storage: Storage,
+    interval: str,
+    start_ms: int,
+    end_ms: int,
+) -> list[HistoryBar]:
+    return storage.get_bars("binance", settings.binance_symbol, interval, start_ms, end_ms)
 
 
 async def fetch_binance_klines(settings: Settings, interval: str, start_ms: int, end_ms: int) -> list[HistoryBar]:

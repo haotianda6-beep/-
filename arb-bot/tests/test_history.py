@@ -4,6 +4,8 @@ from decimal import Decimal
 import pytest
 
 from app import main as main_module
+from app import history as history_module
+from app.config import Settings
 from app.history import compare_spreads
 from app.models import HistoryBar, Mt4ClosedOrder, Side
 from app.storage import Storage
@@ -79,6 +81,29 @@ def test_storage_reads_events_in_time_window(tmp_path):
     assert len(events) == 1
     assert events[0]["kind"] == "sample"
     assert events[0]["payload"]["order_id"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_store_binance_klines_persists_cache(tmp_path, monkeypatch):
+    cfg = Settings(_env_file=None, SQLITE_PATH=tmp_path / "test.sqlite3", BINANCE_SYMBOL="XAUUSDT")
+    store = Storage(cfg.sqlite_path)
+    rows = [bar(60_000, "4080.10"), bar(120_000, "4081.20")]
+
+    async def fake_fetch(settings, interval, start_ms, end_ms):
+        assert settings is cfg
+        assert interval == "1m"
+        assert start_ms == 0
+        assert end_ms == 180_000
+        return rows
+
+    monkeypatch.setattr(history_module, "fetch_binance_klines", fake_fetch)
+
+    fetched = await history_module.fetch_and_store_binance_klines(cfg, store, "1m", 0, 180_000)
+    cached = history_module.stored_binance_klines(cfg, store, "1m", 0, 180_000)
+
+    assert fetched == rows
+    assert len(cached) == 2
+    assert cached[-1].close == Decimal("4081.20")
 
 
 def test_storage_reads_most_recent_events_when_limit_is_smaller_than_window(tmp_path):

@@ -19,7 +19,7 @@ from app.config import Settings, existing_env_paths, load_settings, update_local
 from app.execution_slippage import mt4_close_slippage_budget_usd_per_oz
 from app.gold_v2_version import GOLD_V2_CURRENT_GUARD_START_MS, GOLD_V2_CURRENT_GUARD_VERSION
 from app.logger import setup_logging
-from app.history import build_spread_analysis, fetch_binance_klines
+from app.history import build_spread_analysis, fetch_and_store_binance_klines, stored_binance_klines
 from app.live_reconcile import (
     is_transient_live_reconcile_error,
     open_pair_binance_restore_quantity,
@@ -471,11 +471,13 @@ async def _gold_v2_recent_binance_bars() -> list[HistoryBar]:
     end_ms = utc_now_ms()
     start_ms = end_ms - 48 * 60 * 60 * 1000
     try:
-        bars = await asyncio.wait_for(fetch_binance_klines(settings, "1m", start_ms, end_ms), timeout=5)
+        bars = await asyncio.wait_for(fetch_and_store_binance_klines(settings, storage, "1m", start_ms, end_ms), timeout=5)
     except Exception as exc:  # noqa: BLE001
         _gold_v2_binance_bars_failure_ms = now
         logger.warning("gold v2 Binance bars unavailable: %s", str(exc)[:160])
-        return _gold_v2_binance_bars_cache
+        if _gold_v2_binance_bars_cache:
+            return _gold_v2_binance_bars_cache
+        return stored_binance_klines(settings, storage, "1m", start_ms, end_ms)
     _gold_v2_binance_bars_cache = bars
     _gold_v2_binance_bars_cache_ms = now
     _gold_v2_binance_bars_failure_ms = 0
