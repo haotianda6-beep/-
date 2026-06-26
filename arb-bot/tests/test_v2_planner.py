@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from app.config import Settings
 from app.models import ExchangeFilters, HistoryBar, MarketQuote, OpenPair, PairDirection, PositionMetrics, utc_now_ms
 from app.storage import Storage
-from app.v2_planner import _entry_threshold, _spread_values, build_gold_v2_status
+from app.v2_planner import _entry_threshold, _spread_values, _threshold_with_performance_penalty, build_gold_v2_status
 
 
 def settings(tmp_path, **kwargs) -> Settings:
@@ -325,8 +325,23 @@ def test_v2_realized_losses_raise_entry_threshold(tmp_path):
     assert status["realized_performance"]["sample_count"] == 3
     assert status["realized_performance"]["win_rate"] == Decimal("0")
     assert status["performance_entry_penalty"] == Decimal("0.50")
-    assert status["short_entry"]["threshold"] == Decimal("3.320")
+    assert status["short_entry"]["threshold"] == Decimal("3.0")
+    assert status["performance_threshold_cap"]["short"] == Decimal("3.0")
     assert "自动抬高" in status["realized_performance"]["reason"]
+
+
+def test_v2_performance_penalty_keeps_daily_trade_cap():
+    model = {
+        "candidates": [
+            {"threshold": Decimal("3.72"), "projected_daily_trades": Decimal("3.26")},
+            {"threshold": Decimal("4.19"), "projected_daily_trades": Decimal("3.02")},
+            {"threshold": Decimal("4.24"), "projected_daily_trades": Decimal("1.60")},
+        ]
+    }
+
+    threshold = _threshold_with_performance_penalty(Decimal("3.72"), Decimal("0.50"), model)
+
+    assert threshold == Decimal("4.19")
 
 
 def test_v2_realized_positive_total_uses_small_entry_penalty(tmp_path):

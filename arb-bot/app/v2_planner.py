@@ -29,6 +29,7 @@ MAX_TRAINING_ABS_SPREAD = MAX_TRADABLE_ABS_SPREAD
 PERFORMANCE_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000
 PERFORMANCE_MIN_TRADES = 3
 PERFORMANCE_TARGET_WIN_RATE = Decimal("0.70")
+PERFORMANCE_MIN_PROJECTED_DAILY_TRADES = Decimal("3")
 MAX_PERFORMANCE_ENTRY_PENALTY = Decimal("0.50")
 
 
@@ -83,8 +84,10 @@ def build_gold_v2_status(
     long_threshold = _entry_threshold(long_range, settings.open_min_edge, long_model)
     realized_performance = _v2_realized_performance(storage, now_ms)
     performance_penalty = _performance_entry_penalty(realized_performance)
-    short_threshold = _threshold_with_performance_penalty(short_threshold, performance_penalty)
-    long_threshold = _threshold_with_performance_penalty(long_threshold, performance_penalty)
+    short_performance_cap = _performance_threshold_cap(short_model)
+    long_performance_cap = _performance_threshold_cap(long_model)
+    short_threshold = _threshold_with_performance_penalty(short_threshold, performance_penalty, short_model)
+    long_threshold = _threshold_with_performance_penalty(long_threshold, performance_penalty, long_model)
     move_budget_source = "实时tick" if mt4_tick_move_budget is not None else "1分钟K线"
 
     short_plan = _entry_plan(
@@ -129,6 +132,7 @@ def build_gold_v2_status(
         "entry_model": {"short": short_model, "long": long_model},
         "realized_performance": realized_performance,
         "performance_entry_penalty": performance_penalty,
+        "performance_threshold_cap": {"short": short_performance_cap, "long": long_performance_cap},
         "mt4_slippage_budget": slippage_budget,
         "mt4_exit_follow_budget": exit_follow_budget,
         "mt4_move_budget_source": move_budget_source,
@@ -211,10 +215,30 @@ def _entry_threshold(spread_range: dict, manual_min: Decimal, model: dict | None
     return fallback
 
 
-def _threshold_with_performance_penalty(threshold: Decimal, penalty: Decimal) -> Decimal:
+def _threshold_with_performance_penalty(threshold: Decimal, penalty: Decimal, model: dict | None = None) -> Decimal:
     if penalty <= 0:
         return threshold
-    return min(MAX_TRADABLE_ABS_SPREAD, threshold + penalty)
+    capped = min(MAX_TRADABLE_ABS_SPREAD, threshold + penalty)
+    performance_cap = _performance_threshold_cap(model)
+    if performance_cap is None:
+        return capped
+    return min(capped, max(threshold, performance_cap))
+
+
+def _performance_threshold_cap(model: dict | None) -> Decimal | None:
+    if not model:
+        return None
+    candidates = model.get("candidates") or []
+    eligible = []
+    for candidate in candidates:
+        try:
+            threshold = Decimal(str(candidate.get("threshold")))
+            projected = Decimal(str(candidate.get("projected_daily_trades") or "0"))
+        except Exception:  # noqa: BLE001
+            continue
+        if projected >= PERFORMANCE_MIN_PROJECTED_DAILY_TRADES and threshold <= MAX_TRADABLE_ABS_SPREAD:
+            eligible.append(threshold)
+    return max(eligible) if eligible else None
 
 
 def _range_threshold(spread_range: dict, manual_min: Decimal) -> Decimal:
