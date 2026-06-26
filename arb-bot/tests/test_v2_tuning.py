@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app.v2_tuning import build_entry_model
+from app.v2_tuning import _simulate_candidate, build_entry_model
 
 
 def test_entry_model_selects_threshold_with_target_win_rate():
@@ -93,6 +93,42 @@ def test_entry_model_subtracts_spread_protection_from_exit_target():
 
     assert model["selected"]["target_exit_spread"] == Decimal("1.99")
     assert model["selected"]["spread_protection_budget"] == Decimal("0.31")
+
+
+def test_entry_model_uses_full_profit_before_age_relaxation():
+    result = _simulate_candidate(
+        values=[Decimal("3.0"), Decimal("1.5"), Decimal("1.4"), Decimal("1.9")],
+        threshold=Decimal("3.0"),
+        slippage_budget=Decimal("0"),
+        exit_follow_budget=Decimal("0.6"),
+        close_profit=Decimal("1.1"),
+        max_hold_minutes=3,
+        spread_protection_budget=Decimal("0.3"),
+        aged_close_profit=Decimal("0.1"),
+    )
+
+    assert result["initial_target_exit_spread"] == Decimal("1.0")
+    assert result["aged_target_exit_spread"] == Decimal("2.0")
+    assert result["wins"] == 1
+    assert result["losses"] == 0
+
+
+def test_entry_model_does_not_count_early_reversion_that_only_meets_aged_target():
+    result = _simulate_candidate(
+        values=[Decimal("3.0"), Decimal("1.5"), Decimal("1.4")],
+        threshold=Decimal("3.0"),
+        slippage_budget=Decimal("0"),
+        exit_follow_budget=Decimal("0.6"),
+        close_profit=Decimal("1.1"),
+        max_hold_minutes=3,
+        spread_protection_budget=Decimal("0.3"),
+        aged_close_profit=Decimal("0.1"),
+    )
+
+    assert result["initial_target_exit_spread"] == Decimal("1.0")
+    assert result["aged_target_exit_spread"] == Decimal("2.0")
+    assert result["wins"] == 0
+    assert result["losses"] == 1
 
 
 def test_entry_model_falls_back_when_no_reversion_is_proven():

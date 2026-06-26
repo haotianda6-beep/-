@@ -52,22 +52,24 @@ def build_gold_v2_status(
         manual_min=settings.open_min_edge,
         slippage_budget=slippage_budget,
         exit_follow_budget=exit_follow_budget,
-        close_profit=entry_close_profit,
+        close_profit=settings.close_profit_usd_per_oz,
         max_hold_minutes=settings.max_pair_age_minutes,
         min_points=MIN_POINTS,
         entry_cooldown_minutes=_entry_cooldown_minutes(settings),
         spread_protection_budget=_model_spread_protection_budget(mt4_quote),
+        aged_close_profit=entry_close_profit,
     )
     long_model = build_entry_model(
         values=model_long_values,
         manual_min=settings.open_min_edge,
         slippage_budget=slippage_budget,
         exit_follow_budget=exit_follow_budget,
-        close_profit=entry_close_profit,
+        close_profit=settings.close_profit_usd_per_oz,
         max_hold_minutes=settings.max_pair_age_minutes,
         min_points=MIN_POINTS,
         entry_cooldown_minutes=_entry_cooldown_minutes(settings),
         spread_protection_budget=_model_spread_protection_budget(mt4_quote),
+        aged_close_profit=entry_close_profit,
     )
     short_threshold = _entry_threshold(short_range, settings.open_min_edge, short_model)
     long_threshold = _entry_threshold(long_range, settings.open_min_edge, long_model)
@@ -111,7 +113,7 @@ def build_gold_v2_status(
         "reason": "V2 执行器已解锁，会按币安全限价和 MT4 跟随执行。" if not settings.gold_v2_observation_only else "新版七步方案处于观察阶段，只计算机会和挂单位置，不会自动下单。",
         "lookback_minutes": 30,
         "entry_model_lookback_minutes": 2880,
-        "threshold_rule": "先剔除MT4停盘平线和剧烈跳价样本；长周期模型负责胜率，实际触发位不能高于最近30分钟可交易高点，避免历史尖刺把阈值抬离当前市场。",
+        "threshold_rule": "先剔除MT4停盘平线、周末和剧烈跳价样本；可信长周期模型负责胜率，只有模型阈值超过黄金正常上限时才回退到最近30分钟区间。",
         "entry_model": {"short": short_model, "long": long_model},
         "mt4_slippage_budget": slippage_budget,
         "mt4_exit_follow_budget": exit_follow_budget,
@@ -190,8 +192,7 @@ def _entry_threshold(spread_range: dict, manual_min: Decimal, model: dict | None
     fallback = _range_threshold(spread_range, manual_min)
     if model and model.get("suggested_threshold") is not None:
         model_threshold = max(manual_min, Decimal(str(model["suggested_threshold"])))
-        recent_high = Decimal(str(spread_range["high"])) if spread_range.get("high") is not None else None
-        if recent_high is not None and spread_range.get("points", 0) >= MIN_POINTS and model_threshold > recent_high:
+        if model_threshold > MAX_TRADABLE_ABS_SPREAD:
             return fallback
         return model_threshold
     return fallback

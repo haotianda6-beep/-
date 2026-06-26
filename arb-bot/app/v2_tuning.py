@@ -20,6 +20,7 @@ def build_entry_model(
     min_points: int,
     entry_cooldown_minutes: int = 0,
     spread_protection_budget: Decimal = Decimal("0"),
+    aged_close_profit: Decimal | None = None,
 ) -> dict:
     if len(values) < min_points:
         return {
@@ -29,6 +30,7 @@ def build_entry_model(
             "suggested_threshold": None,
             "entry_cooldown_minutes": entry_cooldown_minutes,
             "spread_protection_budget": spread_protection_budget,
+            "aged_close_profit": aged_close_profit if aged_close_profit is not None else close_profit,
         }
     candidates = _candidate_thresholds(values, manual_min)
     results = [
@@ -41,6 +43,7 @@ def build_entry_model(
             max_hold_minutes=max_hold_minutes,
             entry_cooldown_minutes=entry_cooldown_minutes,
             spread_protection_budget=spread_protection_budget,
+            aged_close_profit=aged_close_profit,
         )
         for threshold in candidates
     ]
@@ -53,6 +56,7 @@ def build_entry_model(
             "suggested_threshold": None,
             "entry_cooldown_minutes": entry_cooldown_minutes,
             "spread_protection_budget": spread_protection_budget,
+            "aged_close_profit": aged_close_profit if aged_close_profit is not None else close_profit,
             "candidates": results,
         }
     return {
@@ -62,6 +66,7 @@ def build_entry_model(
         "suggested_threshold": selected["threshold"],
         "entry_cooldown_minutes": entry_cooldown_minutes,
         "spread_protection_budget": spread_protection_budget,
+        "aged_close_profit": aged_close_profit if aged_close_profit is not None else close_profit,
         "selected": selected,
         "candidates": results,
     }
@@ -91,13 +96,13 @@ def _simulate_candidate(
     max_hold_minutes: int,
     entry_cooldown_minutes: int = 0,
     spread_protection_budget: Decimal = Decimal("0"),
+    aged_close_profit: Decimal | None = None,
 ) -> dict:
     hold = max(1, max_hold_minutes)
     cooldown = max(0, entry_cooldown_minutes)
-    target_exit = max(
-        Decimal("0"),
-        threshold + slippage_budget - slippage_budget - spread_protection_budget - exit_follow_budget - close_profit,
-    )
+    relaxed_close_profit = close_profit if aged_close_profit is None else min(close_profit, aged_close_profit)
+    initial_target_exit = _target_exit_spread(threshold, spread_protection_budget, exit_follow_budget, close_profit)
+    aged_target_exit = _target_exit_spread(threshold, spread_protection_budget, exit_follow_budget, relaxed_close_profit)
     wins = 0
     losses = 0
     index = 0
@@ -106,7 +111,15 @@ def _simulate_candidate(
             index += 1
             continue
         end = min(len(values) - 1, index + hold)
-        exit_index = _first_exit_index(values, index + 1, end, target_exit)
+        exit_index = _first_exit_index(
+            values=values,
+            start=index + 1,
+            end=end,
+            entry_index=index,
+            initial_target_exit=initial_target_exit,
+            aged_target_exit=aged_target_exit,
+            age_relax_minutes=max_hold_minutes if aged_close_profit is not None else None,
+        )
         if exit_index is None:
             losses += 1
             index = max(end + 1, index + cooldown)
@@ -118,7 +131,9 @@ def _simulate_candidate(
     projected_daily_trades = Decimal(trades) * Decimal(1440) / Decimal(len(values)) if values else Decimal("0")
     return {
         "threshold": threshold,
-        "target_exit_spread": target_exit,
+        "target_exit_spread": aged_target_exit,
+        "initial_target_exit_spread": initial_target_exit,
+        "aged_target_exit_spread": aged_target_exit,
         "wins": wins,
         "losses": losses,
         "trades": trades,
@@ -126,14 +141,51 @@ def _simulate_candidate(
         "projected_daily_trades": projected_daily_trades,
         "entry_cooldown_minutes": cooldown,
         "spread_protection_budget": spread_protection_budget,
+        "aged_close_profit": relaxed_close_profit,
     }
 
 
-def _first_exit_index(values: list[Decimal], start: int, end: int, target_exit: Decimal) -> int | None:
+def _target_exit_spread(
+    threshold: Decimal,
+    spread_protection_budget: Decimal,
+    exit_follow_budget: Decimal,
+    close_profit: Decimal,
+) -> Decimal:
+    return max(Decimal("0"), threshold - spread_protection_budget - exit_follow_budget - close_profit)
+
+
+def _first_exit_index(
+    values: list[Decimal],
+    start: int,
+    end: int,
+    entry_index: int,
+    initial_target_exit: Decimal,
+    aged_target_exit: Decimal,
+    age_relax_minutes: int | None,
+) -> int | None:
     for index in range(start, end + 1):
+        target_exit = _target_for_holding_age(
+            entry_index=entry_index,
+            current_index=index,
+            initial_target_exit=initial_target_exit,
+            aged_target_exit=aged_target_exit,
+            age_relax_minutes=age_relax_minutes,
+        )
         if values[index] <= target_exit:
             return index
     return None
+
+
+def _target_for_holding_age(
+    entry_index: int,
+    current_index: int,
+    initial_target_exit: Decimal,
+    aged_target_exit: Decimal,
+    age_relax_minutes: int | None,
+) -> Decimal:
+    if age_relax_minutes is not None and age_relax_minutes > 0 and current_index - entry_index >= age_relax_minutes:
+        return aged_target_exit
+    return initial_target_exit
 
 
 def _select_candidate(results: list[dict]) -> dict | None:

@@ -122,13 +122,13 @@ def test_v2_entry_feasibility_uses_aged_profit_when_cycle_window_is_short(tmp_pa
     assert status["short_entry"]["ready"] is True
 
 
-def test_v2_entry_feasibility_uses_aged_profit_for_one_hour_cycle(tmp_path):
+def test_v2_entry_feasibility_uses_aged_profit_for_short_cycle_model(tmp_path):
     cfg = settings(
         tmp_path,
         OPEN_MIN_EDGE=Decimal("2.4"),
         CLOSE_PROFIT_USD_PER_OZ=Decimal("2.0"),
         AGED_CLOSE_PROFIT_USD_PER_OZ=Decimal("0.1"),
-        MAX_PAIR_AGE_MINUTES=60,
+        MAX_PAIR_AGE_MINUTES=3,
         MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("0"),
     )
     store = Storage(cfg.sqlite_path)
@@ -148,6 +148,7 @@ def test_v2_entry_feasibility_uses_aged_profit_for_one_hour_cycle(tmp_path):
 
     assert status["short_entry"]["entry_viability_close_profit_usd_per_oz"] == Decimal("0.1")
     assert status["entry_model"]["short"]["suggested_threshold"] is not None
+    assert status["entry_model"]["short"]["selected"]["aged_close_profit"] == Decimal("0.1")
 
 
 def test_v2_can_quote_entry_before_visible_edge_covers_slippage_budget(tmp_path):
@@ -263,7 +264,17 @@ def test_v2_ignores_stale_and_volatile_training_bars():
     assert discarded == 2
 
 
-def test_v2_caps_model_threshold_to_recent_tradable_range():
+def test_v2_uses_model_threshold_even_when_above_recent_range():
+    threshold = _entry_threshold(
+        {"points": 30, "low": Decimal("1.89"), "high": Decimal("3.06"), "latest": Decimal("2.83")},
+        Decimal("1.50"),
+        {"suggested_threshold": Decimal("3.46")},
+    )
+
+    assert threshold == Decimal("3.46")
+
+
+def test_v2_falls_back_when_model_threshold_exceeds_tradable_ceiling():
     threshold = _entry_threshold(
         {"points": 30, "low": Decimal("1.89"), "high": Decimal("3.42"), "latest": Decimal("2.83")},
         Decimal("1.50"),
