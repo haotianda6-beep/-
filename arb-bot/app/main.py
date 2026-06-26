@@ -66,7 +66,7 @@ from app.strategy import (
     round_up,
 )
 from app.v2_executor import GoldV2Executor, REQUIRED_MT4_EA_VERSION
-from app.v2_planner import build_gold_v2_status
+from app.v2_planner import PERFORMANCE_MIN_TRADES, PERFORMANCE_TARGET_WIN_RATE, build_gold_v2_status
 
 
 setup_logging()
@@ -115,9 +115,14 @@ _orphan_mt4_close_commands: dict[str, int] = {}
 _gold_v2_binance_bars_cache: list[HistoryBar] = []
 _gold_v2_binance_bars_cache_ms = 0
 _gold_v2_binance_bars_failure_ms = 0
+_gold_v2_realized_performance_cache: dict | None = None
+_gold_v2_realized_performance_cache_ms = 0
+_gold_v2_realized_performance_failure_ms = 0
 _mt4_tick_bar_last_saved_ms = 0
 GOLD_V2_BAR_CACHE_TTL_MS = 60_000
 GOLD_V2_BAR_FAILURE_RETRY_MS = 30_000
+GOLD_V2_PERFORMANCE_CACHE_TTL_MS = 5 * 60_000
+GOLD_V2_PERFORMANCE_FAILURE_RETRY_MS = 60_000
 GOLD_V2_EXIT_BUFFER_LOOKBACK_MS = 30 * 60 * 1000
 GOLD_V2_EXIT_BUFFER_MOVE_PERCENTILE = 70
 GOLD_V2_EXIT_BUFFER_MIN_POINTS = 8
@@ -425,6 +430,7 @@ async def _gold_v2_status(
 ) -> dict:
     try:
         binance_bars = await _gold_v2_recent_binance_bars()
+        realized_performance = await _gold_v2_realized_trade_performance()
         status = build_gold_v2_status(
             settings=settings,
             storage=storage,
@@ -434,6 +440,7 @@ async def _gold_v2_status(
             binance_bars=binance_bars,
             open_pair=strategy.open_pair,
             metrics=metrics,
+            realized_performance=realized_performance,
             mt4_tick_move_budget=mt4_bridge.recent_move_budget(
                 min(settings.max_hedge_delay_ms, GOLD_V2_ENTRY_MOVE_BUDGET_MS),
                 percentile=GOLD_V2_EXIT_BUFFER_MOVE_PERCENTILE,
@@ -471,6 +478,69 @@ async def _gold_v2_recent_binance_bars() -> list[HistoryBar]:
     _gold_v2_binance_bars_cache_ms = now
     _gold_v2_binance_bars_failure_ms = 0
     return _gold_v2_binance_bars_cache
+
+
+async def _gold_v2_realized_trade_performance() -> dict | None:
+    global _gold_v2_realized_performance_cache, _gold_v2_realized_performance_cache_ms
+    global _gold_v2_realized_performance_failure_ms
+    now = _now_ms()
+    if (
+        _gold_v2_realized_performance_cache is not None
+        and now - _gold_v2_realized_performance_cache_ms <= GOLD_V2_PERFORMANCE_CACHE_TTL_MS
+    ):
+        return _gold_v2_realized_performance_cache
+    if now - _gold_v2_realized_performance_failure_ms <= GOLD_V2_PERFORMANCE_FAILURE_RETRY_MS:
+        return _gold_v2_realized_performance_cache
+    try:
+        items = await _trade_history_items(days=7)
+    except Exception as exc:  # noqa: BLE001
+        _gold_v2_realized_performance_failure_ms = now
+        logger.warning("gold v2 realized trade performance unavailable: %s", str(exc)[:160])
+        return _gold_v2_realized_performance_cache
+    _gold_v2_realized_performance_cache = _gold_v2_realized_performance_from_items(items)
+    _gold_v2_realized_performance_cache_ms = now
+    _gold_v2_realized_performance_failure_ms = 0
+    return _gold_v2_realized_performance_cache
+
+
+def _gold_v2_realized_performance_from_items(items: list[TradeHistoryItem]) -> dict:
+    pnls = [
+        item.net_pnl
+        for item in items
+        if item.strategy_version == "v2.0" and item.net_pnl is not None
+    ]
+    if not pnls:
+        return {
+            "sample_count": 0,
+            "reason": "暂无 V2 真实做单历史，不参与阈值调整。",
+        }
+    wins = sum(1 for pnl in pnls if pnl > 0)
+    losses = sum(1 for pnl in pnls if pnl < 0)
+    total = sum(pnls, Decimal("0"))
+    win_rate = Decimal(wins) / Decimal(len(pnls))
+    return {
+        "sample_count": len(pnls),
+        "wins": wins,
+        "losses": losses,
+        "win_rate": win_rate,
+        "target_win_rate": PERFORMANCE_TARGET_WIN_RATE,
+        "total_pnl": total,
+        "average_pnl": total / Decimal(len(pnls)),
+        "latest_pnl": pnls[0],
+        "min_pnl": min(pnls),
+        "max_pnl": max(pnls),
+        "reason": _gold_v2_performance_reason(len(pnls), win_rate, total),
+    }
+
+
+def _gold_v2_performance_reason(sample_count: int, win_rate: Decimal, total_pnl: Decimal) -> str:
+    if sample_count < PERFORMANCE_MIN_TRADES:
+        return f"V2 真实做单历史 {sample_count} 单，少于 {PERFORMANCE_MIN_TRADES} 单，暂不硬性调整阈值。"
+    if win_rate >= PERFORMANCE_TARGET_WIN_RATE:
+        return f"V2 真实胜率 {win_rate:.2%} 达到目标，不额外抬高开仓阈值。"
+    if total_pnl >= 0:
+        return f"V2 真实胜率 {win_rate:.2%} 未达目标，但总收益仍为正，只做小幅保护。"
+    return f"V2 真实胜率 {win_rate:.2%} 未达 {PERFORMANCE_TARGET_WIN_RATE:.0%} 且总收益为负，自动抬高开仓阈值保护本金。"
 
 
 def _record_mt4_tick_bar(quote: MarketQuote, trade_allowed: bool | None = None) -> None:
@@ -642,6 +712,13 @@ async def spread_analysis(
 
 @app.get("/history/trades", response_model=TradeHistoryResponse)
 async def trade_history(days: int = Query(default=7, ge=1, le=30)) -> TradeHistoryResponse:
+    return TradeHistoryResponse(
+        source="币安真实成交/资金费 + MT4 EA 上传的账户历史",
+        items=await _trade_history_items(days),
+    )
+
+
+async def _trade_history_items(days: int) -> list[TradeHistoryItem]:
     end_ms = utc_now_ms()
     start_ms = end_ms - days * 86_400_000
     mt4_orders = storage.get_mt4_closed_orders(settings.mt4_symbol, start_ms, end_ms, limit=100)
@@ -663,10 +740,7 @@ async def trade_history(days: int = Query(default=7, ge=1, le=30)) -> TradeHisto
     if temporary_history_client is not None:
         await temporary_history_client.stop()
     event_rows = storage.get_events(start_ms, end_ms)
-    return TradeHistoryResponse(
-        source="币安真实成交/资金费 + MT4 EA 上传的账户历史",
-        items=_build_trade_history(mt4_orders, binance_trades, funding_rows, event_rows),
-    )
+    return _build_trade_history(mt4_orders, binance_trades, funding_rows, event_rows)
 
 
 async def _fetch_binance_history_rows(

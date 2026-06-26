@@ -43,6 +43,7 @@ def build_gold_v2_status(
     open_pair: OpenPair | None,
     metrics: PositionMetrics | None,
     mt4_tick_move_budget: Decimal | None = None,
+    realized_performance: dict | None = None,
 ) -> dict:
     now_ms = utc_now_ms()
     mt4_bars = storage.get_bars("mt4", settings.mt4_symbol, "1m", now_ms - RANGE_LOOKBACK_MS, now_ms)
@@ -82,7 +83,7 @@ def build_gold_v2_status(
     )
     short_threshold = _entry_threshold(short_range, settings.open_min_edge, short_model)
     long_threshold = _entry_threshold(long_range, settings.open_min_edge, long_model)
-    realized_performance = _v2_realized_performance(storage, now_ms)
+    realized_performance = realized_performance or _v2_realized_performance(storage, now_ms)
     performance_penalty = _performance_entry_penalty(realized_performance)
     short_performance_cap = _performance_threshold_cap(short_model)
     long_performance_cap = _performance_threshold_cap(long_model)

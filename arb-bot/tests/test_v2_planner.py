@@ -330,6 +330,43 @@ def test_v2_realized_losses_raise_entry_threshold(tmp_path):
     assert "自动抬高" in status["realized_performance"]["reason"]
 
 
+def test_v2_realized_performance_override_replaces_event_samples(tmp_path):
+    cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.40"), MT4_SLIPPAGE_POINTS=0)
+    store = Storage(cfg.sqlite_path)
+    for pnl in ["-1.0", "-0.5", "-2.0"]:
+        store.record_event("v2_pair_pnl_recorded", {"realized_pnl": pnl})
+    mt4_bars, binance_bars = recent_bars([Decimal("2.4"), Decimal("2.6"), Decimal("2.8"), Decimal("3.0")] * 3)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.4"), ask=Decimal("4003.6")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+        realized_performance={
+            "sample_count": 4,
+            "wins": 4,
+            "losses": 0,
+            "win_rate": Decimal("1"),
+            "target_win_rate": Decimal("0.70"),
+            "total_pnl": Decimal("3.2"),
+            "average_pnl": Decimal("0.8"),
+            "latest_pnl": Decimal("1.0"),
+            "min_pnl": Decimal("0.2"),
+            "max_pnl": Decimal("1.2"),
+            "reason": "真实历史达标",
+        },
+    )
+
+    assert status["realized_performance"]["wins"] == 4
+    assert status["performance_entry_penalty"] == Decimal("0")
+    assert status["short_entry"]["threshold"] == Decimal("2.820")
+
+
 def test_v2_performance_penalty_keeps_daily_trade_cap():
     model = {
         "candidates": [
