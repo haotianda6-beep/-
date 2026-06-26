@@ -18,6 +18,7 @@ def build_entry_model(
     close_profit: Decimal,
     max_hold_minutes: int,
     min_points: int,
+    entry_cooldown_minutes: int = 0,
 ) -> dict:
     if len(values) < min_points:
         return {
@@ -25,6 +26,7 @@ def build_entry_model(
             "reason": "样本不足，暂不启用自动阈值模型。",
             "points": len(values),
             "suggested_threshold": None,
+            "entry_cooldown_minutes": entry_cooldown_minutes,
         }
     candidates = _candidate_thresholds(values, manual_min)
     results = [
@@ -35,6 +37,7 @@ def build_entry_model(
             exit_follow_budget=exit_follow_budget,
             close_profit=close_profit,
             max_hold_minutes=max_hold_minutes,
+            entry_cooldown_minutes=entry_cooldown_minutes,
         )
         for threshold in candidates
     ]
@@ -45,6 +48,7 @@ def build_entry_model(
             "reason": "最近样本没有证明 70% 以上回归胜率，沿用区间阈值。",
             "points": len(values),
             "suggested_threshold": None,
+            "entry_cooldown_minutes": entry_cooldown_minutes,
             "candidates": results,
         }
     return {
@@ -52,6 +56,7 @@ def build_entry_model(
         "reason": _selection_reason(selected),
         "points": len(values),
         "suggested_threshold": selected["threshold"],
+        "entry_cooldown_minutes": entry_cooldown_minutes,
         "selected": selected,
         "candidates": results,
     }
@@ -79,8 +84,10 @@ def _simulate_candidate(
     exit_follow_budget: Decimal,
     close_profit: Decimal,
     max_hold_minutes: int,
+    entry_cooldown_minutes: int = 0,
 ) -> dict:
     hold = max(1, max_hold_minutes)
+    cooldown = max(0, entry_cooldown_minutes)
     target_exit = max(Decimal("0"), threshold + slippage_budget - slippage_budget - exit_follow_budget - close_profit)
     wins = 0
     losses = 0
@@ -93,10 +100,10 @@ def _simulate_candidate(
         exit_index = _first_exit_index(values, index + 1, end, target_exit)
         if exit_index is None:
             losses += 1
-            index = end + 1
+            index = max(end + 1, index + cooldown)
         else:
             wins += 1
-            index = exit_index + 1
+            index = max(exit_index + 1, index + cooldown)
     trades = wins + losses
     win_rate = Decimal(wins) / Decimal(trades) if trades else None
     projected_daily_trades = Decimal(trades) * Decimal(1440) / Decimal(len(values)) if values else Decimal("0")
@@ -108,6 +115,7 @@ def _simulate_candidate(
         "trades": trades,
         "win_rate": win_rate,
         "projected_daily_trades": projected_daily_trades,
+        "entry_cooldown_minutes": cooldown,
     }
 
 

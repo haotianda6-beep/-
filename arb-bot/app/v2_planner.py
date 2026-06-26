@@ -55,6 +55,7 @@ def build_gold_v2_status(
         entry_close_profit,
         settings.max_pair_age_minutes,
         MIN_POINTS,
+        _entry_cooldown_minutes(settings),
     )
     long_model = build_entry_model(
         model_long_values,
@@ -64,6 +65,7 @@ def build_gold_v2_status(
         entry_close_profit,
         settings.max_pair_age_minutes,
         MIN_POINTS,
+        _entry_cooldown_minutes(settings),
     )
     short_threshold = _entry_threshold(short_range, settings.open_min_edge, short_model)
     long_threshold = _entry_threshold(long_range, settings.open_min_edge, long_model)
@@ -686,6 +688,10 @@ def _entry_viability_close_profit(settings: Settings) -> Decimal:
     if 0 < settings.max_pair_age_minutes <= ENTRY_AGED_PROFIT_WINDOW_MINUTES:
         return min(settings.close_profit_usd_per_oz, settings.aged_close_profit_usd_per_oz)
     return settings.close_profit_usd_per_oz
+
+
+def _entry_cooldown_minutes(settings: Settings) -> int:
+    return max(0, settings.gold_v2_min_entry_interval_ms // 60_000)
 
 
 def _mt4_slippage_budget(

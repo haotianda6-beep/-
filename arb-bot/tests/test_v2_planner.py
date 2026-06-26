@@ -17,6 +17,7 @@ def settings(tmp_path, **kwargs) -> Settings:
         "TARGET_OZ": Decimal("1"),
         "MT4_SLIPPAGE_POINTS": 30,
         "MT4_CLOSE_EXTRA_BUFFER_USD": Decimal("0"),
+        "GOLD_V2_MIN_ENTRY_INTERVAL_MS": 0,
     }
     defaults.update(kwargs)
     return Settings(_env_file=None, **defaults)
