@@ -40,6 +40,15 @@ def runtime():
     return SimpleNamespace(state=StrategyState.IDLE, last_error=None, open_pair=None)
 
 
+class AuditPaperBinanceClient(PaperBinanceClient):
+    def __init__(self, settings: Settings, rows: list[dict]) -> None:
+        super().__init__(settings)
+        self.rows = rows
+
+    async def user_trades(self, start_ms: int, end_ms: int, limit: int = 1000) -> list[dict]:
+        return self.rows
+
+
 def mt4_tick(
     mt4: Mt4Bridge,
     bid: str,
@@ -62,6 +71,68 @@ def mt4_tick(
             trade_context_busy=trade_context_busy,
         )
     )
+
+
+@pytest.mark.asyncio
+async def test_v2_binance_fill_audit_records_maker_without_fee(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_MODE=False, LIVE_TRADING=True)
+    store = Storage(cfg.sqlite_path)
+    client = AuditPaperBinanceClient(
+        cfg,
+        [{"orderId": "entry-1", "id": "trade-1", "maker": True, "commission": "0", "commissionAsset": "USDT"}],
+    )
+    executor = GoldV2Executor(cfg, client, Mt4Bridge(cfg), store, runtime())
+    order = OrderUpdate(
+        order_id="entry-1",
+        client_order_id="arb_entry",
+        symbol="XAUUSDT",
+        side=Side.SELL,
+        status=OrderStatus.FILLED,
+        price=Decimal("101"),
+        orig_qty=Decimal("1"),
+        executed_qty=Decimal("1"),
+        avg_price=Decimal("101"),
+    )
+
+    await executor._audit_binance_fill(order, "entry")
+
+    events = store.get_events(0, utc_now_ms() + 1_000, limit=20)
+    audit = [event for event in events if event["kind"] == "v2_binance_fill_audit"]
+    risk = [event for event in events if event["kind"] == "v2_binance_fee_or_taker_detected"]
+    assert audit[-1]["payload"]["all_maker"] is True
+    assert audit[-1]["payload"]["commission"] == "0"
+    assert not risk
+
+
+@pytest.mark.asyncio
+async def test_v2_binance_fill_audit_flags_fee_or_taker(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_MODE=False, LIVE_TRADING=True)
+    store = Storage(cfg.sqlite_path)
+    client = AuditPaperBinanceClient(
+        cfg,
+        [{"orderId": "exit-1", "id": "trade-2", "maker": False, "commission": "1.23", "commissionAsset": "USDT"}],
+    )
+    executor = GoldV2Executor(cfg, client, Mt4Bridge(cfg), store, runtime())
+    order = OrderUpdate(
+        order_id="exit-1",
+        client_order_id="arb_exit",
+        symbol="XAUUSDT",
+        side=Side.BUY,
+        status=OrderStatus.FILLED,
+        price=Decimal("100"),
+        orig_qty=Decimal("1"),
+        executed_qty=Decimal("1"),
+        avg_price=Decimal("100"),
+        reduce_only=True,
+    )
+
+    await executor._audit_binance_fill(order, "exit")
+
+    events = store.get_events(0, utc_now_ms() + 1_000, limit=20)
+    risk = [event for event in events if event["kind"] == "v2_binance_fee_or_taker_detected"]
+    assert risk[-1]["payload"]["all_maker"] is False
+    assert risk[-1]["payload"]["commission"] == "1.23"
+    assert risk[-1]["payload"]["non_maker_trade_ids"] == ["trade-2"]
 
 
 def short_plan(price: str = "101") -> dict:

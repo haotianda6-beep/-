@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from decimal import Decimal
+import asyncio
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from app.binance_client import BinanceBaseClient, BinanceError
@@ -244,6 +245,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             self._clear_to_idle()
             return
         if order.status == OrderStatus.FILLED:
+            self._schedule_binance_fill_audit(order, "entry")
             self._queue_mt4_hedge(self._with_carried_entry_fill(order))
             return
         if order.executed_qty > 0:
@@ -369,6 +371,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
                 await self.cancel_active_order(mt4_block_reason)
                 return
         if order.status == OrderStatus.FILLED:
+            self._schedule_binance_fill_audit(order, "exit")
             self._queue_mt4_close(self._with_carried_exit_fill(order))
             return
         if order.executed_qty > 0:
@@ -878,6 +881,50 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.runtime.state = StrategyState.IDLE
         self.runtime.last_error = None
 
+    def _schedule_binance_fill_audit(self, order: OrderUpdate, phase: str) -> None:
+        if self.settings.is_dry_run:
+            return
+        try:
+            asyncio.create_task(self._audit_binance_fill(order, phase))
+        except RuntimeError:
+            self.storage.record_event(
+                "v2_binance_fill_audit_not_scheduled",
+                {"phase": phase, "order_id": order.order_id, "reason": "event loop unavailable"},
+            )
+
+    async def _audit_binance_fill(self, order: OrderUpdate, phase: str) -> None:
+        start_ms = max(0, int(order.timestamp_ms) - 10 * 60_000)
+        end_ms = utc_now_ms() + 60_000
+        try:
+            rows = await self.binance.user_trades(start_ms, end_ms, limit=1000)
+        except Exception as exc:  # noqa: BLE001
+            self.storage.record_event(
+                "v2_binance_fill_audit_failed",
+                {"phase": phase, "order_id": order.order_id, "error": str(exc)[:160]},
+            )
+            return
+        matched = [row for row in rows if str(row.get("orderId") or row.get("order_id") or "") == str(order.order_id)]
+        if not matched:
+            self.storage.record_event(
+                "v2_binance_fill_audit_pending",
+                {"phase": phase, "order_id": order.order_id, "checked_rows": len(rows)},
+            )
+            return
+        commission = sum((_decimal_or_zero(row.get("commission")) for row in matched), Decimal("0"))
+        non_maker_rows = [row for row in matched if not _trade_is_maker(row)]
+        payload = {
+            "phase": phase,
+            "order_id": order.order_id,
+            "trade_count": len(matched),
+            "commission": str(commission),
+            "commission_asset": _join_unique_text(row.get("commissionAsset") or row.get("commission_asset") for row in matched),
+            "all_maker": not non_maker_rows,
+            "non_maker_trade_ids": [str(row.get("id") or row.get("tradeId") or "") for row in non_maker_rows],
+        }
+        self.storage.record_event("v2_binance_fill_audit", payload)
+        if commission != 0 or non_maker_rows:
+            self.storage.record_event("v2_binance_fee_or_taker_detected", payload)
+
     def _handle_mt4_close_market_closed(self, ticket: int | None, reason: str) -> None:
         pair = self.runtime.open_pair
         if pair and self.active_order and self.active_order.executed_qty > 0:
@@ -1341,3 +1388,32 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
 def _missing_order_error(exc: BinanceError) -> bool:
     text = str(exc)
     return '"code":-2013' in text or "Order does not exist" in text
+
+
+def _decimal_or_zero(value: object) -> Decimal:
+    if value is None:
+        return Decimal("0")
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
+
+
+def _trade_is_maker(row: dict[str, Any]) -> bool:
+    value = row.get("maker")
+    if value is None:
+        value = row.get("isMaker")
+    if isinstance(value, bool):
+        return value
+    return str(value).lower() in {"true", "1", "yes"}
+
+
+def _join_unique_text(values) -> str | None:
+    seen = []
+    for value in values:
+        if value is None:
+            continue
+        text = str(value)
+        if text and text not in seen:
+            seen.append(text)
+    return " / ".join(seen) if seen else None
