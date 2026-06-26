@@ -23,3 +23,14 @@ def test_xau_weekend_detects_china_saturday():
 
     assert is_xau_weekend_ms(timestamp) is True
     assert xau_weekend_entry_block_reason(timestamp) == "黄金处于周末/停盘过滤时段"
+
+
+def test_xau_weekend_entry_block_waits_after_utc_weekend_reopens():
+    reason = xau_weekend_entry_block_reason(ms(2026, 6, 29, 0, 10), reopen_cooldown_minutes=30)
+
+    assert reason is not None
+    assert "刚恢复" in reason
+
+
+def test_xau_weekend_entry_block_allows_after_reopen_cooldown():
+    assert xau_weekend_entry_block_reason(ms(2026, 6, 29, 0, 40), reopen_cooldown_minutes=30) is None
