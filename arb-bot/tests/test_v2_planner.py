@@ -64,7 +64,7 @@ def test_v2_uses_upper_range_threshold_from_recent_spreads(tmp_path):
 
 
 def test_v2_blocks_entry_when_recent_range_has_no_safe_exit(tmp_path):
-    cfg = settings(tmp_path, CLOSE_PROFIT_USD_PER_OZ=Decimal("2.5"))
+    cfg = settings(tmp_path, CLOSE_PROFIT_USD_PER_OZ=Decimal("2.5"), MAX_PAIR_AGE_MINUTES=0)
     store = Storage(cfg.sqlite_path)
     mt4_bars, binance_bars = recent_bars([Decimal("3.0"), Decimal("3.2"), Decimal("3.4"), Decimal("3.6"), Decimal("3.8"), Decimal("4.0")] * 2)
     store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
@@ -114,6 +114,34 @@ def test_v2_entry_feasibility_uses_aged_profit_when_cycle_window_is_short(tmp_pa
     assert status["short_entry"]["recent_low_spread"] == Decimal("1.5")
     assert status["short_entry"]["estimated_exit_target_spread"] > Decimal("1.5")
     assert status["short_entry"]["ready"] is True
+
+
+def test_v2_entry_feasibility_uses_aged_profit_for_one_hour_cycle(tmp_path):
+    cfg = settings(
+        tmp_path,
+        OPEN_MIN_EDGE=Decimal("2.4"),
+        CLOSE_PROFIT_USD_PER_OZ=Decimal("2.0"),
+        AGED_CLOSE_PROFIT_USD_PER_OZ=Decimal("0.1"),
+        MAX_PAIR_AGE_MINUTES=60,
+        MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("0"),
+    )
+    store = Storage(cfg.sqlite_path)
+    mt4_bars, binance_bars = recent_bars([Decimal("2.8"), Decimal("2.9"), Decimal("2.0"), Decimal("1.9")] * 3)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.0"), ask=Decimal("4003.2")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+    )
+
+    assert status["short_entry"]["entry_viability_close_profit_usd_per_oz"] == Decimal("0.1")
+    assert status["entry_model"]["short"]["suggested_threshold"] is not None
 
 
 def test_v2_can_quote_entry_before_visible_edge_covers_slippage_budget(tmp_path):
@@ -220,7 +248,7 @@ def test_v2_blocks_entry_when_next_triple_swap_makes_exit_unsafe(tmp_path):
 
     assert status["short_entry"]["current_edge"] >= status["short_entry"]["threshold"]
     assert status["short_entry"]["next_settlement_adjustment"]["mt4_swap"] == Decimal("-1.9788")
-    assert status["short_entry"]["estimated_exit_target_spread"] == Decimal("0.7212")
+    assert status["short_entry"]["estimated_exit_target_spread"] == Decimal("0.8212")
     assert status["short_entry"]["exit_viable"] is False
     assert status["short_entry"]["ready"] is False
     assert "隔夜费" in status["short_entry"]["reason"]

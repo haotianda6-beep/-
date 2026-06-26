@@ -9,15 +9,17 @@ from app.mt4_costs import live_spread_usd_per_oz, recent_move_budget_usd_per_oz,
 from app.mt4_rollover import normalize_mt4_rollover_ms
 from app.quote_guard import MAX_REASONABLE_XAU_MID_GAP, xau_quote_gap_reason
 from app.storage import Storage
+from app.v2_tuning import build_entry_model
 
 
-LOOKBACK_MS = 30 * 60 * 1000
+RANGE_LOOKBACK_MS = 30 * 60 * 1000
+MODEL_LOOKBACK_MS = 4 * 60 * 60 * 1000
 MIN_POINTS = 8
 RANGE_FACTOR = Decimal("0.70")
 DEFAULT_SLIPPAGE_BUDGET = Decimal("0.30")
 XAU_POINT_VALUE = Decimal("0.01")
 MT4_MOVE_PERCENTILE = 70
-ENTRY_AGED_PROFIT_WINDOW_MINUTES = 30
+ENTRY_AGED_PROFIT_WINDOW_MINUTES = 120
 
 
 def build_gold_v2_status(
@@ -32,13 +34,35 @@ def build_gold_v2_status(
     mt4_tick_move_budget: Decimal | None = None,
 ) -> dict:
     now_ms = utc_now_ms()
-    mt4_bars = storage.get_bars("mt4", settings.mt4_symbol, "1m", now_ms - LOOKBACK_MS, now_ms)
-    short_range, long_range = _spread_ranges(mt4_bars, binance_bars)
-    short_threshold = _entry_threshold(short_range, settings.open_min_edge)
-    long_threshold = _entry_threshold(long_range, settings.open_min_edge)
+    mt4_bars = storage.get_bars("mt4", settings.mt4_symbol, "1m", now_ms - RANGE_LOOKBACK_MS, now_ms)
+    mt4_model_bars = storage.get_bars("mt4", settings.mt4_symbol, "1m", now_ms - MODEL_LOOKBACK_MS, now_ms)
+    range_binance_bars = [bar for bar in binance_bars if bar.open_time_ms >= now_ms - RANGE_LOOKBACK_MS]
+    short_values, long_values, discarded = _spread_values(mt4_bars, range_binance_bars)
+    model_short_values, model_long_values, _ = _spread_values(mt4_model_bars, binance_bars)
+    short_range, long_range = _range(short_values, discarded), _range(long_values, discarded)
     slippage_budget = _mt4_slippage_budget(settings, mt4_quote, mt4_bars, mt4_tick_move_budget)
     exit_follow_budget = _mt4_exit_follow_budget(settings)
     entry_close_profit = _entry_viability_close_profit(settings)
+    short_model = build_entry_model(
+        model_short_values,
+        settings.open_min_edge,
+        slippage_budget,
+        exit_follow_budget,
+        entry_close_profit,
+        settings.max_pair_age_minutes,
+        MIN_POINTS,
+    )
+    long_model = build_entry_model(
+        model_long_values,
+        settings.open_min_edge,
+        slippage_budget,
+        exit_follow_budget,
+        entry_close_profit,
+        settings.max_pair_age_minutes,
+        MIN_POINTS,
+    )
+    short_threshold = _entry_threshold(short_range, settings.open_min_edge, short_model)
+    long_threshold = _entry_threshold(long_range, settings.open_min_edge, long_model)
     move_budget_source = "实时tick" if mt4_tick_move_budget is not None else "1分钟K线"
 
     short_plan = _entry_plan(
@@ -78,7 +102,9 @@ def build_gold_v2_status(
         "add_enabled": bool(open_pair and settings.max_add_count > 0),
         "reason": "V2 执行器已解锁，会按币安全限价和 MT4 跟随执行。" if not settings.gold_v2_observation_only else "新版七步方案处于观察阶段，只计算机会和挂单位置，不会自动下单。",
         "lookback_minutes": 30,
-        "threshold_rule": "最近30分钟价差最低到最高之间取70%位置，并且不能低于手动最小开仓价差。",
+        "entry_model_lookback_minutes": 240,
+        "threshold_rule": "优先按最近样本估算70%以上回归胜率和日开单次数；证据不足时取最近30分钟区间70%位置，并且不能低于手动最小开仓价差。",
+        "entry_model": {"short": short_model, "long": long_model},
         "mt4_slippage_budget": slippage_budget,
         "mt4_exit_follow_budget": exit_follow_budget,
         "mt4_move_budget_source": move_budget_source,
@@ -99,7 +125,7 @@ def build_gold_v2_status(
     }
 
 
-def _spread_ranges(mt4_bars: list[HistoryBar], binance_bars: list[HistoryBar]) -> tuple[dict, dict]:
+def _spread_values(mt4_bars: list[HistoryBar], binance_bars: list[HistoryBar]) -> tuple[list[Decimal], list[Decimal], int]:
     binance_by_time = {bar.open_time_ms - (bar.open_time_ms % 60_000): bar for bar in binance_bars}
     short_values: list[Decimal] = []
     long_values: list[Decimal] = []
@@ -115,7 +141,7 @@ def _spread_ranges(mt4_bars: list[HistoryBar], binance_bars: list[HistoryBar]) -
             continue
         short_values.append(diff)
         long_values.append(-diff)
-    return _range(short_values, discarded), _range(long_values, discarded)
+    return short_values, long_values, discarded
 
 
 def _range(values: list[Decimal], discarded: int = 0) -> dict:
@@ -124,7 +150,9 @@ def _range(values: list[Decimal], discarded: int = 0) -> dict:
     return {"points": len(values), "discarded": discarded, "low": min(values), "high": max(values), "latest": values[-1]}
 
 
-def _entry_threshold(spread_range: dict, manual_min: Decimal) -> Decimal:
+def _entry_threshold(spread_range: dict, manual_min: Decimal, model: dict | None = None) -> Decimal:
+    if model and model.get("suggested_threshold") is not None:
+        return max(manual_min, Decimal(str(model["suggested_threshold"])))
     if spread_range["points"] < MIN_POINTS or spread_range["low"] is None or spread_range["high"] is None:
         return manual_min
     low = Decimal(str(spread_range["low"]))

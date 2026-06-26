@@ -1515,8 +1515,9 @@
           Number(plan.short_range?.points || 0),
           Number(plan.long_range?.points || 0),
         );
+        const modelText = entryModelText(plan.entry_model);
         $("v2ThresholdLine").textContent =
-          `币安高 ${fmt(shortThreshold)} 美元；币安低 ${fmt(longThreshold)} 美元；样本 ${fmt(points)} 根`;
+          `币安高 ${fmt(shortThreshold)} 美元；币安低 ${fmt(longThreshold)} 美元；样本 ${fmt(points)} 根${modelText}`;
 
         const selected = plan.selected_entry;
         if (!selected) {
@@ -1584,6 +1585,23 @@
             : "";
         $("v2RiskLine").textContent =
           `${policy || "禁止币安市价单"}；MT4滑点预算 ${fmt(plan.mt4_slippage_budget)} 美元${liveSpread}${moveSource}${exitBudget}`;
+      }
+
+      function entryModelText(model) {
+        if (!model) return "";
+        const shortText = oneEntryModelText("币安高", model.short);
+        const longText = oneEntryModelText("币安低", model.long);
+        const text = [shortText, longText].filter(Boolean).join("；");
+        return text ? `；模型 ${text}` : "";
+      }
+
+      function oneEntryModelText(label, model) {
+        if (!model || !model.enabled) return "";
+        const selected = model.selected;
+        if (!selected) return `${label}暂无 70% 回归证据`;
+        const winRate = Number(selected.win_rate);
+        const winText = Number.isFinite(winRate) ? `${fmt(winRate * 100)}%` : "-";
+        return `${label}胜率${winText}/日${fmt(selected.projected_daily_trades)}单`;
       }
 
       function renderLimitOrder(data) {
