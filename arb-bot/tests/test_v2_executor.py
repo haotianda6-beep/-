@@ -1669,7 +1669,7 @@ async def test_v2_missing_exit_order_is_treated_as_canceled(tmp_path):
 
 @pytest.mark.asyncio
 async def test_v2_partial_entry_fill_does_not_queue_mt4(tmp_path):
-    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", MAX_HEDGE_DELAY_MS=10_000)
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", MAX_HEDGE_DELAY_MS=10_000, MAX_ORDER_AGE_MS=60_000)
     client = PaperBinanceClient(cfg)
     mt4 = Mt4Bridge(cfg)
     run = runtime()
@@ -1685,6 +1685,33 @@ async def test_v2_partial_entry_fill_does_not_queue_mt4(tmp_path):
     assert executor.active_order.status == OrderStatus.PARTIALLY_FILLED
     assert mt4.next_command() == {"command": "NONE"}
     assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+
+
+@pytest.mark.asyncio
+async def test_v2_stale_partial_entry_cancels_remaining_and_requotes(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, MAX_ORDER_AGE_MS=0)
+    store = Storage(cfg.sqlite_path)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+    await executor.step(short_plan("101"))
+    first_order_id = executor.active_order.order_id
+    await client.simulate_fill(first_order_id, Decimal("0.4"), Decimal("101"))
+
+    await executor.step(short_plan("101"))
+
+    assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert executor.active_order is not None
+    assert executor.active_order.order_id != first_order_id
+    assert executor.active_order.orig_qty == Decimal("0.6")
+    assert mt4.next_command() == {"command": "NONE"}
+    events = store.get_events(0, utc_now_ms() + 1_000, limit=50)
+    assert any(event["kind"] == "v2_entry_partial_requote_cancelled" for event in events)
+    assert any(event["kind"] == "v2_entry_remaining_order" for event in events)
 
 
 @pytest.mark.asyncio
