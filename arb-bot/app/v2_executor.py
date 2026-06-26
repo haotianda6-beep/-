@@ -254,11 +254,71 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
                 return
             self.runtime.last_error = f"币安开仓部分成交 {order.executed_qty}/{order.orig_qty} XAU，继续等待完全成交。"
             return
+        if await self._cancel_entry_order_if_locked_edge_invalid(plan_status):
+            return
         age = utc_now_ms() - self.order_created_ms
         if age < max(self.settings.min_order_live_ms, self.settings.max_order_age_ms):
             return
         if not self._active_entry_plan(plan_status).get("ready"):
             await self.cancel_active_order(self._active_entry_cancel_reason())
+
+    async def _cancel_entry_order_if_locked_edge_invalid(self, plan_status: dict[str, Any]) -> bool:
+        reason = self._entry_locked_edge_cancel_reason(plan_status)
+        if not reason:
+            return False
+        await self.cancel_active_order(reason)
+        return True
+
+    def _entry_locked_edge_cancel_reason(self, plan_status: dict[str, Any]) -> str | None:
+        order = self.active_order
+        if not order or order.reduce_only or order.executed_qty > 0:
+            return None
+        plan = self._active_entry_plan(plan_status)
+        if not plan or not plan.get("ready"):
+            return None
+        mt4_quote = self.mt4.latest_quote()
+        if not mt4_quote:
+            return None
+        gap_reason = xau_quote_gap_reason(self.binance.latest_quote(), mt4_quote)
+        if gap_reason:
+            return f"V2 开仓挂单报价异常，撤销未成交限价单：{gap_reason}"
+        required = self._active_entry_required_locked_edge(plan)
+        if required is None:
+            return None
+        locked = self._active_order_locked_edge(order, mt4_quote)
+        if locked is None:
+            return None
+        if locked < required:
+            return f"V2 开仓挂单锁定价差 {locked} 低于安全线 {required}，撤销未成交限价单"
+        return None
+
+    def _active_entry_required_locked_edge(self, plan: dict[str, Any]) -> Decimal | None:
+        direct = self._plan_decimal(plan, "locked_edge_floor")
+        if direct is not None:
+            return direct
+        actionable = self._plan_decimal(plan, "next_actionable_trigger_edge")
+        if actionable is not None:
+            return actionable + (self._plan_decimal(plan, "mt4_slippage_budget") or Decimal("0"))
+        required = self._plan_decimal(plan, "required_edge") or self._plan_decimal(plan, "threshold")
+        if required is None:
+            return None
+        return required + (self._plan_decimal(plan, "mt4_slippage_budget") or Decimal("0"))
+
+    def _active_order_locked_edge(self, order: OrderUpdate, mt4_quote) -> Decimal | None:
+        if order.side == Side.SELL:
+            return order.price - mt4_quote.ask
+        if order.side == Side.BUY:
+            return mt4_quote.bid - order.price
+        return None
+
+    def _plan_decimal(self, plan: dict[str, Any], key: str) -> Decimal | None:
+        value = plan.get(key)
+        if value is None:
+            return None
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            return None
 
     async def _maybe_place_exit(self, plan_status: dict[str, Any]) -> None:
         pair = self.runtime.open_pair

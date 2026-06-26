@@ -148,6 +148,17 @@ def short_plan(price: str = "101") -> dict:
     }
 
 
+def guarded_short_plan(price: str = "101", locked_floor: str = "2") -> dict:
+    plan = short_plan(price)
+    plan["selected_entry"].update(
+        {
+            "locked_edge_floor": locked_floor,
+            "mt4_slippage_budget": "0",
+        }
+    )
+    return plan
+
+
 def add_plan(price: str = "105", actionable: str | None = None) -> dict:
     plan = {
         "selected_entry": {"ready": False, "reason": "已有持仓"},
@@ -440,6 +451,50 @@ async def test_v2_entry_cancel_sets_requote_cooldown(tmp_path):
 
     executor.entry_requote_until_ms = utc_now_ms() - 1
     await executor.step(short_plan("101"))
+    assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert executor.active_order is not None
+
+
+@pytest.mark.asyncio
+async def test_v2_cancels_unfilled_entry_when_resting_order_locked_edge_turns_bad(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False, REQUOTE_COOLDOWN_MS=0)
+    store = Storage(cfg.sqlite_path)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, store, run)
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+
+    await executor.step(guarded_short_plan("101", locked_floor="2"))
+    assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert executor.active_order is not None
+
+    mt4_tick(mt4, "100.4", "100.6")
+    await executor.step(guarded_short_plan("101", locked_floor="2"))
+
+    assert run.state == StrategyState.IDLE
+    assert executor.active_order is None
+    events = store.get_events(0, utc_now_ms() + 1_000, limit=50)
+    canceled = [event for event in events if event["kind"] == "v2_order_canceled"]
+    assert canceled
+    assert "锁定价差" in canceled[-1]["payload"]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_v2_keeps_unfilled_entry_when_resting_order_locked_edge_still_safe(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", PAPER_AUTO_FILL=False)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+    client.set_quote(Decimal("100"), Decimal("100.2"))
+    mt4_tick(mt4, "98.8", "99")
+
+    await executor.step(guarded_short_plan("101", locked_floor="2"))
+    mt4_tick(mt4, "98.7", "98.9")
+    await executor.step(guarded_short_plan("101", locked_floor="2"))
+
     assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
     assert executor.active_order is not None
 
