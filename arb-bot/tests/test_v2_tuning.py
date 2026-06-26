@@ -79,6 +79,22 @@ def test_entry_model_applies_entry_cooldown_to_projected_frequency():
     assert "3-5单" in model["reason"]
 
 
+def test_entry_model_subtracts_spread_protection_from_exit_target():
+    model = build_entry_model(
+        values=[Decimal("1.0"), Decimal("3.0"), Decimal("1.0"), Decimal("3.0")] * 4,
+        manual_min=Decimal("3.0"),
+        slippage_budget=Decimal("0.3"),
+        exit_follow_budget=Decimal("0.6"),
+        close_profit=Decimal("0.1"),
+        max_hold_minutes=3,
+        min_points=8,
+        spread_protection_budget=Decimal("0.31"),
+    )
+
+    assert model["selected"]["target_exit_spread"] == Decimal("1.99")
+    assert model["selected"]["spread_protection_budget"] == Decimal("0.31")
+
+
 def test_entry_model_falls_back_when_no_reversion_is_proven():
     values = [Decimal(str(item)) for item in range(1, 11)]
 

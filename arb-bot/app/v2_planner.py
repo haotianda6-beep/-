@@ -48,24 +48,26 @@ def build_gold_v2_status(
     exit_follow_budget = _mt4_exit_follow_budget(settings)
     entry_close_profit = _entry_viability_close_profit(settings)
     short_model = build_entry_model(
-        model_short_values,
-        settings.open_min_edge,
-        slippage_budget,
-        exit_follow_budget,
-        entry_close_profit,
-        settings.max_pair_age_minutes,
-        MIN_POINTS,
-        _entry_cooldown_minutes(settings),
+        values=model_short_values,
+        manual_min=settings.open_min_edge,
+        slippage_budget=slippage_budget,
+        exit_follow_budget=exit_follow_budget,
+        close_profit=entry_close_profit,
+        max_hold_minutes=settings.max_pair_age_minutes,
+        min_points=MIN_POINTS,
+        entry_cooldown_minutes=_entry_cooldown_minutes(settings),
+        spread_protection_budget=_model_spread_protection_budget(mt4_quote),
     )
     long_model = build_entry_model(
-        model_long_values,
-        settings.open_min_edge,
-        slippage_budget,
-        exit_follow_budget,
-        entry_close_profit,
-        settings.max_pair_age_minutes,
-        MIN_POINTS,
-        _entry_cooldown_minutes(settings),
+        values=model_long_values,
+        manual_min=settings.open_min_edge,
+        slippage_budget=slippage_budget,
+        exit_follow_budget=exit_follow_budget,
+        close_profit=entry_close_profit,
+        max_hold_minutes=settings.max_pair_age_minutes,
+        min_points=MIN_POINTS,
+        entry_cooldown_minutes=_entry_cooldown_minutes(settings),
+        spread_protection_budget=_model_spread_protection_budget(mt4_quote),
     )
     short_threshold = _entry_threshold(short_range, settings.open_min_edge, short_model)
     long_threshold = _entry_threshold(long_range, settings.open_min_edge, long_model)
@@ -692,6 +694,10 @@ def _entry_viability_close_profit(settings: Settings) -> Decimal:
 
 def _entry_cooldown_minutes(settings: Settings) -> int:
     return max(0, settings.gold_v2_min_entry_interval_ms // 60_000)
+
+
+def _model_spread_protection_budget(mt4_quote: MarketQuote | None) -> Decimal:
+    return live_spread_usd_per_oz(mt4_quote) or Decimal("0")
 
 
 def _mt4_slippage_budget(

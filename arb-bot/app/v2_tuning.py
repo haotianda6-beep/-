@@ -19,6 +19,7 @@ def build_entry_model(
     max_hold_minutes: int,
     min_points: int,
     entry_cooldown_minutes: int = 0,
+    spread_protection_budget: Decimal = Decimal("0"),
 ) -> dict:
     if len(values) < min_points:
         return {
@@ -27,6 +28,7 @@ def build_entry_model(
             "points": len(values),
             "suggested_threshold": None,
             "entry_cooldown_minutes": entry_cooldown_minutes,
+            "spread_protection_budget": spread_protection_budget,
         }
     candidates = _candidate_thresholds(values, manual_min)
     results = [
@@ -38,6 +40,7 @@ def build_entry_model(
             close_profit=close_profit,
             max_hold_minutes=max_hold_minutes,
             entry_cooldown_minutes=entry_cooldown_minutes,
+            spread_protection_budget=spread_protection_budget,
         )
         for threshold in candidates
     ]
@@ -49,6 +52,7 @@ def build_entry_model(
             "points": len(values),
             "suggested_threshold": None,
             "entry_cooldown_minutes": entry_cooldown_minutes,
+            "spread_protection_budget": spread_protection_budget,
             "candidates": results,
         }
     return {
@@ -57,6 +61,7 @@ def build_entry_model(
         "points": len(values),
         "suggested_threshold": selected["threshold"],
         "entry_cooldown_minutes": entry_cooldown_minutes,
+        "spread_protection_budget": spread_protection_budget,
         "selected": selected,
         "candidates": results,
     }
@@ -85,10 +90,14 @@ def _simulate_candidate(
     close_profit: Decimal,
     max_hold_minutes: int,
     entry_cooldown_minutes: int = 0,
+    spread_protection_budget: Decimal = Decimal("0"),
 ) -> dict:
     hold = max(1, max_hold_minutes)
     cooldown = max(0, entry_cooldown_minutes)
-    target_exit = max(Decimal("0"), threshold + slippage_budget - slippage_budget - exit_follow_budget - close_profit)
+    target_exit = max(
+        Decimal("0"),
+        threshold + slippage_budget - slippage_budget - spread_protection_budget - exit_follow_budget - close_profit,
+    )
     wins = 0
     losses = 0
     index = 0
@@ -116,6 +125,7 @@ def _simulate_candidate(
         "win_rate": win_rate,
         "projected_daily_trades": projected_daily_trades,
         "entry_cooldown_minutes": cooldown,
+        "spread_protection_budget": spread_protection_budget,
     }
 
 
