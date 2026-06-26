@@ -1258,12 +1258,13 @@
       function quoteSpreadText(binance, mt4) {
         const binanceMid = (Number(binance.bid) + Number(binance.ask)) / 2;
         const mt4Mid = (Number(mt4.bid) + Number(mt4.ask)) / 2;
+        const maxNormalGoldGap = 4;
         if (
           !Number.isFinite(binanceMid) ||
           !Number.isFinite(mt4Mid) ||
-          Math.abs(binanceMid - mt4Mid) > 100
+          Math.abs(binanceMid - mt4Mid) > maxNormalGoldGap
         ) {
-          return "报价异常：币安与 MT4 中间价相差超过 100 美元，已禁止按该价差判断";
+          return `报价异常：币安与 MT4 中间价相差超过 ${maxNormalGoldGap} 美元，已禁止按该价差判断`;
         }
         return `开仓差 ${fmt(Number(binance.ask) - Number(mt4.ask))} 美元；反向差 ${fmt(Number(mt4.bid) - Number(binance.bid))} 美元`;
       }
