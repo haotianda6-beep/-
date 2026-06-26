@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     entry_confirm_ms: int = Field(default=1500, alias="ENTRY_CONFIRM_MS")
     exit_confirm_ms: int | None = Field(default=None, alias="EXIT_CONFIRM_MS")
     min_order_live_ms: int = Field(default=3000, alias="MIN_ORDER_LIVE_MS")
-    requote_cooldown_ms: int = Field(default=2000, alias="REQUOTE_COOLDOWN_MS")
+    requote_cooldown_ms: int = Field(default=120000, alias="REQUOTE_COOLDOWN_MS")
     risk_exit_confirm_ms: int = Field(default=800, alias="RISK_EXIT_CONFIRM_MS")
     post_exit_reentry_cooldown_ms: int = Field(default=60000, alias="POST_EXIT_REENTRY_COOLDOWN_MS")
     gold_v2_min_entry_interval_ms: int = Field(default=16_200_000, alias="GOLD_V2_MIN_ENTRY_INTERVAL_MS")
