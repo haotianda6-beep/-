@@ -46,6 +46,9 @@ class V2AddMixin:
             self.storage.record_event("v2_add_order_rejected", {"error": str(exc)[:160], "price": str(price)})
             return True
         self.active_order = order
+        clear_order_context = getattr(self, "_clear_active_order_context", None)
+        if clear_order_context:
+            clear_order_context()
         self.order_created_ms = utc_now_ms()
         self.entry_direction = pair.direction
         self.entry_hedge_side = Side(plan["mt4_follow_side"])

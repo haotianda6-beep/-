@@ -62,6 +62,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.repair_existing_qty = Decimal("0")
         self.mt4_exit_block_until_ms = 0
         self.mt4_exit_block_seeded_from_last_error = False
+        self.active_exit_order_risk_active = False
+        self.active_exit_order_risk_reason: str | None = None
 
     async def step(self, plan_status: dict[str, Any]) -> None:
         if self._process_mt4_reports():
@@ -120,6 +122,8 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         self.repair_existing_qty = Decimal("0")
         self.mt4_exit_block_until_ms = 0
         self.mt4_exit_block_seeded_from_last_error = False
+        self.active_exit_order_risk_active = False
+        self.active_exit_order_risk_reason = None
 
     async def cancel_active_order(self, reason: str) -> None:
         if not self.active_order:
@@ -154,6 +158,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         except Exception as exc:  # noqa: BLE001
             self.storage.record_event("v2_order_cancel_failed", {"reason": reason, "error": str(exc)[:160]})
         self.active_order = None
+        self._clear_active_order_context()
         self.runtime.state = StrategyState.PAIR_OPEN if self.runtime.open_pair else StrategyState.IDLE
 
     def execution_plan_status(self) -> ExecutionPlanStatus:
@@ -187,6 +192,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             self.storage.record_event("v2_entry_order_rejected", {"error": str(exc)[:160], "price": str(price)})
             return
         self.active_order = order
+        self._clear_active_order_context()
         self.order_created_ms = utc_now_ms()
         self.entry_direction = PairDirection(plan["direction"])
         self.entry_hedge_side = Side(plan["mt4_follow_side"])
@@ -269,6 +275,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             self.runtime.last_error = None
         self.exit_target_spread = target
         risk_exit_active = self._risk_exit_active(plan_status)
+        risk_exit_reason = self._risk_exit_reason(plan_status) if risk_exit_active else None
         if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
             current = quote.ask - mt4_quote.bid
             if current > target and not risk_exit_active:
@@ -301,10 +308,23 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             self.storage.record_event("v2_exit_order_rejected", {"error": str(exc)[:160], "price": str(price)})
             return
         self.active_order = order
+        self.active_exit_order_risk_active = risk_exit_active
+        self.active_exit_order_risk_reason = risk_exit_reason
         self.order_created_ms = utc_now_ms()
         self.exit_ready_since_ms = 0
         self.runtime.state = StrategyState.QUOTING_BINANCE_EXIT
-        self.storage.record_event("v2_exit_order", order.model_dump(mode="json"))
+        self.storage.record_event(
+            "v2_exit_order",
+            {
+                **order.model_dump(mode="json"),
+                "exit_context": {
+                    "risk_exit_active": risk_exit_active,
+                    "risk_exit_reason": risk_exit_reason,
+                    "planned_net": str(self._planned_exit_net(plan_status)) if self._planned_exit_net(plan_status) is not None else None,
+                    "minimum_net": str(self._minimum_exit_net(pair)),
+                },
+            },
+        )
 
     async def _check_exit_order(self, plan_status: dict[str, Any]) -> None:
         if not self.active_order:
@@ -314,11 +334,13 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         if order.status in {OrderStatus.CANCELED, OrderStatus.EXPIRED} and order.executed_qty <= 0:
             self.storage.record_event("v2_exit_order_terminal", order.model_dump(mode="json"))
             self.active_order = None
+            self._clear_active_order_context()
             self.runtime.state = StrategyState.PAIR_OPEN if self.runtime.open_pair else StrategyState.IDLE
             return
         if order.status == OrderStatus.REJECTED:
             self.storage.record_event("v2_exit_post_only_rejected", order.model_dump(mode="json"))
             self.active_order = None
+            self._clear_active_order_context()
             self.runtime.state = StrategyState.PAIR_OPEN
             return
         if order.status == OrderStatus.FILLED:
@@ -345,6 +367,9 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
             await self.cancel_active_order(f"V2 平仓报价异常，撤销未成交限价单：{gap_reason}")
             return
         risk_exit_active = self._risk_exit_active(plan_status)
+        if self.active_exit_order_risk_active and not risk_exit_active:
+            await self.cancel_active_order("V2 风控平仓条件已解除，撤销未成交限价单")
+            return
         guard_reason = self._exit_profit_guard_reason(pair, self.active_order.price, mt4_quote, plan_status, risk_exit_active)
         if guard_reason:
             await self.cancel_active_order(guard_reason)
@@ -373,6 +398,20 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
 
     def _risk_exit_active(self, plan_status: dict[str, Any]) -> bool:
         return self._loss_limit_active(plan_status) or self._negative_swap_exit_active(plan_status)
+
+    def _risk_exit_reason(self, plan_status: dict[str, Any]) -> str | None:
+        exit_plan = (plan_status or {}).get("exit_plan") or {}
+        loss_limit = exit_plan.get("loss_limit") or {}
+        if loss_limit.get("active"):
+            return str(loss_limit.get("reason") or "最大亏损触发")
+        negative_swap = exit_plan.get("negative_swap") or {}
+        if negative_swap.get("active"):
+            return str(negative_swap.get("reason") or "负隔夜费风险触发")
+        return None
+
+    def _clear_active_order_context(self) -> None:
+        self.active_exit_order_risk_active = False
+        self.active_exit_order_risk_reason = None
 
     def _exit_profit_guard_reason(
         self,
@@ -556,6 +595,7 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
 
     def start_binance_restore(self, order: OrderUpdate, existing_qty: Decimal) -> None:
         self.active_order = order
+        self._clear_active_order_context()
         self.order_created_ms = utc_now_ms()
         self.repairing_binance_only = True
         self.repair_existing_qty = max(Decimal("0"), existing_qty)

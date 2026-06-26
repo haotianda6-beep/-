@@ -15,6 +15,9 @@ class V2CommonMixin:
             self._recover("币安限价单已结束但存在成交数量，进入自动恢复流程")
             return
         self.active_order = None
+        clear_order_context = getattr(self, "_clear_active_order_context", None)
+        if clear_order_context:
+            clear_order_context()
         self.runtime.state = StrategyState.PAIR_OPEN if self.runtime.open_pair else StrategyState.IDLE
 
     def _check_mt4_timeout(self, started_ms: int, message: str) -> None:
