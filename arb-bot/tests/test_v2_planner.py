@@ -426,6 +426,28 @@ def test_v2_short_order_price_keeps_threshold_and_slippage_budget(tmp_path):
     assert status["short_entry"]["expected_locked_edge"] == Decimal("3.6")
 
 
+def test_v2_exit_follow_budget_uses_learned_mt4_close_slippage(tmp_path):
+    cfg = settings(tmp_path, MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("0"))
+    store = Storage(cfg.sqlite_path)
+    store.record_event("v2_pair_pnl_recorded", {"mt4_close_adverse_slippage": "0.95"})
+    mt4_bars, binance_bars = recent_bars([Decimal("1"), Decimal("2"), Decimal("3"), Decimal("4")] * 3)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.0"), ask=Decimal("4003.2")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+    )
+
+    assert status["mt4_exit_follow_budget"] == Decimal("0.95")
+    assert status["short_entry"]["mt4_exit_follow_budget"] == Decimal("0.95")
+
+
 def test_v2_slippage_budget_includes_recent_mt4_movement(tmp_path):
     cfg = settings(tmp_path, MT4_SLIPPAGE_POINTS=0)
     store = Storage(cfg.sqlite_path)

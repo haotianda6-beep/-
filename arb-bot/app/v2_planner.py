@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
 from app.config import Settings
+from app.execution_slippage import mt4_close_slippage_budget_usd_per_oz
 from app.models import ExchangeFilters, HistoryBar, MarketQuote, OpenPair, PairDirection, PositionMetrics, Side, utc_now_ms
 from app.mt4_costs import live_spread_usd_per_oz, recent_move_budget_usd_per_oz, slippage_budget_usd_per_oz
 from app.mt4_rollover import normalize_mt4_rollover_ms
@@ -45,7 +46,7 @@ def build_gold_v2_status(
     model_short_values, model_long_values, _ = _spread_values(mt4_model_bars, binance_bars)
     short_range, long_range = _range(short_values, discarded), _range(long_values, discarded)
     slippage_budget = _mt4_slippage_budget(settings, mt4_quote, mt4_bars, mt4_tick_move_budget)
-    exit_follow_budget = _mt4_exit_follow_budget(settings)
+    exit_follow_budget = _mt4_exit_follow_budget(settings, storage, now_ms)
     entry_close_profit = _entry_viability_close_profit(settings)
     short_model = build_entry_model(
         values=model_short_values,
@@ -752,8 +753,10 @@ def _mt4_slippage_budget(
     return base + recent
 
 
-def _mt4_exit_follow_budget(settings: Settings) -> Decimal:
-    return Decimal(settings.mt4_slippage_points) * XAU_POINT_VALUE + settings.mt4_close_extra_buffer_usd
+def _mt4_exit_follow_budget(settings: Settings, storage: Storage, now_ms: int) -> Decimal:
+    configured = Decimal(settings.mt4_slippage_points) * XAU_POINT_VALUE + settings.mt4_close_extra_buffer_usd
+    learned = mt4_close_slippage_budget_usd_per_oz(storage, now_ms)
+    return max(configured, learned)
 
 
 def _mt4_recent_move_budget(mt4_bars: list[HistoryBar]) -> Decimal:

@@ -1,0 +1,44 @@
+from __future__ import annotations
+
+from decimal import Decimal, InvalidOperation
+
+from app.storage import Storage
+
+SLIPPAGE_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000
+MAX_LEARNED_SLIPPAGE_USD_PER_OZ = Decimal("2")
+
+
+def mt4_close_slippage_budget_usd_per_oz(
+    storage: Storage,
+    now_ms: int,
+    percentile: int = 80,
+    limit: int = 200,
+) -> Decimal:
+    try:
+        events = storage.get_events(now_ms - SLIPPAGE_LOOKBACK_MS, now_ms + 1000, limit=limit)
+    except Exception:  # noqa: BLE001
+        return Decimal("0")
+    values: list[Decimal] = []
+    for event in events:
+        if event.get("kind") != "v2_pair_pnl_recorded":
+            continue
+        payload = event.get("payload") or {}
+        value = _positive_decimal(payload.get("mt4_close_adverse_slippage"))
+        if value is not None:
+            values.append(value)
+    if not values:
+        return Decimal("0")
+    values.sort()
+    bounded_percentile = min(max(percentile, 0), 100)
+    index = ((len(values) - 1) * bounded_percentile) // 100
+    return min(values[index], MAX_LEARNED_SLIPPAGE_USD_PER_OZ)
+
+
+def _positive_decimal(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    return parsed if parsed > 0 else None

@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 from app.binance_client import BinanceBaseClient, BinanceError, BinanceFuturesClient, PaperBinanceClient
 from app.config import Settings, existing_env_paths, load_settings, update_local_config_file, update_mode_file
+from app.execution_slippage import mt4_close_slippage_budget_usd_per_oz
 from app.logger import setup_logging
 from app.history import build_spread_analysis, fetch_binance_klines
 from app.live_reconcile import (
@@ -2278,7 +2279,8 @@ def _exit_follow_buffer_usd_per_oz(swap_info, mt4_bars: list[HistoryBar] | None 
     )
     if recent_move is None:
         recent_move = Decimal("0")
-    return configured + recent_move
+    learned = mt4_close_slippage_budget_usd_per_oz(storage, utc_now_ms())
+    return max(configured + recent_move, learned)
 
 
 def _estimate_binance_funding(pair, qty: Decimal, funding, quote: MarketQuote | None) -> Decimal | None:

@@ -128,6 +128,7 @@ def test_exit_follow_buffer_uses_normal_follow_window_not_timeout(monkeypatch):
     monkeypatch.setattr(main.settings, "mt4_slippage_points", 0)
     monkeypatch.setattr(main.settings, "mt4_close_extra_buffer_usd", Decimal("0.80"))
     monkeypatch.setattr(main.mt4_bridge, "recent_move_budget", fake_recent_move_budget)
+    monkeypatch.setattr(main, "mt4_close_slippage_budget_usd_per_oz", lambda *args, **kwargs: Decimal("0"))
     swap_info = SimpleNamespace(point=Decimal("0.01"))
 
     assert _exit_follow_buffer_usd_per_oz(swap_info) == Decimal("1.00")
@@ -139,9 +140,21 @@ def test_exit_follow_buffer_does_not_fallback_to_slow_bar_move(monkeypatch):
     monkeypatch.setattr(main.settings, "mt4_slippage_points", 0)
     monkeypatch.setattr(main.settings, "mt4_close_extra_buffer_usd", Decimal("0.80"))
     monkeypatch.setattr(main.mt4_bridge, "recent_move_budget", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main, "mt4_close_slippage_budget_usd_per_oz", lambda *args, **kwargs: Decimal("0"))
     swap_info = SimpleNamespace(point=Decimal("0.01"))
 
     assert _exit_follow_buffer_usd_per_oz(swap_info, mt4_bars=[]) == Decimal("0.80")
+
+
+def test_exit_follow_buffer_uses_learned_mt4_close_slippage(monkeypatch):
+    monkeypatch.setattr(main.settings, "max_hedge_delay_ms", 10_000)
+    monkeypatch.setattr(main.settings, "mt4_slippage_points", 0)
+    monkeypatch.setattr(main.settings, "mt4_close_extra_buffer_usd", Decimal("0.80"))
+    monkeypatch.setattr(main.mt4_bridge, "recent_move_budget", lambda *args, **kwargs: Decimal("0.10"))
+    monkeypatch.setattr(main, "mt4_close_slippage_budget_usd_per_oz", lambda *args, **kwargs: Decimal("1.25"))
+    swap_info = SimpleNamespace(point=Decimal("0.01"))
+
+    assert _exit_follow_buffer_usd_per_oz(swap_info, mt4_bars=[]) == Decimal("1.25")
 
 
 def test_mt4_swap_estimate_uses_triple_swap_weekday(monkeypatch):
