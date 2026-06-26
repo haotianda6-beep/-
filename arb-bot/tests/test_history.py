@@ -27,6 +27,23 @@ def test_storage_upserts_and_reads_history_bars(tmp_path):
     assert store.bar_count("mt4", "XAUUSD", "1m") == 2
 
 
+def test_storage_aggregates_tick_bar_open_high_low_close(tmp_path):
+    store = Storage(tmp_path / "test.sqlite3")
+
+    store.upsert_tick_bar("mt4", "XAUUSD", "1m", 60_000, Decimal("4000.10"))
+    store.upsert_tick_bar("mt4", "XAUUSD", "1m", 60_000, Decimal("4001.20"))
+    store.upsert_tick_bar("mt4", "XAUUSD", "1m", 60_000, Decimal("3999.80"))
+    store.upsert_tick_bar("mt4", "XAUUSD", "1m", 60_000, Decimal("4000.60"))
+
+    saved = store.get_bars("mt4", "XAUUSD", "1m", 0, 120_000)
+
+    assert len(saved) == 1
+    assert saved[0].open == Decimal("4000.10")
+    assert saved[0].high == Decimal("4001.20")
+    assert saved[0].low == Decimal("3999.80")
+    assert saved[0].close == Decimal("4000.60")
+
+
 def test_storage_upserts_and_reads_mt4_closed_orders(tmp_path):
     store = Storage(tmp_path / "test.sqlite3")
     order = Mt4ClosedOrder(

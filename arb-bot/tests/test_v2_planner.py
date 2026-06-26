@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from app.config import Settings
 from app.models import ExchangeFilters, HistoryBar, MarketQuote, OpenPair, PairDirection, PositionMetrics, utc_now_ms
 from app.storage import Storage
-from app.v2_planner import build_gold_v2_status
+from app.v2_planner import _entry_threshold, _spread_values, build_gold_v2_status
 
 
 def settings(tmp_path, **kwargs) -> Settings:
@@ -27,7 +27,11 @@ def filters() -> ExchangeFilters:
 
 
 def bar(open_time_ms: int, close: Decimal) -> HistoryBar:
-    return HistoryBar(open_time_ms=open_time_ms, open=close, high=close, low=close, close=close)
+    return HistoryBar(open_time_ms=open_time_ms, open=close, high=close + Decimal("0.01"), low=close - Decimal("0.01"), close=close)
+
+
+def ranged_bar(open_time_ms: int, close: Decimal, low: Decimal, high: Decimal) -> HistoryBar:
+    return HistoryBar(open_time_ms=open_time_ms, open=close, high=high, low=low, close=close)
 
 
 def recent_bars(diffs: list[Decimal]) -> tuple[list[HistoryBar], list[HistoryBar]]:
@@ -58,7 +62,8 @@ def test_v2_uses_upper_range_threshold_from_recent_spreads(tmp_path):
         metrics=PositionMetrics(),
     )
 
-    assert status["short_entry"]["threshold"] == Decimal("7.30")
+    assert status["short_range"]["discarded"] == 2
+    assert status["short_entry"]["threshold"] == Decimal("5.90")
     assert status["short_entry"]["ready"] is True
     assert status["selected_entry"]["direction"] == PairDirection.BINANCE_SHORT_MT4_LONG.value
 
@@ -214,6 +219,38 @@ def test_v2_ignores_unreasonable_historical_bar_gap(tmp_path):
     assert status["short_range"]["discarded"] == 2
     assert status["short_range"]["high"] == Decimal("5")
     assert status["short_entry"]["threshold"] == Decimal("4.1")
+
+
+def test_v2_ignores_stale_and_volatile_training_bars():
+    base = 1_800_000_000_000
+    mt4_bars = [
+        ranged_bar(base, Decimal("4000"), Decimal("4000"), Decimal("4000")),
+        ranged_bar(base + 60_000, Decimal("4000"), Decimal("4000"), Decimal("4000")),
+        ranged_bar(base + 120_000, Decimal("4000"), Decimal("3997"), Decimal("4002")),
+        ranged_bar(base + 180_000, Decimal("4000"), Decimal("3999"), Decimal("4001")),
+    ]
+    binance_bars = [
+        ranged_bar(base, Decimal("4003"), Decimal("4002"), Decimal("4004")),
+        ranged_bar(base + 60_000, Decimal("4003"), Decimal("4002"), Decimal("4004")),
+        ranged_bar(base + 120_000, Decimal("4003"), Decimal("4002"), Decimal("4004")),
+        ranged_bar(base + 180_000, Decimal("4003"), Decimal("4002"), Decimal("4004")),
+    ]
+
+    short, long, discarded = _spread_values(mt4_bars, binance_bars)
+
+    assert short == [Decimal("3"), Decimal("3")]
+    assert long == [Decimal("-3"), Decimal("-3")]
+    assert discarded == 2
+
+
+def test_v2_caps_model_threshold_to_recent_tradable_range():
+    threshold = _entry_threshold(
+        {"points": 30, "low": Decimal("1.89"), "high": Decimal("3.42"), "latest": Decimal("2.83")},
+        Decimal("1.50"),
+        {"suggested_threshold": Decimal("12.37")},
+    )
+
+    assert threshold == Decimal("2.9610")
 
 
 def test_v2_blocks_entry_when_next_triple_swap_makes_exit_unsafe(tmp_path):

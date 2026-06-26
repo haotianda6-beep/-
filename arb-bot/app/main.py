@@ -478,21 +478,7 @@ def _record_mt4_tick_bar(quote: MarketQuote) -> None:
         return
     _mt4_tick_bar_last_saved_ms = now
     open_time_ms = quote.timestamp_ms - (quote.timestamp_ms % 60_000)
-    price = quote.bid
-    storage.upsert_bars(
-        "mt4",
-        quote.symbol,
-        "1m",
-        [
-            HistoryBar(
-                open_time_ms=open_time_ms,
-                open=price,
-                high=price,
-                low=price,
-                close=price,
-            )
-        ],
-    )
+    storage.upsert_tick_bar("mt4", quote.symbol, "1m", open_time_ms, quote.bid)
 
 
 @app.put("/config", response_model=RuntimeConfig)

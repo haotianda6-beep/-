@@ -20,6 +20,9 @@ DEFAULT_SLIPPAGE_BUDGET = Decimal("0.30")
 XAU_POINT_VALUE = Decimal("0.01")
 MT4_MOVE_PERCENTILE = 70
 ENTRY_AGED_PROFIT_WINDOW_MINUTES = 120
+MAX_TRAINING_MT4_BAR_RANGE = Decimal("4")
+MAX_TRAINING_BINANCE_BAR_RANGE = Decimal("5")
+MAX_TRAINING_ABS_SPREAD = Decimal("8")
 
 
 def build_gold_v2_status(
@@ -103,7 +106,7 @@ def build_gold_v2_status(
         "reason": "V2 执行器已解锁，会按币安全限价和 MT4 跟随执行。" if not settings.gold_v2_observation_only else "新版七步方案处于观察阶段，只计算机会和挂单位置，不会自动下单。",
         "lookback_minutes": 30,
         "entry_model_lookback_minutes": 2880,
-        "threshold_rule": "优先按最近样本估算70%以上回归胜率和日开单次数；证据不足时取最近30分钟区间70%位置，并且不能低于手动最小开仓价差。",
+        "threshold_rule": "先剔除MT4停盘平线和剧烈跳价样本；长周期模型负责胜率，实际触发位不能高于最近30分钟可交易高点，避免历史尖刺把阈值抬离当前市场。",
         "entry_model": {"short": short_model, "long": long_model},
         "mt4_slippage_budget": slippage_budget,
         "mt4_exit_follow_budget": exit_follow_budget,
@@ -130,18 +133,39 @@ def _spread_values(mt4_bars: list[HistoryBar], binance_bars: list[HistoryBar]) -
     short_values: list[Decimal] = []
     long_values: list[Decimal] = []
     discarded = 0
+    previous_mt4_close: Decimal | None = None
     for mt4_bar in mt4_bars:
         aligned = mt4_bar.open_time_ms - (mt4_bar.open_time_ms % 60_000)
         binance_bar = binance_by_time.get(aligned)
         if not binance_bar:
+            previous_mt4_close = mt4_bar.close
             continue
         diff = binance_bar.close - mt4_bar.close
-        if abs(diff) > MAX_REASONABLE_XAU_MID_GAP:
+        if _untradable_training_bar(mt4_bar, binance_bar, diff, previous_mt4_close):
             discarded += 1
+            previous_mt4_close = mt4_bar.close
             continue
         short_values.append(diff)
         long_values.append(-diff)
+        previous_mt4_close = mt4_bar.close
     return short_values, long_values, discarded
+
+
+def _untradable_training_bar(
+    mt4_bar: HistoryBar,
+    binance_bar: HistoryBar,
+    diff: Decimal,
+    previous_mt4_close: Decimal | None = None,
+) -> bool:
+    if abs(diff) > min(MAX_REASONABLE_XAU_MID_GAP, MAX_TRAINING_ABS_SPREAD):
+        return True
+    if mt4_bar.high <= mt4_bar.low and previous_mt4_close == mt4_bar.close:
+        return True
+    if mt4_bar.high > mt4_bar.low and mt4_bar.high - mt4_bar.low > MAX_TRAINING_MT4_BAR_RANGE:
+        return True
+    if binance_bar.high > binance_bar.low and binance_bar.high - binance_bar.low > MAX_TRAINING_BINANCE_BAR_RANGE:
+        return True
+    return False
 
 
 def _range(values: list[Decimal], discarded: int = 0) -> dict:
@@ -151,8 +175,17 @@ def _range(values: list[Decimal], discarded: int = 0) -> dict:
 
 
 def _entry_threshold(spread_range: dict, manual_min: Decimal, model: dict | None = None) -> Decimal:
+    fallback = _range_threshold(spread_range, manual_min)
     if model and model.get("suggested_threshold") is not None:
-        return max(manual_min, Decimal(str(model["suggested_threshold"])))
+        model_threshold = max(manual_min, Decimal(str(model["suggested_threshold"])))
+        recent_high = Decimal(str(spread_range["high"])) if spread_range.get("high") is not None else None
+        if recent_high is not None and spread_range.get("points", 0) >= MIN_POINTS and model_threshold > recent_high:
+            return fallback
+        return model_threshold
+    return fallback
+
+
+def _range_threshold(spread_range: dict, manual_min: Decimal) -> Decimal:
     if spread_range["points"] < MIN_POINTS or spread_range["low"] is None or spread_range["high"] is None:
         return manual_min
     low = Decimal(str(spread_range["low"]))

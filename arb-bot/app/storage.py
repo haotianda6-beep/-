@@ -173,6 +173,40 @@ class Storage:
             )
         return len(rows)
 
+    def upsert_tick_bar(self, source: str, symbol: str, interval: str, open_time_ms: int, price: Decimal) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT open, high, low
+                FROM market_bars
+                WHERE source = ? AND symbol = ? AND interval = ? AND open_time_ms = ?
+                """,
+                (source, symbol, interval, int(open_time_ms)),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    """
+                    INSERT INTO market_bars (
+                        source, symbol, interval, open_time_ms, open, high, low, close, volume, received_ts
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                    """,
+                    (source, symbol, interval, int(open_time_ms), str(price), str(price), str(price), str(price), now),
+                )
+                return
+            open_price = Decimal(row[0])
+            high = max(Decimal(row[1]), price)
+            low = min(Decimal(row[2]), price)
+            conn.execute(
+                """
+                UPDATE market_bars
+                SET open = ?, high = ?, low = ?, close = ?, received_ts = ?
+                WHERE source = ? AND symbol = ? AND interval = ? AND open_time_ms = ?
+                """,
+                (str(open_price), str(high), str(low), str(price), now, source, symbol, interval, int(open_time_ms)),
+            )
+
     def get_bars(
         self,
         source: str,
