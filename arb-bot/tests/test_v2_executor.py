@@ -114,13 +114,13 @@ def add_plan_temporarily_blocked_after_trigger(reason: str = "补仓后仍不安
     }
 
 
-def add_plan_waiting_actionable_trigger() -> dict:
+def add_plan_reached_base_trigger_before_actionable_price() -> dict:
     return {
         "selected_entry": {"ready": False, "reason": "已有持仓"},
         "add_plan": {
             "enabled": True,
-            "ready": False,
-            "reason": "当前价差未到补仓安全触发位。",
+            "ready": True,
+            "reason": "达到补仓触发位，可以挂补仓限价单。",
             "base_edge": "2",
             "current_edge": "3.2",
             "next_trigger_edge": "3",
@@ -1545,7 +1545,7 @@ async def test_v2_add_confirm_survives_temporary_safety_block(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_v2_add_confirm_waits_for_actionable_trigger(tmp_path):
+async def test_v2_add_confirm_starts_at_base_trigger_and_quotes_protected_price(tmp_path):
     cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", MAX_ADD_COUNT=1, ENTRY_CONFIRM_MS=1500)
     client = PaperBinanceClient(cfg)
     mt4 = Mt4Bridge(cfg)
@@ -1563,14 +1563,7 @@ async def test_v2_add_confirm_waits_for_actionable_trigger(tmp_path):
     )
     executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
 
-    await executor.step(add_plan_waiting_actionable_trigger())
-
-    assert executor.add_ready_since_ms == 0
-    assert run.state == StrategyState.PAIR_OPEN
-    assert executor.active_order is None
-    assert run.last_error is None
-
-    await executor.step(add_plan_actionable_after_base_trigger())
+    await executor.step(add_plan_reached_base_trigger_before_actionable_price())
 
     assert executor.add_ready_since_ms > 0
     assert run.state == StrategyState.PAIR_OPEN
@@ -1578,11 +1571,12 @@ async def test_v2_add_confirm_waits_for_actionable_trigger(tmp_path):
     assert run.last_error.startswith("V2 补仓价差已触发，确认中")
 
     executor.add_ready_since_ms = utc_now_ms() - cfg.entry_confirm_ms
-    await executor.step(add_plan_actionable_after_base_trigger())
+    await executor.step(add_plan_reached_base_trigger_before_actionable_price())
 
     assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
     assert executor.active_order is not None
     assert executor.adding_to_pair is True
+    assert executor.active_order.price == Decimal("105")
 
 
 @pytest.mark.asyncio

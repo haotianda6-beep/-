@@ -66,7 +66,7 @@ class V2AddMixin:
             return False
         try:
             current = Decimal(str(plan.get("current_edge")))
-            trigger = Decimal(str(plan.get("next_actionable_trigger_edge") or plan.get("next_trigger_edge")))
+            trigger = Decimal(str(plan.get("next_trigger_edge")))
         except Exception:
             return bool(plan.get("ready"))
         return current >= trigger

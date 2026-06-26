@@ -17,6 +17,7 @@ RANGE_FACTOR = Decimal("0.70")
 DEFAULT_SLIPPAGE_BUDGET = Decimal("0.30")
 XAU_POINT_VALUE = Decimal("0.01")
 MT4_MOVE_PERCENTILE = 70
+ENTRY_AGED_PROFIT_WINDOW_MINUTES = 30
 
 
 def build_gold_v2_status(
@@ -37,6 +38,7 @@ def build_gold_v2_status(
     long_threshold = _entry_threshold(long_range, settings.open_min_edge)
     slippage_budget = _mt4_slippage_budget(settings, mt4_quote, mt4_bars, mt4_tick_move_budget)
     exit_follow_budget = _mt4_exit_follow_budget(settings)
+    entry_close_profit = _entry_viability_close_profit(settings)
     move_budget_source = "实时tick" if mt4_tick_move_budget is not None else "1分钟K线"
 
     short_plan = _entry_plan(
@@ -51,6 +53,7 @@ def build_gold_v2_status(
         point_count=short_range["points"],
         spread_range=short_range,
         metrics=metrics,
+        entry_close_profit=entry_close_profit,
     )
     long_plan = _entry_plan(
         direction=PairDirection.BINANCE_LONG_MT4_SHORT,
@@ -64,6 +67,7 @@ def build_gold_v2_status(
         point_count=long_range["points"],
         spread_range=long_range,
         metrics=metrics,
+        entry_close_profit=entry_close_profit,
     )
     selected = _selected_entry_plan(short_plan, long_plan)
 
@@ -141,6 +145,7 @@ def _entry_plan(
     point_count: int,
     spread_range: dict,
     metrics: PositionMetrics | None,
+    entry_close_profit: Decimal,
 ) -> dict:
     qty = max(_round_down(settings.target_oz, filters.qty_step), filters.min_qty)
     if not binance or not mt4:
@@ -168,6 +173,7 @@ def _entry_plan(
             point_count=point_count,
             spread_range=spread_range,
             close_profit=settings.close_profit_usd_per_oz,
+            entry_close_profit=entry_close_profit,
             settlement_adjustment=_entry_settlement_adjustment(settings, direction, qty, binance, metrics),
         )
     current_edge = mt4.bid - binance.bid
@@ -186,6 +192,7 @@ def _entry_plan(
         point_count=point_count,
         spread_range=spread_range,
         close_profit=settings.close_profit_usd_per_oz,
+        entry_close_profit=entry_close_profit,
         settlement_adjustment=_entry_settlement_adjustment(settings, direction, qty, binance, metrics),
     )
 
@@ -219,18 +226,20 @@ def _plan_dict(
     point_count: int,
     spread_range: dict,
     close_profit: Decimal,
+    entry_close_profit: Decimal,
     settlement_adjustment: dict | None = None,
 ) -> dict:
-    required_edge = threshold + slippage_budget
-    ready = current_edge >= required_edge
+    visible_trigger_edge = threshold
+    locked_edge_floor = threshold + slippage_budget
+    ready = current_edge >= visible_trigger_edge
     locked_edge = limit_price - mt4_reference_price if binance_side == Side.SELL else mt4_reference_price - limit_price
     adjustment_value = Decimal("0")
     if settlement_adjustment:
         adjustment_value = Decimal(str(settlement_adjustment["total"]))
-    estimated_exit_target = max(Decimal("0"), locked_edge + (adjustment_value / qty) - slippage_budget - exit_follow_budget - close_profit)
+    estimated_exit_target = max(Decimal("0"), locked_edge + (adjustment_value / qty) - slippage_budget - exit_follow_budget - entry_close_profit)
     recent_low = Decimal(str(spread_range["low"])) if spread_range.get("low") is not None else None
     exit_viable = recent_low is None or recent_low <= estimated_exit_target
-    reason = "达到安全入场边际，可以进入小仓验证队列" if ready else f"当前价差未到安全入场边际 {required_edge}"
+    reason = "达到挂单触发位，可以挂币安限价等更优成交" if ready else f"当前价差未到挂单触发位 {visible_trigger_edge}"
     if ready and not exit_viable:
         ready = False
         reason = f"达到入场阈值，但最近30分钟最低价差 {recent_low} > 扣除下次资金费和隔夜费后的安全平仓价差 {estimated_exit_target}，暂不开仓"
@@ -243,7 +252,9 @@ def _plan_dict(
         "reason": reason,
         "current_edge": current_edge,
         "threshold": threshold,
-        "required_edge": required_edge,
+        "required_edge": visible_trigger_edge,
+        "visible_trigger_edge": visible_trigger_edge,
+        "locked_edge_floor": locked_edge_floor,
         "quantity_oz": qty,
         "binance_side": binance_side.value,
         "binance_price": limit_price,
@@ -252,6 +263,8 @@ def _plan_dict(
         "estimated_exit_target_spread": estimated_exit_target,
         "recent_low_spread": recent_low,
         "exit_viable": exit_viable,
+        "initial_close_profit_usd_per_oz": close_profit,
+        "entry_viability_close_profit_usd_per_oz": entry_close_profit,
         "next_settlement_adjustment": settlement_adjustment,
         "mt4_reference_price": mt4_reference_price,
         "mt4_slippage_budget": slippage_budget,
@@ -268,7 +281,7 @@ def _entry_settlement_adjustment(
 ) -> dict | None:
     if not metrics or qty <= 0:
         return None
-    funding = _entry_binance_funding_estimate(direction, qty, binance, metrics)
+    funding = _entry_binance_funding_estimate(settings, direction, qty, binance, metrics)
     swap = _entry_mt4_swap_estimate(settings, direction, qty, metrics)
     if funding is None and swap is None:
         return None
@@ -290,12 +303,15 @@ def _stale_rollover_reason(metrics: PositionMetrics | None) -> str | None:
 
 
 def _entry_binance_funding_estimate(
+    settings: Settings,
     direction: PairDirection,
     qty: Decimal,
     binance: MarketQuote | None,
     metrics: PositionMetrics,
 ) -> Decimal | None:
     if not binance or metrics.binance_funding_rate is None:
+        return None
+    if not _entry_expected_to_cross_settlement(settings, metrics.binance_next_funding_time_ms):
         return None
     amount = binance.mid * qty * metrics.binance_funding_rate
     if direction == PairDirection.BINANCE_LONG_MT4_SHORT:
@@ -315,9 +331,19 @@ def _entry_mt4_swap_estimate(
     next_rollover_time_ms = normalize_mt4_rollover_ms(metrics.mt4_next_rollover_time_ms)
     if metrics.mt4_next_rollover_time_ms is not None and next_rollover_time_ms is None and metrics.mt4_next_rollover_time_ms <= utc_now_ms():
         return None
+    if not _entry_expected_to_cross_settlement(settings, next_rollover_time_ms):
+        return None
     lots = qty / settings.mt4_lot_size_oz
     multiplier = _entry_mt4_swap_multiplier(settings, next_rollover_time_ms)
     return raw * lots * multiplier
+
+
+def _entry_expected_to_cross_settlement(settings: Settings, settlement_time_ms: int | None) -> bool:
+    if settlement_time_ms is None:
+        return False
+    if settings.max_pair_age_minutes <= 0:
+        return True
+    return settlement_time_ms - utc_now_ms() <= settings.max_pair_age_minutes * 60_000
 
 
 def _entry_mt4_swap_multiplier(settings: Settings, next_rollover_time_ms: int | None) -> Decimal:
@@ -486,7 +512,7 @@ def _add_plan(
     if not binance or not mt4:
         return {**data, "ready": False, "reason": "等待币安和MT4同时返回报价。"}
     qty = data["quantity_oz"]
-    close_profit = metrics.close_profit_usd_per_oz if metrics and metrics.close_profit_usd_per_oz is not None else settings.close_profit_usd_per_oz
+    close_profit = metrics.close_profit_usd_per_oz if metrics and metrics.close_profit_usd_per_oz is not None else _entry_viability_close_profit(settings)
     current_avg_edge = metrics.actual_entry_spread if metrics and metrics.actual_entry_spread is not None else pair.base_edge
     required_blended_edge = close_profit + exit_follow_budget
     required_locked_edge = None
@@ -511,10 +537,10 @@ def _add_plan(
     if current_avg_edge is not None:
         blended_edge = ((current_avg_edge * pair.quantity_oz) + (locked * qty)) / (pair.quantity_oz + qty)
         exit_viable = blended_edge >= required_blended_edge and blended_edge >= current_avg_edge
-    ready = edge >= actionable_trigger and exit_viable
+    ready = edge >= trigger and exit_viable
     reason = "达到补仓触发位，可以挂补仓限价单。"
-    if edge < actionable_trigger:
-        reason = "当前价差未到补仓安全触发位。"
+    if edge < trigger:
+        reason = "当前价差未到补仓阶梯触发位。"
     elif not exit_viable:
         reason = "补仓后均价差仍不足以覆盖平仓缓冲和目标利润，暂不补仓。"
     return {**data,
@@ -540,6 +566,12 @@ def _add_base_edge(pair: OpenPair, metrics: PositionMetrics | None) -> Decimal |
     if pair.add_count == 0 and metrics and metrics.actual_entry_spread is not None:
         return metrics.actual_entry_spread
     return pair.base_edge or (metrics.actual_entry_spread if metrics else None)
+
+
+def _entry_viability_close_profit(settings: Settings) -> Decimal:
+    if 0 < settings.max_pair_age_minutes <= ENTRY_AGED_PROFIT_WINDOW_MINUTES:
+        return min(settings.close_profit_usd_per_oz, settings.aged_close_profit_usd_per_oz)
+    return settings.close_profit_usd_per_oz
 
 
 def _mt4_slippage_budget(
