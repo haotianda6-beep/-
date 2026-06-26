@@ -381,8 +381,7 @@ class BinanceFuturesClient(BinanceBaseClient):
         return self._parse_order(raw, request)
 
     async def place_market_order(self, request: OrderRequest) -> OrderUpdate:
-        raw = await self._signed("POST", "/fapi/v1/order", self._order_params(request, order_type="MARKET"))
-        return self._parse_order(raw, request)
+        raise BinanceError("币安实盘市价单已被禁用；黄金套利只允许 Post Only 限价单")
 
     async def cancel_order(self, order_id: str) -> OrderUpdate | None:
         raw = await self._signed("DELETE", "/fapi/v1/order", {"symbol": self.settings.binance_symbol, "orderId": order_id})
