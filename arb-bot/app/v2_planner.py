@@ -337,7 +337,10 @@ def _performance_entry_penalty(performance: dict) -> Decimal:
 
 def _performance_for_entry_adjustment(performance: dict) -> tuple[dict, str]:
     current_guard = performance.get("current_guard")
-    if isinstance(current_guard, dict) and int(current_guard.get("sample_count") or 0) >= PERFORMANCE_MIN_TRADES:
+    if isinstance(current_guard, dict):
+        sample_count = int(current_guard.get("sample_count") or 0)
+        if sample_count < PERFORMANCE_MIN_TRADES:
+            return current_guard, "current_guard_bootstrap"
         return current_guard, "current_guard"
     return performance, "overall"
 

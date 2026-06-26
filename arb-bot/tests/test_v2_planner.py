@@ -413,7 +413,7 @@ def test_v2_current_guard_performance_replaces_old_losses_for_entry_penalty(tmp_
     assert status["short_entry"]["threshold"] == Decimal("2.820")
 
 
-def test_v2_entry_penalty_uses_overall_until_current_guard_has_enough_samples(tmp_path):
+def test_v2_entry_penalty_bootstraps_current_guard_before_enough_samples(tmp_path):
     cfg = settings(tmp_path, OPEN_MIN_EDGE=Decimal("2.40"), MT4_SLIPPAGE_POINTS=0)
     store = Storage(cfg.sqlite_path)
     mt4_bars, binance_bars = recent_bars([Decimal("2.4"), Decimal("2.6"), Decimal("2.8"), Decimal("3.0")] * 3)
@@ -447,9 +447,9 @@ def test_v2_entry_penalty_uses_overall_until_current_guard_has_enough_samples(tm
         },
     )
 
-    assert status["performance_adjustment_scope"] == "overall"
-    assert status["performance_entry_penalty"] == Decimal("0.50")
-    assert status["short_entry"]["threshold"] == Decimal("3.0")
+    assert status["performance_adjustment_scope"] == "current_guard_bootstrap"
+    assert status["performance_entry_penalty"] == Decimal("0")
+    assert status["short_entry"]["threshold"] == Decimal("2.820")
 
 
 def test_v2_directional_performance_penalty_only_hits_losing_side(tmp_path):

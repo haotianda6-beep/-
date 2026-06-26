@@ -1543,8 +1543,9 @@
           Number(plan.long_range?.points || 0),
         );
         const modelText = entryModelText(plan.entry_model);
+        const adjustmentText = performanceAdjustmentText(plan);
         $("v2ThresholdLine").textContent =
-          `币安高 ${fmt(shortThreshold)} 美元；币安低 ${fmt(longThreshold)} 美元；样本 ${fmt(points)} 根${modelText}`;
+          `币安高 ${fmt(shortThreshold)} 美元；币安低 ${fmt(longThreshold)} 美元；样本 ${fmt(points)} 根${modelText}${adjustmentText}`;
         $("v2ObjectiveLine").textContent = objectiveHealthText(
           plan.objective_health,
         );
@@ -1648,6 +1649,17 @@
         const longText = oneEntryModelText("币安低", model.long);
         const text = [shortText, longText].filter(Boolean).join("；");
         return text ? `；模型 ${text}` : "";
+      }
+
+      function performanceAdjustmentText(plan) {
+        const scope = plan?.performance_adjustment_scope;
+        if (!scope) return "";
+        const count = fmt(plan.performance_adjustment_sample_count || 0);
+        if (scope === "current_guard_bootstrap")
+          return `；阈值口径 当前保护版启动采样 ${count} 单`;
+        if (scope === "current_guard")
+          return `；阈值口径 当前保护版 ${count} 单`;
+        return `；阈值口径 总体历史 ${count} 单`;
       }
 
       function oneEntryModelText(label, model) {
