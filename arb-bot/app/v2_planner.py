@@ -21,6 +21,7 @@ RANGE_FACTOR = Decimal("0.70")
 DEFAULT_SLIPPAGE_BUDGET = Decimal("0.30")
 XAU_POINT_VALUE = Decimal("0.01")
 MT4_MOVE_PERCENTILE = 70
+MIN_ADD_EDGE_IMPROVEMENT = Decimal("0.20")
 ENTRY_AGED_PROFIT_WINDOW_MINUTES = 120
 MAX_TRAINING_MT4_BAR_RANGE = Decimal("4")
 MAX_TRAINING_BINANCE_BAR_RANGE = Decimal("5")
@@ -771,8 +772,14 @@ def _add_plan(
     if required_locked_edge is not None:
         actionable_trigger = max(trigger, required_locked_edge - slippage_budget)
     average_protection_edge = current_avg_edge
+    required_average_after_add = current_avg_edge
+    add_improvement_buffer = None
     if average_protection_edge is not None:
         actionable_trigger = max(actionable_trigger, average_protection_edge)
+        add_improvement_buffer = max(MIN_ADD_EDGE_IMPROVEMENT, slippage_budget / Decimal("2"))
+        required_average_after_add = average_protection_edge + add_improvement_buffer
+        required_locked_for_improvement = ((required_average_after_add * (pair.quantity_oz + qty)) - (average_protection_edge * pair.quantity_oz)) / qty
+        actionable_trigger = max(actionable_trigger, required_locked_for_improvement - slippage_budget)
     if pair.direction == PairDirection.BINANCE_SHORT_MT4_LONG:
         edge = binance.ask - mt4.ask
         price = _round_up(max(binance.ask + settings.binance_entry_offset_usd, mt4.ask + actionable_trigger + slippage_budget), filters.tick_size)
@@ -791,6 +798,8 @@ def _add_plan(
             "required_blended_edge": required_blended_edge,
             "required_locked_edge": required_locked_edge,
             "average_protection_edge": average_protection_edge,
+            "required_average_after_add": required_average_after_add,
+            "add_improvement_buffer": add_improvement_buffer,
             "binance_side": side.value,
             "binance_price": price,
             "mt4_follow_side": mt4_side.value,
@@ -804,13 +813,20 @@ def _add_plan(
     exit_viable = False
     if current_avg_edge is not None:
         blended_edge = ((current_avg_edge * pair.quantity_oz) + (locked * qty)) / (pair.quantity_oz + qty)
-        exit_viable = blended_edge >= required_blended_edge and blended_edge >= current_avg_edge
+        exit_viable = (
+            blended_edge >= required_blended_edge
+            and blended_edge >= current_avg_edge
+            and (required_average_after_add is None or blended_edge >= required_average_after_add)
+        )
     ready = edge >= actionable_trigger and exit_viable
     reason = "达到补仓触发位，可以挂补仓限价单。"
     if edge < actionable_trigger:
         reason = "当前价差未到补仓保护触发位。"
     elif not exit_viable:
-        reason = "补仓后均价差仍不足以覆盖平仓缓冲和目标利润，暂不补仓。"
+        if blended_edge is not None and required_average_after_add is not None and blended_edge < required_average_after_add:
+            reason = "补仓后均价差改善不足，暂不放大仓位。"
+        else:
+            reason = "补仓后均价差仍不足以覆盖平仓缓冲和目标利润，暂不补仓。"
     return {**data,
         "ready": ready,
         "reason": reason,
@@ -819,6 +835,8 @@ def _add_plan(
         "required_blended_edge": required_blended_edge,
         "required_locked_edge": required_locked_edge,
         "average_protection_edge": average_protection_edge,
+        "required_average_after_add": required_average_after_add,
+        "add_improvement_buffer": add_improvement_buffer,
         "binance_side": side.value,
         "binance_price": price,
         "mt4_follow_side": mt4_side.value,

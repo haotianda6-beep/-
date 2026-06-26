@@ -764,12 +764,47 @@ def test_v2_add_plan_does_not_lower_current_average_edge(tmp_path):
     add_plan = status["add_plan"]
     assert add_plan["next_trigger_edge"] == Decimal("4.00")
     assert add_plan["average_protection_edge"] == Decimal("8.27")
-    assert add_plan["next_actionable_trigger_edge"] == Decimal("8.27")
+    assert add_plan["add_improvement_buffer"] == Decimal("0.52")
+    assert add_plan["required_average_after_add"] == Decimal("8.79")
+    assert add_plan["next_actionable_trigger_edge"] == Decimal("8.79")
     assert add_plan["current_edge"] >= add_plan["next_trigger_edge"]
     assert add_plan["current_edge"] < add_plan["next_actionable_trigger_edge"]
-    assert add_plan["estimated_blended_edge"] >= Decimal("8.27")
+    assert add_plan["estimated_blended_edge"] >= add_plan["required_average_after_add"]
     assert add_plan["ready"] is False
     assert add_plan["binance_price"] - Decimal("4016.7") >= add_plan["next_actionable_trigger_edge"]
+
+
+def test_v2_add_plan_requires_visible_average_edge_improvement(tmp_path):
+    cfg = settings(tmp_path, ADD_EDGE_GROWTH_USD=Decimal("1"), MT4_SLIPPAGE_POINTS=0)
+    store = Storage(cfg.sqlite_path)
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("10"),
+        binance_entry_price=Decimal("4002"),
+        mt4_entry_price=Decimal("4000"),
+        binance_order_id="entry/add",
+        base_edge=Decimal("2.00"),
+    )
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.3"), ask=Decimal("4003.5")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=[],
+        open_pair=pair,
+        metrics=PositionMetrics(actual_entry_spread=Decimal("2.00")),
+        mt4_tick_move_budget=Decimal("0"),
+    )
+
+    add_plan = status["add_plan"]
+    assert add_plan["current_edge"] > add_plan["next_trigger_edge"]
+    assert add_plan["next_actionable_trigger_edge"] == Decimal("3.90")
+    assert add_plan["required_average_after_add"] == Decimal("2.20")
+    assert add_plan["current_edge"] < add_plan["next_actionable_trigger_edge"]
+    assert add_plan["ready"] is False
+    assert "保护触发位" in add_plan["reason"]
 
 
 def test_v2_add_plan_blocks_when_blended_edge_cannot_cover_exit_buffer(tmp_path):
