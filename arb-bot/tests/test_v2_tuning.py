@@ -34,12 +34,13 @@ def test_entry_model_selects_threshold_with_target_win_rate():
 
 
 def test_entry_model_prefers_daily_trade_target_over_high_frequency():
-    values = [Decimal("1.0")] * 480
-    for index in range(10, 470, 20):
+    values = [Decimal("1.0")] * 1440
+    for index in range(10, 1430, 20):
         values[index] = Decimal("3.0")
         values[index + 1] = Decimal("1.0")
-    values[240] = Decimal("5.0")
-    values[241] = Decimal("1.0")
+    for index in (120, 420, 780, 1140):
+        values[index] = Decimal("5.0")
+        values[index + 1] = Decimal("1.0")
 
     model = build_entry_model(
         values=values,
