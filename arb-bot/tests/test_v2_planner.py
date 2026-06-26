@@ -390,7 +390,7 @@ def test_v2_blocks_entry_when_mt4_rollover_time_is_stale(tmp_path):
         settings=cfg,
         storage=store,
         filters=filters(),
-        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4005.0"), ask=Decimal("4005.2")),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003.0"), ask=Decimal("4003.2")),
         mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
         binance_bars=binance_bars,
         open_pair=None,
