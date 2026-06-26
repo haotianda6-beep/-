@@ -158,6 +158,56 @@ def exit_plan(target: str = "2", estimated_net: str = "2") -> dict:
     }
 
 
+def test_v2_weak_pair_uses_relaxed_minimum_exit_net(tmp_path):
+    cfg = settings(
+        tmp_path,
+        SQLITE_PATH=tmp_path / "test.sqlite3",
+        OPEN_MIN_EDGE=Decimal("2.40"),
+        CLOSE_PROFIT_USD_PER_OZ=Decimal("1.21"),
+        AGED_CLOSE_PROFIT_USD_PER_OZ=Decimal("0.10"),
+        MAX_PAIR_AGE_MINUTES=60,
+    )
+    pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("2"),
+        binance_entry_price=Decimal("4059.61"),
+        mt4_entry_price=Decimal("4057.96"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("1.65"),
+    )
+    executor = GoldV2Executor(cfg, PaperBinanceClient(cfg), Mt4Bridge(cfg), Storage(cfg.sqlite_path), runtime())
+
+    assert executor._effective_close_profit_usd_per_oz(pair) == Decimal("0.10")
+    assert executor._minimum_exit_net(pair) == Decimal("0.20")
+
+
+def test_v2_good_pair_keeps_full_minimum_exit_net(tmp_path):
+    cfg = settings(
+        tmp_path,
+        SQLITE_PATH=tmp_path / "test.sqlite3",
+        OPEN_MIN_EDGE=Decimal("2.40"),
+        CLOSE_PROFIT_USD_PER_OZ=Decimal("1.21"),
+        AGED_CLOSE_PROFIT_USD_PER_OZ=Decimal("0.10"),
+        MAX_PAIR_AGE_MINUTES=60,
+    )
+    pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("2"),
+        binance_entry_price=Decimal("4059.61"),
+        mt4_entry_price=Decimal("4056.61"),
+        binance_order_id="entry_order",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("3.00"),
+    )
+    executor = GoldV2Executor(cfg, PaperBinanceClient(cfg), Mt4Bridge(cfg), Storage(cfg.sqlite_path), runtime())
+
+    assert executor._effective_close_profit_usd_per_oz(pair) == Decimal("1.21")
+    assert executor._minimum_exit_net(pair) == Decimal("2.42")
+
+
 class MissingOrderBinanceClient(PaperBinanceClient):
     async def get_order(self, order_id: str) -> OrderUpdate | None:
         raise BinanceError('{"code":-2013,"msg":"Order does not exist."}')

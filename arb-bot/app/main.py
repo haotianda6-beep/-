@@ -2107,7 +2107,7 @@ async def _position_metrics() -> PositionMetrics:
         utc_now_ms(),
     )
     exit_follow_buffer = _exit_follow_buffer_usd_per_oz(swap_info, mt4_recent_bars)
-    close_profit = _effective_close_profit_usd_per_oz(pair)
+    close_profit = _effective_close_profit_usd_per_oz(pair, actual_entry_spread)
     dynamic_close_spread = _dynamic_close_spread(profitable_spread_threshold, exit_follow_buffer, close_profit)
     net = _immediate_close_net(gross, fees, accrued_funding, accrued_swap, mt4_spread_protection)
     projected_net = _projected_close_net_after_next_settlement(net, funding_estimate, mt4_swap_estimate)
@@ -2249,13 +2249,23 @@ def _dynamic_close_spread(
     return max(Decimal("0"), target)
 
 
-def _effective_close_profit_usd_per_oz(pair) -> Decimal:
+def _effective_close_profit_usd_per_oz(pair, actual_entry_spread: Decimal | None = None) -> Decimal:
+    if _entry_spread_below_current_minimum(actual_entry_spread):
+        return _relaxed_close_profit_usd_per_oz()
     if settings.max_pair_age_minutes <= 0:
         return settings.close_profit_usd_per_oz
     age_ms = utc_now_ms() - int(pair.opened_ms)
     if age_ms >= settings.max_pair_age_minutes * 60_000:
-        return max(Decimal("0"), min(settings.close_profit_usd_per_oz, settings.aged_close_profit_usd_per_oz))
+        return _relaxed_close_profit_usd_per_oz()
     return settings.close_profit_usd_per_oz
+
+
+def _entry_spread_below_current_minimum(actual_entry_spread: Decimal | None) -> bool:
+    return actual_entry_spread is not None and settings.open_min_edge > 0 and actual_entry_spread < settings.open_min_edge
+
+
+def _relaxed_close_profit_usd_per_oz() -> Decimal:
+    return max(Decimal("0"), min(settings.close_profit_usd_per_oz, settings.aged_close_profit_usd_per_oz))
 
 
 def _exit_follow_buffer_usd_per_oz(swap_info, mt4_bars: list[HistoryBar] | None = None) -> Decimal:

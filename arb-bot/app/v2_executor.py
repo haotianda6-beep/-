@@ -488,12 +488,21 @@ class GoldV2Executor(V2AddMixin, V2CommonMixin):
         return max(Decimal("0"), self._effective_close_profit_usd_per_oz(pair) * pair.quantity_oz)
 
     def _effective_close_profit_usd_per_oz(self, pair: OpenPair) -> Decimal:
+        if self._entry_spread_below_current_minimum(pair):
+            return self._relaxed_close_profit_usd_per_oz()
         if self.settings.max_pair_age_minutes <= 0:
             return self.settings.close_profit_usd_per_oz
         age_ms = utc_now_ms() - int(pair.opened_ms)
         if age_ms >= self.settings.max_pair_age_minutes * 60_000:
-            return max(Decimal("0"), min(self.settings.close_profit_usd_per_oz, self.settings.aged_close_profit_usd_per_oz))
+            return self._relaxed_close_profit_usd_per_oz()
         return self.settings.close_profit_usd_per_oz
+
+    def _entry_spread_below_current_minimum(self, pair: OpenPair) -> bool:
+        entry_edge = self._pair_average_edge(pair)
+        return entry_edge is not None and self.settings.open_min_edge > 0 and entry_edge < self.settings.open_min_edge
+
+    def _relaxed_close_profit_usd_per_oz(self) -> Decimal:
+        return max(Decimal("0"), min(self.settings.close_profit_usd_per_oz, self.settings.aged_close_profit_usd_per_oz))
 
     def _mt4_exit_guard_buffer_usd_per_oz(self) -> Decimal:
         point = self.mt4.latest_swap_info().point or Decimal("0.01")

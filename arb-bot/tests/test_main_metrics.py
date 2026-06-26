@@ -79,6 +79,44 @@ def test_effective_close_profit_relaxes_positive_target_after_timeout(monkeypatc
     assert _effective_close_profit_usd_per_oz(pair) == Decimal("0.01")
 
 
+def test_effective_close_profit_relaxes_weak_entry_before_timeout(monkeypatch):
+    now_ms = 1_000_000
+    monkeypatch.setattr(main, "utc_now_ms", lambda: now_ms)
+    monkeypatch.setattr(main.settings, "open_min_edge", Decimal("2.40"))
+    monkeypatch.setattr(main.settings, "max_pair_age_minutes", 60)
+    monkeypatch.setattr(main.settings, "close_profit_usd_per_oz", Decimal("1.21"))
+    monkeypatch.setattr(main.settings, "aged_close_profit_usd_per_oz", Decimal("0.10"))
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("4000"),
+        mt4_entry_price=Decimal("3998.35"),
+        binance_order_id="entry",
+        opened_ms=now_ms - 5 * 60_000,
+    )
+
+    assert _effective_close_profit_usd_per_oz(pair, actual_entry_spread=Decimal("1.65")) == Decimal("0.10")
+
+
+def test_effective_close_profit_keeps_normal_target_for_good_entry_before_timeout(monkeypatch):
+    now_ms = 1_000_000
+    monkeypatch.setattr(main, "utc_now_ms", lambda: now_ms)
+    monkeypatch.setattr(main.settings, "open_min_edge", Decimal("2.40"))
+    monkeypatch.setattr(main.settings, "max_pair_age_minutes", 60)
+    monkeypatch.setattr(main.settings, "close_profit_usd_per_oz", Decimal("1.21"))
+    monkeypatch.setattr(main.settings, "aged_close_profit_usd_per_oz", Decimal("0.10"))
+    pair = OpenPair(
+        direction=PairDirection.BINANCE_SHORT_MT4_LONG,
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("4003"),
+        mt4_entry_price=Decimal("4000"),
+        binance_order_id="entry",
+        opened_ms=now_ms - 5 * 60_000,
+    )
+
+    assert _effective_close_profit_usd_per_oz(pair, actual_entry_spread=Decimal("3.00")) == Decimal("1.21")
+
+
 def test_exit_follow_buffer_uses_normal_follow_window_not_timeout(monkeypatch):
     calls = []
 
