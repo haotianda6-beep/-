@@ -24,6 +24,19 @@ def test_mt4_close_slippage_budget_caps_extreme_values(tmp_path):
     assert mt4_close_slippage_budget_usd_per_oz(store, now + 1000, percentile=100) == Decimal("2")
 
 
+def test_mt4_close_slippage_budget_can_ignore_before_start_ms(tmp_path):
+    store = Storage(tmp_path / "test.sqlite3")
+    now = utc_now_ms()
+    store.record_event("v2_pair_pnl_recorded", {"mt4_close_adverse_slippage": "1.80"})
+
+    assert mt4_close_slippage_budget_usd_per_oz(
+        store,
+        now + 120_000,
+        percentile=100,
+        start_ms=now + 60_000,
+    ) == Decimal("0")
+
+
 def test_mt4_entry_slippage_budget_reads_entry_and_add_values(tmp_path):
     store = Storage(tmp_path / "test.sqlite3")
     now = utc_now_ms()
@@ -33,3 +46,17 @@ def test_mt4_entry_slippage_budget_reads_entry_and_add_values(tmp_path):
     store.record_event("v2_pair_pnl_recorded", {"mt4_close_adverse_slippage": "1.80"})
 
     assert mt4_entry_slippage_budget_usd_per_oz(store, now + 1000, percentile=100) == Decimal("1.10")
+
+
+def test_mt4_entry_slippage_budget_can_ignore_before_start_ms(tmp_path):
+    store = Storage(tmp_path / "test.sqlite3")
+    now = utc_now_ms()
+    store.record_event("v2_mt4_entry_slippage", {"mt4_entry_adverse_slippage": "1.50"})
+    store.record_event("v2_mt4_add_slippage", {"mt4_entry_adverse_slippage": "1.20"})
+
+    assert mt4_entry_slippage_budget_usd_per_oz(
+        store,
+        now + 120_000,
+        percentile=100,
+        start_ms=now + 60_000,
+    ) == Decimal("0")

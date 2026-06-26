@@ -2522,7 +2522,7 @@ def _exit_follow_buffer_usd_per_oz(swap_info, mt4_bars: list[HistoryBar] | None 
     )
     if recent_move is None:
         recent_move = Decimal("0")
-    learned = mt4_close_slippage_budget_usd_per_oz(storage, utc_now_ms())
+    learned = mt4_close_slippage_budget_usd_per_oz(storage, utc_now_ms(), start_ms=GOLD_V2_CURRENT_GUARD_START_MS)
     return max(configured + recent_move, learned)
 
 

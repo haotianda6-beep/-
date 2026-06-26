@@ -52,7 +52,8 @@ def test_entry_model_prefers_daily_trade_target_over_high_frequency():
         min_points=8,
     )
 
-    assert model["suggested_threshold"] == Decimal("5.0")
+    assert model["suggested_threshold"] == Decimal("4.7")
+    assert model["selected"]["entry_trigger_spread"] == Decimal("5.0")
     assert Decimal("3") <= model["selected"]["projected_daily_trades"] <= Decimal("5")
     assert "3-5单" in model["reason"]
 
@@ -113,7 +114,7 @@ def test_entry_model_applies_entry_cooldown_to_projected_frequency():
 
 def test_entry_model_subtracts_spread_protection_from_exit_target():
     model = build_entry_model(
-        values=[Decimal("1.0"), Decimal("3.0"), Decimal("1.0"), Decimal("3.0")] * 4,
+        values=[Decimal("1.0"), Decimal("3.3"), Decimal("1.0"), Decimal("3.3")] * 4,
         manual_min=Decimal("3.0"),
         slippage_budget=Decimal("0.3"),
         exit_follow_budget=Decimal("0.6"),
@@ -124,6 +125,7 @@ def test_entry_model_subtracts_spread_protection_from_exit_target():
     )
 
     assert model["selected"]["target_exit_spread"] == Decimal("1.99")
+    assert model["selected"]["entry_trigger_spread"] == Decimal("3.3")
     assert model["selected"]["spread_protection_budget"] == Decimal("0.31")
 
 

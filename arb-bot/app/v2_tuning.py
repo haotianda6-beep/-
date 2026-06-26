@@ -34,7 +34,11 @@ def build_entry_model(
             "spread_protection_budget": spread_protection_budget,
             "aged_close_profit": aged_close_profit if aged_close_profit is not None else close_profit,
         }
-    candidates = _candidate_thresholds(usable_values, manual_min)
+    candidates = _candidate_thresholds(
+        [value - max(Decimal("0"), slippage_budget) for value in usable_values],
+        manual_min,
+        max_threshold=max_threshold - max(Decimal("0"), slippage_budget) if max_threshold is not None else None,
+    )
     results = [
         _simulate_candidate(
             values=usable_values,
@@ -80,11 +84,13 @@ def _usable_values(values: list[Decimal], max_threshold: Decimal | None) -> list
     return [value for value in values if -max_threshold <= value <= max_threshold]
 
 
-def _candidate_thresholds(values: list[Decimal], manual_min: Decimal) -> list[Decimal]:
+def _candidate_thresholds(values: list[Decimal], manual_min: Decimal, max_threshold: Decimal | None = None) -> list[Decimal]:
     sorted_values = sorted(values)
     thresholds = {manual_min}
     for percentile in PERCENTILES:
         thresholds.add(max(manual_min, _percentile(sorted_values, percentile)))
+    if max_threshold is not None:
+        thresholds = {threshold for threshold in thresholds if threshold <= max_threshold}
     return sorted(thresholds)
 
 
@@ -109,13 +115,14 @@ def _simulate_candidate(
     hold = max(1, max_hold_minutes)
     cooldown = max(0, entry_cooldown_minutes)
     relaxed_close_profit = close_profit if aged_close_profit is None else min(close_profit, aged_close_profit)
+    entry_trigger_spread = threshold + max(Decimal("0"), slippage_budget)
     initial_target_exit = _target_exit_spread(threshold, spread_protection_budget, exit_follow_budget, close_profit)
     aged_target_exit = _target_exit_spread(threshold, spread_protection_budget, exit_follow_budget, relaxed_close_profit)
     wins = 0
     losses = 0
     index = 0
     while index < len(values):
-        if values[index] < threshold:
+        if values[index] < entry_trigger_spread:
             index += 1
             continue
         end = min(len(values) - 1, index + hold)
@@ -139,6 +146,7 @@ def _simulate_candidate(
     projected_daily_trades = Decimal(trades) * Decimal(1440) / Decimal(len(values)) if values else Decimal("0")
     return {
         "threshold": threshold,
+        "entry_trigger_spread": entry_trigger_spread,
         "target_exit_spread": aged_target_exit,
         "initial_target_exit_spread": initial_target_exit,
         "aged_target_exit_spread": aged_target_exit,

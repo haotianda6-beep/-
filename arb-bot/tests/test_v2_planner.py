@@ -1,6 +1,7 @@
 from decimal import Decimal
 from datetime import datetime, timezone
 
+import app.v2_planner as v2_planner
 from app.config import Settings
 from app.models import ExchangeFilters, HistoryBar, MarketQuote, OpenPair, PairDirection, PositionMetrics, utc_now_ms
 from app.storage import Storage
@@ -138,7 +139,7 @@ def test_v2_entry_feasibility_uses_aged_profit_for_short_cycle_model(tmp_path):
         MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("0"),
     )
     store = Storage(cfg.sqlite_path)
-    mt4_bars, binance_bars = recent_bars([Decimal("2.8"), Decimal("2.9"), Decimal("2.0"), Decimal("1.9")] * 3)
+    mt4_bars, binance_bars = recent_bars([Decimal("3.1"), Decimal("3.2"), Decimal("2.0"), Decimal("1.9")] * 3)
     store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
 
     status = build_gold_v2_status(
@@ -331,8 +332,8 @@ def test_v2_realized_losses_raise_entry_threshold(tmp_path):
     assert status["realized_performance"]["sample_count"] == 3
     assert status["realized_performance"]["win_rate"] == Decimal("0")
     assert status["performance_entry_penalty"] == Decimal("0.50")
-    assert status["short_entry"]["threshold"] == Decimal("3.0")
-    assert status["performance_threshold_cap"]["short"] == Decimal("3.0")
+    assert status["short_entry"]["threshold"] == Decimal("2.820")
+    assert status["performance_threshold_cap"]["short"] == Decimal("2.70")
     assert "自动抬高" in status["realized_performance"]["reason"]
 
 
@@ -497,7 +498,7 @@ def test_v2_directional_performance_penalty_only_hits_losing_side(tmp_path):
 
     assert status["directional_performance_entry_penalty"]["short"] == Decimal("0.50")
     assert status["directional_performance_entry_penalty"]["long"] == Decimal("0")
-    assert status["short_entry"]["threshold"] == Decimal("3.0")
+    assert status["short_entry"]["threshold"] == Decimal("2.820")
     assert status["long_entry"]["threshold"] == Decimal("2.4")
     assert status["objective_health"]["realized_ok"] is False
     assert status["objective_health"]["ready_for_goal"] is False
@@ -604,7 +605,7 @@ def test_v2_realized_positive_total_uses_small_entry_penalty(tmp_path):
 
     assert status["realized_performance"]["win_rate"] == Decimal("0.6666666666666666666666666667")
     assert status["performance_entry_penalty"] == Decimal("0.0333333333333333333333333333")
-    assert status["short_entry"]["threshold"] == Decimal("2.853333333333333333333333333")
+    assert status["short_entry"]["threshold"] == Decimal("2.820")
 
 
 def test_v2_blocks_entry_when_next_triple_swap_makes_exit_unsafe(tmp_path):
@@ -749,9 +750,10 @@ def test_v2_short_order_price_keeps_threshold_and_slippage_budget(tmp_path):
     assert status["short_entry"]["expected_locked_edge"] == Decimal("3.6")
 
 
-def test_v2_exit_follow_budget_uses_learned_mt4_close_slippage(tmp_path):
+def test_v2_exit_follow_budget_uses_learned_mt4_close_slippage(tmp_path, monkeypatch):
     cfg = settings(tmp_path, MT4_CLOSE_EXTRA_BUFFER_USD=Decimal("0"))
     store = Storage(cfg.sqlite_path)
+    monkeypatch.setattr(v2_planner, "GOLD_V2_CURRENT_GUARD_START_MS", utc_now_ms() - 1_000)
     store.record_event("v2_pair_pnl_recorded", {"mt4_close_adverse_slippage": "0.95"})
     mt4_bars, binance_bars = recent_bars([Decimal("1"), Decimal("2"), Decimal("3"), Decimal("4")] * 3)
     store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
@@ -771,9 +773,10 @@ def test_v2_exit_follow_budget_uses_learned_mt4_close_slippage(tmp_path):
     assert status["short_entry"]["mt4_exit_follow_budget"] == Decimal("0.95")
 
 
-def test_v2_entry_slippage_budget_uses_learned_mt4_entry_slippage(tmp_path):
+def test_v2_entry_slippage_budget_uses_learned_mt4_entry_slippage(tmp_path, monkeypatch):
     cfg = settings(tmp_path, MT4_SLIPPAGE_POINTS=0)
     store = Storage(cfg.sqlite_path)
+    monkeypatch.setattr(v2_planner, "GOLD_V2_CURRENT_GUARD_START_MS", utc_now_ms() - 1_000)
     store.record_event("v2_mt4_entry_slippage", {"mt4_entry_adverse_slippage": "1.10"})
     mt4_bars, binance_bars = recent_bars([Decimal("2")] * 10)
     store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
@@ -791,6 +794,30 @@ def test_v2_entry_slippage_budget_uses_learned_mt4_entry_slippage(tmp_path):
 
     assert status["mt4_slippage_budget"] == Decimal("1.10")
     assert status["short_entry"]["mt4_slippage_budget"] == Decimal("1.10")
+
+
+def test_v2_entry_slippage_budget_ignores_old_guard_slippage(tmp_path, monkeypatch):
+    cfg = settings(tmp_path, MT4_SLIPPAGE_POINTS=0)
+    store = Storage(cfg.sqlite_path)
+    now = utc_now_ms()
+    monkeypatch.setattr(v2_planner, "GOLD_V2_CURRENT_GUARD_START_MS", now + 60_000)
+    store.record_event("v2_mt4_entry_slippage", {"mt4_entry_adverse_slippage": "1.10"})
+    mt4_bars, binance_bars = recent_bars([Decimal("2")] * 10)
+    store.upsert_bars("mt4", cfg.mt4_symbol, "1m", mt4_bars)
+
+    status = build_gold_v2_status(
+        settings=cfg,
+        storage=store,
+        filters=filters(),
+        binance_quote=MarketQuote(symbol="XAUUSDT", bid=Decimal("4003"), ask=Decimal("4003.2")),
+        mt4_quote=MarketQuote(symbol="XAUUSD", bid=Decimal("3999.8"), ask=Decimal("4000.0")),
+        binance_bars=binance_bars,
+        open_pair=None,
+        metrics=PositionMetrics(),
+    )
+
+    assert status["mt4_slippage_budget"] == Decimal("0.3")
+    assert status["short_entry"]["mt4_slippage_budget"] == Decimal("0.3")
 
 
 def test_v2_slippage_budget_includes_recent_mt4_movement(tmp_path):

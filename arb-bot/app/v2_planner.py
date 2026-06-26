@@ -12,6 +12,7 @@ from app.mt4_rollover import normalize_mt4_rollover_ms
 from app.quote_guard import MAX_REASONABLE_XAU_MID_GAP, xau_quote_gap_reason
 from app.storage import Storage
 from app.v2_tuning import build_entry_model
+from app.gold_v2_version import GOLD_V2_CURRENT_GUARD_START_MS
 
 
 RANGE_LOOKBACK_MS = 30 * 60 * 1000
@@ -1008,13 +1009,13 @@ def _mt4_slippage_budget(
     configured = slippage_budget_usd_per_oz(settings.mt4_slippage_points, XAU_POINT_VALUE, mt4_quote)
     base = max(configured, DEFAULT_SLIPPAGE_BUDGET)
     recent = tick_move_budget if tick_move_budget is not None else _mt4_recent_move_budget(mt4_bars or [])
-    learned = mt4_entry_slippage_budget_usd_per_oz(storage, now_ms)
+    learned = mt4_entry_slippage_budget_usd_per_oz(storage, now_ms, start_ms=GOLD_V2_CURRENT_GUARD_START_MS)
     return max(base + recent, learned)
 
 
 def _mt4_exit_follow_budget(settings: Settings, storage: Storage, now_ms: int) -> Decimal:
     configured = Decimal(settings.mt4_slippage_points) * XAU_POINT_VALUE + settings.mt4_close_extra_buffer_usd
-    learned = mt4_close_slippage_budget_usd_per_oz(storage, now_ms)
+    learned = mt4_close_slippage_budget_usd_per_oz(storage, now_ms, start_ms=GOLD_V2_CURRENT_GUARD_START_MS)
     return max(configured, learned)
 
 

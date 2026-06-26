@@ -13,6 +13,7 @@ def mt4_close_slippage_budget_usd_per_oz(
     now_ms: int,
     percentile: int = 80,
     limit: int = 200,
+    start_ms: int | None = None,
 ) -> Decimal:
     return _slippage_budget_usd_per_oz(
         storage=storage,
@@ -21,6 +22,7 @@ def mt4_close_slippage_budget_usd_per_oz(
         field="mt4_close_adverse_slippage",
         percentile=percentile,
         limit=limit,
+        start_ms=start_ms,
     )
 
 
@@ -29,6 +31,7 @@ def mt4_entry_slippage_budget_usd_per_oz(
     now_ms: int,
     percentile: int = 80,
     limit: int = 200,
+    start_ms: int | None = None,
 ) -> Decimal:
     return _slippage_budget_usd_per_oz(
         storage=storage,
@@ -37,6 +40,7 @@ def mt4_entry_slippage_budget_usd_per_oz(
         field="mt4_entry_adverse_slippage",
         percentile=percentile,
         limit=limit,
+        start_ms=start_ms,
     )
 
 
@@ -47,9 +51,13 @@ def _slippage_budget_usd_per_oz(
     field: str,
     percentile: int,
     limit: int,
+    start_ms: int | None,
 ) -> Decimal:
     try:
-        events = storage.get_events(now_ms - SLIPPAGE_LOOKBACK_MS, now_ms + 1000, limit=limit)
+        lookback_start = now_ms - SLIPPAGE_LOOKBACK_MS
+        if start_ms is not None:
+            lookback_start = max(lookback_start, start_ms)
+        events = storage.get_events(lookback_start, now_ms + 1000, limit=limit)
     except Exception:  # noqa: BLE001
         return Decimal("0")
     values: list[Decimal] = []

@@ -1536,8 +1536,6 @@
         }
         $("v2ModeLine").textContent =
           `${plan.mode || "只读观察"}，${plan.reason || "不会自动下单"}`;
-        const shortThreshold = plan.short_entry?.threshold;
-        const longThreshold = plan.long_entry?.threshold;
         const points = Math.max(
           Number(plan.short_range?.points || 0),
           Number(plan.long_range?.points || 0),
@@ -1545,7 +1543,7 @@
         const modelText = entryModelText(plan.entry_model);
         const adjustmentText = performanceAdjustmentText(plan);
         $("v2ThresholdLine").textContent =
-          `币安高 ${fmt(shortThreshold)} 美元；币安低 ${fmt(longThreshold)} 美元；样本 ${fmt(points)} 根${modelText}${adjustmentText}`;
+          `${entryThresholdText("币安高", plan.short_entry)}；${entryThresholdText("币安低", plan.long_entry)}；样本 ${fmt(points)} 根${modelText}${adjustmentText}`;
         $("v2ObjectiveLine").textContent = objectiveHealthText(
           plan.objective_health,
         );
@@ -1660,6 +1658,17 @@
         if (scope === "current_guard")
           return `；阈值口径 当前保护版 ${count} 单`;
         return `；阈值口径 总体历史 ${count} 单`;
+      }
+
+      function entryThresholdText(label, entry) {
+        if (!entry) return `${label} -`;
+        const effective = entry.threshold !== null && entry.threshold !== undefined
+          ? `${fmt(entry.threshold)}`
+          : "-";
+        const fill = entry.locked_edge_floor !== null && entry.locked_edge_floor !== undefined
+          ? `${fmt(entry.locked_edge_floor)}`
+          : "-";
+        return `${label}有效 ${effective} / 成交 ${fill} 美元`;
       }
 
       function oneEntryModelText(label, model) {
