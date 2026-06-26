@@ -90,6 +90,43 @@ def add_plan_temporarily_blocked_after_trigger(reason: str = "补仓后仍不安
     }
 
 
+def add_plan_waiting_actionable_trigger() -> dict:
+    return {
+        "selected_entry": {"ready": False, "reason": "已有持仓"},
+        "add_plan": {
+            "enabled": True,
+            "ready": False,
+            "reason": "当前价差未到补仓安全触发位。",
+            "base_edge": "2",
+            "current_edge": "3.2",
+            "next_trigger_edge": "3",
+            "next_actionable_trigger_edge": "3.8",
+            "quantity_oz": "1",
+            "binance_side": "SELL",
+            "binance_price": "105",
+            "mt4_follow_side": "BUY",
+        },
+    }
+
+
+def add_plan_actionable_after_base_trigger(price: str = "105") -> dict:
+    return {
+        "selected_entry": {"ready": False, "reason": "已有持仓"},
+        "add_plan": {
+            "enabled": True,
+            "ready": True,
+            "base_edge": "2",
+            "current_edge": "4.0",
+            "next_trigger_edge": "3",
+            "next_actionable_trigger_edge": "3.8",
+            "quantity_oz": "1",
+            "binance_side": "SELL",
+            "binance_price": price,
+            "mt4_follow_side": "BUY",
+        },
+    }
+
+
 def exit_plan(target: str = "2", estimated_net: str = "2") -> dict:
     return {
         "selected_entry": {"ready": False},
@@ -1246,6 +1283,47 @@ async def test_v2_add_confirm_survives_temporary_safety_block(tmp_path):
     assert run.last_error == "补仓后仍不安全"
 
     await executor.step(add_plan("105"))
+
+    assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
+    assert executor.active_order is not None
+    assert executor.adding_to_pair is True
+
+
+@pytest.mark.asyncio
+async def test_v2_add_confirm_uses_base_trigger_while_waiting_actionable_trigger(tmp_path):
+    cfg = settings(tmp_path, SQLITE_PATH=tmp_path / "test.sqlite3", MAX_ADD_COUNT=1, ENTRY_CONFIRM_MS=1500)
+    client = PaperBinanceClient(cfg)
+    mt4 = Mt4Bridge(cfg)
+    run = runtime()
+    run.state = StrategyState.PAIR_OPEN
+    run.open_pair = OpenPair(
+        direction="BINANCE_SHORT_MT4_LONG",
+        quantity_oz=Decimal("1"),
+        binance_entry_price=Decimal("103"),
+        mt4_entry_price=Decimal("100"),
+        binance_order_id="entry",
+        mt4_ticket=7,
+        mt4_tickets=[7],
+        base_edge=Decimal("3"),
+    )
+    executor = GoldV2Executor(cfg, client, mt4, Storage(cfg.sqlite_path), run)
+
+    await executor.step(add_plan_waiting_actionable_trigger())
+
+    assert executor.add_ready_since_ms > 0
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    assert run.last_error.startswith("V2 补仓价差已触发，确认中")
+
+    executor.add_ready_since_ms = utc_now_ms() - cfg.entry_confirm_ms
+    await executor.step(add_plan_waiting_actionable_trigger())
+
+    assert executor.add_ready_since_ms > 0
+    assert run.state == StrategyState.PAIR_OPEN
+    assert executor.active_order is None
+    assert run.last_error == "当前价差未到补仓安全触发位。"
+
+    await executor.step(add_plan_actionable_after_base_trigger())
 
     assert run.state == StrategyState.QUOTING_BINANCE_ENTRY
     assert executor.active_order is not None
