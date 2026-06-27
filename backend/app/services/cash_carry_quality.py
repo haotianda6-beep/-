@@ -4,13 +4,12 @@ from app.core.market_math import q
 from app.core.models import BotSettings
 
 
-ENTRY_NET_FLOOR_PCT = Decimal("0.5")
 CLOSE_EXECUTION_BUFFER_PCT = Decimal("0.2")
 MAX_QUALITY_SCORE = Decimal("100")
 
 
 def entry_net_floor(settings: BotSettings) -> Decimal:
-    pct_floor = settings.order_notional_usdt * ENTRY_NET_FLOOR_PCT / Decimal("100")
+    pct_floor = settings.order_notional_usdt * settings.cash_carry_min_entry_net_pct / Decimal("100")
     return max(settings.min_funding_net_usdt, pct_floor)
 
 
@@ -57,6 +56,14 @@ def entry_quality_reasons(estimated_net_profit: Decimal, settings: BotSettings) 
     if estimated_net_profit >= floor:
         return []
     return [f"回归到平仓线后的净利预估 {q(estimated_net_profit)}U < 稳定开仓安全垫 {q(floor)}U"]
+
+
+def entry_basis_risk_reasons(basis_pct: Decimal, settings: BotSettings) -> list[str]:
+    if settings.cash_carry_max_entry_basis_pct <= 0:
+        return []
+    if basis_pct <= settings.cash_carry_max_entry_basis_pct:
+        return []
+    return [f"开仓基差异常过高 {q(basis_pct)}% > {q(settings.cash_carry_max_entry_basis_pct)}%，不追异常盘"]
 
 
 def _net_score(settings: BotSettings, estimated_net_profit: Decimal) -> Decimal:

@@ -10,11 +10,11 @@ from app.services.live_market_types import CashCarryScan
 
 def test_cash_carry_opportunity_accepts_positive_basis_and_funding() -> None:
     scanner = CashCarryScanner()
-    item = scanner._build_opportunity("ABCUSDT", _data("101", "0.0002"), BotSettings(order_notional_usdt=Decimal("100")))
+    item = scanner._build_opportunity("ABCUSDT", _data("101.5", "0.0002"), BotSettings(order_notional_usdt=Decimal("100")))
 
     assert item is not None
     assert item.blocked_reasons == []
-    assert item.basis_pct == Decimal("1.0000")
+    assert item.basis_pct == Decimal("1.5000")
     assert item.funding_rate_pct == Decimal("0.0200")
     assert item.estimated_funding_income == Decimal("0.0200")
 
@@ -91,10 +91,18 @@ def test_cash_carry_blocks_same_symbol_with_different_base_id() -> None:
 
 def test_cash_carry_allows_pre_market_contracts() -> None:
     scanner = CashCarryScanner()
-    item = scanner._build_opportunity("ABCUSDT", _data("101", "0.0002", is_pre_market=True), BotSettings())
+    item = scanner._build_opportunity("ABCUSDT", _data("101.5", "0.0002", is_pre_market=True), BotSettings())
 
     assert item is not None
     assert item.blocked_reasons == []
+
+
+def test_cash_carry_blocks_abnormally_high_entry_basis() -> None:
+    scanner = CashCarryScanner()
+    item = scanner._build_opportunity("ABCUSDT", _data("104", "0.0002"), BotSettings())
+
+    assert item is not None
+    assert "开仓基差异常过高" in " / ".join(item.blocked_reasons)
 
 
 def test_cash_carry_blocks_pre_market_when_spot_transfer_is_closed() -> None:

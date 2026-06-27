@@ -15,7 +15,7 @@ def test_cash_carry_open_records_actual_fill_prices(tmp_path) -> None:
     assert result.status == "open_submitted"
     state = executor.state.read()["positions"][0]
     assert state["spot_entry_price"] == "100.25"
-    assert state["perp_entry_price"] == "101.25"
+    assert state["perp_entry_price"] == "101.75"
 
 
 def _opportunity() -> CashCarryOpportunity:
@@ -23,16 +23,16 @@ def _opportunity() -> CashCarryOpportunity:
         exchange=ExchangeName.GATE,
         symbol="ABCUSDT",
         spot_price=Decimal("100"),
-        perp_price=Decimal("101"),
-        basis_pct=Decimal("1"),
+        perp_price=Decimal("101.75"),
+        basis_pct=Decimal("1.75"),
         funding_rate_pct=Decimal("0.01"),
         quantity=Decimal("1"),
         spot_volume_24h_usdt=Decimal("1000000"),
         perp_volume_24h_usdt=Decimal("1000000"),
-        estimated_basis_profit=Decimal("1"),
+        estimated_basis_profit=Decimal("1.55"),
         estimated_funding_income=Decimal("0.01"),
         estimated_open_close_fee=Decimal("0.2"),
-        estimated_net_profit=Decimal("0.8"),
+        estimated_net_profit=Decimal("1.36"),
         blocked_reasons=[],
         data_source=DataSource.LIVE,
         updated_at=datetime.now(timezone.utc),
@@ -70,13 +70,13 @@ class _OpeningSwap:
         return str(amount)
 
     def fetch_order_book(self, symbol, limit=20):
-        return {"bids": [[101.25, 10]], "asks": [[101.5, 10]]}
+        return {"bids": [[101.75, 10]], "asks": [[102, 10]]}
 
     def create_order(self, symbol, order_type, side, amount, price=None, params=None):
         return {"id": "perp-open", "params": params}
 
     def fetch_order(self, order_id, symbol):
-        return {"id": order_id, "average": "101.25", "amount": "0.997506"}
+        return {"id": order_id, "average": "101.75", "amount": "0.997506"}
 
     def set_leverage(self, leverage, symbol, params=None):
         return {"leverage": leverage, "symbol": symbol, "params": params or {}}

@@ -15,6 +15,8 @@ type DecimalKey =
   | "default_leverage"
   | "max_leverage"
   | "cash_carry_min_basis_pct"
+  | "cash_carry_max_entry_basis_pct"
+  | "cash_carry_min_entry_net_pct"
   | "cash_carry_close_basis_pct"
   | "cash_carry_min_funding_rate_pct"
   | "cash_carry_min_volume_usdt"
@@ -52,6 +54,8 @@ const sharedDecimalFields: Array<{ key: DecimalKey; label: string; suffix: strin
 
 const cashCarryDecimalFields: Array<{ key: DecimalKey; label: string; suffix: string }> = [
   { key: "cash_carry_min_basis_pct", label: "期现最小正基差", suffix: "%" },
+  { key: "cash_carry_max_entry_basis_pct", label: "期现最大开仓基差", suffix: "%" },
+  { key: "cash_carry_min_entry_net_pct", label: "期现最低净利比例", suffix: "%" },
   { key: "cash_carry_close_basis_pct", label: "期现收敛平仓基差", suffix: "%" },
   { key: "cash_carry_min_funding_rate_pct", label: "期现最低资金费率", suffix: "%" },
   { key: "cash_carry_min_volume_usdt", label: "期现最低24h成交量", suffix: "USDT" },

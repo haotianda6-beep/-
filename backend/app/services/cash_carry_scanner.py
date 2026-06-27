@@ -10,7 +10,7 @@ from app.core.pnl import calculate_spread_pct
 from app.services.asset_identity import MarketAsset, asset_from_market, local_identity_reasons
 from app.services.cash_carry_depth_estimator import estimate_max_safe_notional
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
-from app.services.cash_carry_quality import cash_carry_quality_score, entry_quality_reasons, estimated_entry_net_profit, convergence_basis_profit
+from app.services.cash_carry_quality import cash_carry_quality_score, entry_basis_risk_reasons, entry_quality_reasons, estimated_entry_net_profit, convergence_basis_profit
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES
 from app.services.exchange_factory import build_ccxt_exchange
 from app.services.live_market_types import CashCarryScan, SPOT_EXCHANGE_IDS, SWAP_EXCHANGE_IDS
@@ -259,6 +259,7 @@ class CashCarryScanner:
         funding_income = settings.order_notional_usdt * funding_rate
         estimated_net_profit = estimated_entry_net_profit(settings, basis_pct, funding_rate, fees)
         reasons = self._blocked_reasons(basis_pct, funding_rate, spot_volume, perp_volume, settings)
+        reasons.extend(entry_basis_risk_reasons(basis_pct, settings))
         reasons.extend(entry_quality_reasons(estimated_net_profit, settings))
         reasons.extend(self.history_quality.blocked_reasons(data.exchange, symbol, settings))
         reasons.extend(local_identity_reasons(data.exchange.value, data.swap_markets[symbol].asset, data.spot_markets[symbol].asset))

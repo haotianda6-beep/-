@@ -4,7 +4,7 @@ from decimal import Decimal
 from app.core.market_math import q
 from app.core.models import BotSettings, CashCarryOpportunity, ExchangeName
 from app.core.pnl import calculate_spread_pct
-from app.services.cash_carry_quality import convergence_basis_profit, entry_quality_reasons, estimated_entry_net_profit
+from app.services.cash_carry_quality import convergence_basis_profit, entry_basis_risk_reasons, entry_quality_reasons, estimated_entry_net_profit
 from app.services.live_market_types import CashCarryScan
 from app.services.live_read import decimal_from
 from app.services.market_format import quote_volume
@@ -100,9 +100,10 @@ class CashCarryFastRefresher:
         estimated_net_profit: Decimal,
         settings: BotSettings,
     ) -> list[str]:
-        reasons = self._preserved(current, ("合约溢价未达", "资金费率低于", "资金费率不是正数", "现货/合约最低24h成交量低于", "回归到平仓线后的净利预估"))
+        reasons = self._preserved(current, ("合约溢价未达", "开仓基差异常过高", "资金费率低于", "资金费率不是正数", "现货/合约最低24h成交量低于", "回归到平仓线后的净利预估"))
         if basis_pct < settings.cash_carry_min_basis_pct:
             reasons.append(f"合约溢价未达 {settings.cash_carry_min_basis_pct}%")
+        reasons.extend(entry_basis_risk_reasons(basis_pct, settings))
         if funding_rate <= 0:
             reasons.append("资金费率不是正数，空头不能收资金费")
         elif funding_rate * Decimal("100") < settings.cash_carry_min_funding_rate_pct:

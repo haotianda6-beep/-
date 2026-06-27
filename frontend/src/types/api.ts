@@ -131,6 +131,8 @@ export type BotSettings = {
   max_leverage: string;
   margin_mode: "isolated" | "cross";
   cash_carry_min_basis_pct: string;
+  cash_carry_max_entry_basis_pct: string;
+  cash_carry_min_entry_net_pct: string;
   cash_carry_close_basis_pct: string;
   cash_carry_min_funding_rate_pct: string;
   cash_carry_min_volume_usdt: string;

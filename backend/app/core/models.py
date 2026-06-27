@@ -184,6 +184,8 @@ class BotSettings(BaseSchema):
     max_leverage: Decimal = Decimal("3")
     margin_mode: Literal["isolated", "cross"] = "isolated"
     cash_carry_min_basis_pct: Decimal = Decimal("0.8")
+    cash_carry_max_entry_basis_pct: Decimal = Decimal("3")
+    cash_carry_min_entry_net_pct: Decimal = Decimal("0.8")
     cash_carry_close_basis_pct: Decimal = Decimal("0.2")
     cash_carry_min_funding_rate_pct: Decimal = Decimal("0")
     cash_carry_min_volume_usdt: Decimal = Decimal("300000")
@@ -240,6 +242,8 @@ class BotSettings(BaseSchema):
         "default_leverage",
         "max_leverage",
         "cash_carry_min_basis_pct",
+        "cash_carry_max_entry_basis_pct",
+        "cash_carry_min_entry_net_pct",
         "cash_carry_close_basis_pct",
         "cash_carry_min_funding_rate_pct",
         "cash_carry_min_volume_usdt",
