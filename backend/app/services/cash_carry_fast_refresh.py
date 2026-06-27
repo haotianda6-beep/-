@@ -9,6 +9,7 @@ from app.services.cash_carry_quality import convergence_basis_profit, entry_basi
 from app.services.live_market_types import CashCarryScan
 from app.services.live_read import decimal_from
 from app.services.market_format import quote_volume
+from app.services.cash_carry_scope import CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.ws_ticker_cache import WSTickerCache
 
 
@@ -23,7 +24,7 @@ class CashCarryFastRefresher:
             return CashCarryScan(issues=scan.issues)
         refreshed = [self._refresh_one(item, settings) for item in items]
         opportunities = [item for item in refreshed if not item.blocked_reasons]
-        candidates = sorted(refreshed, key=lambda item: (len(item.blocked_reasons), -item.estimated_net_profit))[:50]
+        candidates = sorted(refreshed, key=lambda item: (len(item.blocked_reasons), -item.estimated_net_profit))[:CASH_CARRY_INTERNAL_CANDIDATE_LIMIT]
         return CashCarryScan(
             opportunities=sorted(opportunities, key=lambda item: item.estimated_net_profit, reverse=True),
             candidates=candidates,

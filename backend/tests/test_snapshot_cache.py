@@ -82,6 +82,26 @@ def test_lightweight_snapshot_keeps_cash_carry_realtime_rows(monkeypatch) -> Non
     assert snapshot.mt4_spread_opportunities == []
 
 
+def test_lightweight_snapshot_trims_display_candidates_but_diagnoses_raw_pool(monkeypatch) -> None:
+    _reset_snapshot_state()
+    base = _cash_opportunity().model_copy(update={"blocked_reasons": ["合约溢价未达 0.8%"]})
+    candidates = [base.model_copy(update={"symbol": f"ABC{i}USDT"}) for i in range(80)]
+    runtime = SimpleNamespace(
+        account=SimpleNamespace(balances=[], positions=[], issues=[]),
+        cash_carry=CashCarryScan(opportunities=[], candidates=candidates, issues=[]),
+        alpha_alert=SimpleNamespace(opportunities=[], candidates=[], issues=[]),
+    )
+    monkeypatch.setattr(routes.engine.live_read, "live_data_enabled", lambda: True)
+    monkeypatch.setattr(routes.engine.live_runtime, "get", lambda _settings: runtime)
+
+    routes.snapshot_cached()
+    snapshot = _wait_for_snapshot_title("主控台轻量实时模式")
+
+    assert len(snapshot.cash_carry_candidates) == 50
+    event = next(item for item in snapshot.risk_events if item.id == "cash-carry-frequency-diagnostic")
+    assert "当前候选 80 个" in event.detail
+
+
 def test_cash_positions_snapshot_refreshes_in_background(tmp_path) -> None:
     engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
     engine.cash_carry_positions = _SlowCashPositionBuilder()

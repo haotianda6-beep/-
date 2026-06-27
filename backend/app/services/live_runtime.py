@@ -10,7 +10,7 @@ from decimal import Decimal
 from app.core.credential_utils import env_bool
 from app.core.models import BotSettings, CashCarryOpportunity, ExchangeName
 from app.services.binance_alpha_scanner import AlphaAlertScan, BinanceAlphaScanner
-from app.services.cash_carry_scope import CASH_CARRY_EXCHANGE_SET
+from app.services.cash_carry_scope import CASH_CARRY_EXCHANGE_SET, CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.cash_carry_executor import CashCarryExecutor
 from app.services.cash_carry_fast_refresh import CashCarryFastRefresher
 from app.services.cash_carry_positions import CashCarryPositionBuilder
@@ -321,7 +321,7 @@ class LiveRuntimeCache:
 
     def _rebuild_cash_carry_scan(self, rows: list[CashCarryOpportunity], issues: list[str]) -> CashCarryScan:
         opportunities = [item for item in rows if not item.blocked_reasons]
-        candidates = sorted(rows, key=self._cash_carry_candidate_sort_key)[:50]
+        candidates = sorted(rows, key=self._cash_carry_candidate_sort_key)[:CASH_CARRY_INTERNAL_CANDIDATE_LIMIT]
         return CashCarryScan(
             opportunities=sorted(opportunities, key=self._cash_carry_opportunity_sort_key),
             candidates=candidates,
@@ -522,7 +522,7 @@ def _cash_carry_subscriptions(scan: CashCarryScan, scanner: CashCarryScanner) ->
     return subscriptions
 
 
-def _compact_cash_carry_scan(scan: CashCarryScan, opportunity_limit: int = 50, candidate_limit: int = 50) -> CashCarryScan:
+def _compact_cash_carry_scan(scan: CashCarryScan, opportunity_limit: int = 50, candidate_limit: int = CASH_CARRY_INTERNAL_CANDIDATE_LIMIT) -> CashCarryScan:
     return CashCarryScan(
         opportunities=list(scan.opportunities[:opportunity_limit]),
         candidates=list(scan.candidates[:candidate_limit]),

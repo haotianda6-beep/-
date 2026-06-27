@@ -11,7 +11,7 @@ from app.services.asset_identity import MarketAsset, asset_from_market, local_id
 from app.services.cash_carry_depth_estimator import estimate_max_safe_notional
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_quality import cash_carry_quality_score, entry_basis_risk_reasons, entry_quality_reasons, estimated_entry_net_profit, convergence_basis_profit
-from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES
+from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES, CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.exchange_factory import build_ccxt_exchange
 from app.services.live_market_types import CashCarryScan, SPOT_EXCHANGE_IDS, SWAP_EXCHANGE_IDS
 from app.services.live_read import decimal_from
@@ -65,7 +65,7 @@ class CashCarryScanner:
                 for item in self._exchange_opportunities(exchange_data, settings)
             ]
             opportunities = [item for item in checked if not item.blocked_reasons]
-            candidates = sorted(checked, key=lambda item: self._candidate_sort_key(item, settings))[:50]
+            candidates = sorted(checked, key=lambda item: self._candidate_sort_key(item, settings))[:CASH_CARRY_INTERNAL_CANDIDATE_LIMIT]
             return CashCarryScan(
                 opportunities=sorted(opportunities, key=lambda item: self._opportunity_sort_key(item, settings)),
                 candidates=candidates,

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from app.core.models import BotSettings, CashCarryOpportunity, DataSource, ExchangeBalance, ExchangeName, PositionSnapshot
 from app.services.cash_carry_executor import CashCarryExecutor
+from app.services.cash_carry_scope import CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.live_market_types import CashCarryScan
 from app.services.live_read import LiveAccountSnapshot
 from app.services.live_runtime import LiveRuntimeCache, STRATEGY_CASH
@@ -141,6 +142,18 @@ def test_runtime_marks_same_exchange_cash_carry_opportunities_blocked_when_slots
     assert [(item.exchange, item.symbol) for item in scan.opportunities] == [(ExchangeName.GATE, "XYZUSDT")]
     bitget = next(item for item in scan.candidates if item.exchange == ExchangeName.BITGET)
     assert "持仓槽位已满" in " / ".join(bitget.blocked_reasons)
+
+
+def test_runtime_rebuild_keeps_internal_candidate_pool(tmp_path) -> None:
+    runtime = _runtime(tmp_path)
+    rows = [
+        _cash_opportunity(ExchangeName.GATE, f"ABC{i}USDT", str(i))
+        for i in range(CASH_CARRY_INTERNAL_CANDIDATE_LIMIT + 10)
+    ]
+
+    scan = runtime._apply_cash_carry_open_scope(CashCarryScan(candidates=rows))
+
+    assert len(scan.candidates) == CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 
 
 def test_mt4_scan_uses_independent_slot(tmp_path) -> None:

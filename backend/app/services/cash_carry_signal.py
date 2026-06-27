@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from app.core.models import BotSettings, CashCarryOpportunity, ExchangeName
+from app.services.cash_carry_scope import CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.live_market_types import CashCarryScan
 
 
@@ -29,7 +30,7 @@ class CashCarrySignalTracker:
         timestamp = time.monotonic() if now is None else now
         updated = [self._with_signal_reasons(item, settings, timestamp) for item in items]
         opportunities = [item for item in updated if not item.blocked_reasons]
-        candidates = sorted(updated, key=lambda item: (len(item.blocked_reasons), -item.estimated_net_profit))[:50]
+        candidates = sorted(updated, key=lambda item: (len(item.blocked_reasons), -item.estimated_net_profit))[:CASH_CARRY_INTERNAL_CANDIDATE_LIMIT]
         return CashCarryScan(opportunities=sorted(opportunities, key=lambda item: item.estimated_net_profit, reverse=True), candidates=candidates, issues=scan.issues)
 
     def _with_signal_reasons(self, item: CashCarryOpportunity, settings: BotSettings, now: float) -> CashCarryOpportunity:

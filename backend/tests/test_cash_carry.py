@@ -5,6 +5,7 @@ from app.core.models import BotSettings, ExchangeName
 from app.services.asset_identity import MarketAsset
 from app.services.cash_carry_fast_refresh import CashCarryFastRefresher
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
+from app.services.cash_carry_scope import CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.cash_carry_scanner import CashCarryExchangeData, CashCarryScanner, TradeMarket
 from app.services.live_market_types import CashCarryScan
 
@@ -87,6 +88,20 @@ def test_cash_carry_scan_respects_blacklist_inside_allowed_exchanges(monkeypatch
     scanner.scan(BotSettings(exchange_blacklist=[ExchangeName.GATE, ExchangeName.BYBIT]))
 
     assert loaded == [ExchangeName.BITGET]
+
+
+def test_cash_carry_scan_keeps_expanded_internal_candidate_pool(monkeypatch) -> None:
+    scanner = _scanner()
+    base = scanner._build_opportunity("ABCUSDT", _data("100.5", "-0.0001"), BotSettings())
+    assert base is not None
+    rows = [base.model_copy(update={"symbol": f"ABC{i}USDT"}) for i in range(CASH_CARRY_INTERNAL_CANDIDATE_LIMIT + 10)]
+
+    monkeypatch.setattr(scanner, "_load_exchange_data", lambda exchange: CashCarryExchangeData(exchange=exchange))
+    monkeypatch.setattr(scanner, "_exchange_opportunities", lambda _data, _settings: rows)
+
+    scan = scanner.scan(BotSettings())
+
+    assert len(scan.candidates) == CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 
 
 def test_cash_carry_blocks_same_symbol_with_different_base_id() -> None:

@@ -11,6 +11,7 @@ from app.core.credentials import CredentialStore
 from app.core.env import ai_status, credential_statuses, env_bool
 from app.core.models import AIInsight, BotSettings, DataSource, DeepSeekCredentialInput, ExchangeCredentialInput, ExchangeName, Mt4CredentialInput, RealtimeSnapshot, RiskEvent
 from app.services.exchange_factory import build_ccxt_exchange, sanitize_exchange_error
+from app.services.cash_carry_scope import CASH_CARRY_DISPLAY_CANDIDATE_LIMIT
 from app.services.live_market_types import SPOT_EXCHANGE_IDS, SWAP_EXCHANGE_IDS
 from app.services.mt4_bridge import Mt4QuoteIn, mt4_token_ok
 from app.services.arbitrage_engine import ArbitrageEngine
@@ -307,11 +308,13 @@ def _lightweight_snapshot() -> RealtimeSnapshot:
     alpha_scan = getattr(runtime, "alpha_alert", None)
     balances = getattr(account, "balances", []) if account else []
     positions = getattr(account, "positions", []) if account else []
-    cash_opps = _trim(getattr(cash_scan, "opportunities", []) if cash_scan else [], 20)
-    cash_candidates = _trim(getattr(cash_scan, "candidates", []) if cash_scan else [], 50)
+    raw_cash_opps = getattr(cash_scan, "opportunities", []) if cash_scan else []
+    raw_cash_candidates = getattr(cash_scan, "candidates", []) if cash_scan else []
+    cash_opps = _trim(raw_cash_opps, 20)
+    cash_candidates = _trim(raw_cash_candidates, CASH_CARRY_DISPLAY_CANDIDATE_LIMIT)
     alpha_opps = _trim(getattr(alpha_scan, "opportunities", []) if alpha_scan else [], 20)
     alpha_candidates = _trim(getattr(alpha_scan, "candidates", []) if alpha_scan else [], 80)
-    cash_prices = [*cash_opps, *cash_candidates]
+    cash_prices = [*raw_cash_opps, *raw_cash_candidates]
     cash_positions = engine._cash_positions_snapshot(positions, cash_prices, settings) if live_enabled else []
     risk_events = [
         RiskEvent(
@@ -332,7 +335,7 @@ def _lightweight_snapshot() -> RealtimeSnapshot:
             [],
             cash_positions,
             positions,
-            cash_candidates,
+            raw_cash_candidates,
         )
     )
     return RealtimeSnapshot(
