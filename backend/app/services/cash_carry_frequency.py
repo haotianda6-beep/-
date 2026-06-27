@@ -18,6 +18,22 @@ BLOCKER_PREFIXES = {
     "标的或链路风险": ("合约与现货标的未确认一致", "预上市合约且现货充提均关闭", "盘口深度不足"),
 }
 
+NEAREST_HARD_BLOCKER_PREFIXES = (
+    "资金费率不是正数",
+    "资金费率低于",
+    "现货/合约最低24h成交量低于",
+    "开仓基差异常过高",
+    "历史发生过强平",
+    "历史累计真实净利",
+    "历史胜率",
+    "合约与现货标的未确认一致",
+    "预上市合约且现货充提均关闭",
+    "盘口深度不足",
+    "最近执行深度失败",
+    "同交易所正向期现持仓槽位已满",
+    "该交易所该币种已有正向期现持仓",
+)
+
 
 def cash_carry_frequency_event(
     settings: BotSettings,
@@ -82,9 +98,9 @@ def _nearest_to_entry_gate(candidates: list[CashCarryOpportunity]) -> CashCarryO
     filtered = [
         item
         for item in candidates
-        if not any(reason.startswith(("开仓基差异常过高", "历史发生过强平", "历史累计真实净利")) for reason in item.blocked_reasons)
+        if not any(reason.startswith(NEAREST_HARD_BLOCKER_PREFIXES) for reason in item.blocked_reasons)
     ]
-    return max(filtered or candidates, key=lambda item: item.estimated_net_profit, default=None)
+    return max(filtered, key=lambda item: item.estimated_net_profit, default=None)
 
 
 def _required_entry_basis_pct(

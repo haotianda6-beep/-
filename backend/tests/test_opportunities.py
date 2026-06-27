@@ -150,6 +150,31 @@ def test_cash_carry_frequency_event_explains_why_no_ready_opportunity(tmp_path) 
     assert "净利不足1个" in event.detail
 
 
+def test_cash_carry_frequency_event_ignores_low_volume_for_nearest_opportunity(tmp_path) -> None:
+    engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
+    candidates = [
+        _candidate("LOWVOLUSDT", Decimal("2.5"), ["现货/合约最低24h成交量低于 300000U"]),
+        _candidate("SOFTUSDT", Decimal("0.5"), ["V3冷启动净利预估 0.5000U < 冷启动安全垫 0.9000U"]),
+    ]
+
+    events = engine.get_risk_events(BotSettings(order_notional_usdt=Decimal("300")), cash_carry_candidates=candidates)
+
+    event = next(item for item in events if item.id == "cash-carry-frequency-diagnostic")
+    assert "SOFTUSDT" in event.detail
+    assert "LOWVOLUSDT" not in event.detail
+
+
+def test_cash_carry_frequency_event_hides_nearest_when_all_candidates_are_hard_blocked(tmp_path) -> None:
+    engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
+    candidates = [_candidate("LOWVOLUSDT", Decimal("2.5"), ["现货/合约最低24h成交量低于 300000U"])]
+
+    events = engine.get_risk_events(BotSettings(order_notional_usdt=Decimal("300")), cash_carry_candidates=candidates)
+
+    event = next(item for item in events if item.id == "cash-carry-frequency-diagnostic")
+    assert "离开仓最近的是" not in event.detail
+    assert "LOWVOLUSDT" not in event.detail
+
+
 def test_cash_carry_frequency_event_includes_rolling_memory(tmp_path) -> None:
     engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
     candidates = [_candidate("MEMUSDT", Decimal("5"), ["V3历史胜率保护：净利预估 5.0000U < 动态安全垫 6.0000U"])]

@@ -7,6 +7,21 @@ from app.core.models import CashCarryOpportunity, ExchangeName
 
 
 WINDOW = timedelta(minutes=30)
+HARD_BLOCKER_PREFIXES = (
+    "资金费率不是正数",
+    "资金费率低于",
+    "现货/合约最低24h成交量低于",
+    "开仓基差异常过高",
+    "历史发生过强平",
+    "历史累计真实净利",
+    "历史胜率",
+    "合约与现货标的未确认一致",
+    "预上市合约且现货充提均关闭",
+    "盘口深度不足",
+    "最近执行深度失败",
+    "同交易所正向期现持仓槽位已满",
+    "该交易所该币种已有正向期现持仓",
+)
 
 
 @dataclass(frozen=True)
@@ -55,7 +70,7 @@ class CashCarryMarketMemory:
         if not samples:
             return CashCarryMarketMemorySummary(0, 0, None, 0, 0)
         base_quality = [item for item in samples if _base_quality_allows(item)]
-        best_pool = base_quality or [item for item in samples if _not_hard_blocked(item)] or samples
+        best_pool = base_quality or [item for item in samples if _not_hard_blocked(item)]
         near_floor = dynamic_net_floor * Decimal("0.75")
         near_count = sum(1 for item in base_quality if item.estimated_net_profit >= near_floor)
         return CashCarryMarketMemorySummary(
@@ -88,4 +103,4 @@ def _base_quality_allows(item: CashCarryMarketSample) -> bool:
 
 
 def _not_hard_blocked(item: CashCarryMarketSample) -> bool:
-    return not any(reason.startswith(("开仓基差异常过高", "历史发生过强平", "历史累计真实净利")) for reason in item.blocked_reasons)
+    return not any(reason.startswith(HARD_BLOCKER_PREFIXES) for reason in item.blocked_reasons)
