@@ -16,6 +16,7 @@ from app.core.models import (
 )
 from app.core.env import ai_status, credential_statuses, env_bool
 from app.services.ai_monitor import DeepSeekMonitor
+from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_positions import CashCarryPositionBuilder
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES
 from app.services.cash_carry_scanner import CashCarryScanner
@@ -34,6 +35,7 @@ class ArbitrageEngine:
         self.live_read = LiveReadService()
         self.ticker_cache = WSTickerCache()
         self.cash_carry_scanner = CashCarryScanner()
+        self.cash_carry_history_quality = CashCarryHistoryQuality()
         self.cash_carry_positions = CashCarryPositionBuilder(self.ticker_cache)
         self.mt4_quote_store = Mt4QuoteStore()
         self.mt4_spread_scanner = Mt4SpreadScanner(self.mt4_quote_store)
@@ -189,6 +191,7 @@ class ArbitrageEngine:
             events.append(RiskEvent(id=f"alpha-alert-issue-{index}", severity="warning", title="币安 Alpha 提醒异常", detail=issue, action="检查币安 Alpha 公共行情接口和服务器网络。", created_at=now))
         for index, issue in enumerate(mt4_spread_issues or []):
             events.append(RiskEvent(id=f"mt4-spread-issue-{index}", severity="warning", title="MT4 价差扫描异常", detail=issue, action="检查 MT4 插件报价推送、品种映射和交易所合约行情接口。", created_at=now))
+        events.append(self._cash_carry_v2_performance_event(settings, now))
         events.extend(self._liquidation_distance_events(live_positions or [], now))
         events.extend(self._cash_carry_add_config_events(settings, now))
         for result in recent_execution_results():
@@ -203,6 +206,21 @@ class ArbitrageEngine:
         if settings.emergency_close_enabled:
             events.append(RiskEvent(id="emergency-close", severity="critical", title="紧急平仓开关已打开", detail="系统应停止新开仓并准备执行保护性平仓。", action="检查持仓并人工确认。", created_at=now))
         return events
+
+    def _cash_carry_v2_performance_event(self, settings: BotSettings, now: datetime) -> RiskEvent:
+        summary = self.cash_carry_history_quality.performance_summary(settings, now)
+        total_rate = f"{summary.total_win_rate_pct:.2f}%"
+        day_rate = f"{summary.win_rate_24h_pct:.2f}%" if summary.trades_24h else "暂无样本"
+        severity = "info"
+        if summary.total_trades >= 5 and summary.total_win_rate_pct < Decimal("70"):
+            severity = "warning"
+        detail = (
+            f"历史真实样本 {summary.total_trades} 单，胜率 {total_rate}，累计真实净利 {summary.total_net:.4f}U；"
+            f"近24小时 {summary.trades_24h} 单，胜率 {day_rate}，净利 {summary.net_24h:.4f}U；"
+            f"历史风控已拦截 {summary.blocked_symbols} 个币种。"
+        )
+        action = "目标是胜率不低于70%、约10单/日；若近24小时单数不足，优先等待当前持仓退出后由V2候选池补新仓，不建议人工放开历史亏损币。"
+        return RiskEvent(id="cash-carry-v2-performance", severity=severity, title="正向期现V2统计", detail=detail, action=action, created_at=now)
 
     def _liquidation_distance_events(self, positions: list[PositionSnapshot], now: datetime) -> list[RiskEvent]:
         events = []

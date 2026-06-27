@@ -14,6 +14,7 @@ from app.services.cash_carry_scope import CASH_CARRY_EXCHANGE_SET
 from app.services.cash_carry_executor import CashCarryExecutor
 from app.services.cash_carry_fast_refresh import CashCarryFastRefresher
 from app.services.cash_carry_positions import CashCarryPositionBuilder
+from app.services.cash_carry_quality import cash_carry_quality_score
 from app.services.cash_carry_scanner import CashCarryScanner
 from app.services.live_market_types import CashCarryScan
 from app.services.live_read import LiveAccountSnapshot, LiveReadService
@@ -22,7 +23,7 @@ from app.services.ws_ticker_cache import WSTickerCache
 
 
 FAST_REFRESH_SECONDS = 1.0
-FULL_SCAN_INTERVAL_SECONDS = 300.0
+FULL_SCAN_INTERVAL_SECONDS = 180.0
 FULL_SCAN_TIMEOUT_SECONDS = 90.0
 ACCOUNT_REFRESH_SECONDS = 30.0
 MT4_SCAN_SECONDS = 2.0
@@ -140,7 +141,7 @@ class LiveRuntimeCache:
                 time.sleep(FAST_REFRESH_SECONDS)
                 continue
             now = time.monotonic()
-            if last_full_scan == 0.0 or now - last_full_scan >= FULL_SCAN_INTERVAL_SECONDS:
+            if last_full_scan == 0.0 or now - last_full_scan >= _cash_carry_full_scan_interval():
                 with self._lock:
                     current = self._cash_carry
                 full_scan, completed = self._run_full_scan(lambda: self._cash_carry_full_scan(self._settings), current)
@@ -317,11 +318,27 @@ class LiveRuntimeCache:
 
     def _rebuild_cash_carry_scan(self, rows: list[CashCarryOpportunity], issues: list[str]) -> CashCarryScan:
         opportunities = [item for item in rows if not item.blocked_reasons]
-        candidates = sorted(rows, key=lambda item: (len(item.blocked_reasons), -item.estimated_net_profit))[:50]
+        candidates = sorted(rows, key=self._cash_carry_candidate_sort_key)[:50]
         return CashCarryScan(
-            opportunities=sorted(opportunities, key=lambda item: item.estimated_net_profit, reverse=True),
+            opportunities=sorted(opportunities, key=self._cash_carry_opportunity_sort_key),
             candidates=candidates,
             issues=issues,
+        )
+
+    def _cash_carry_candidate_sort_key(self, item: CashCarryOpportunity) -> tuple[int, Decimal, Decimal]:
+        return (len(item.blocked_reasons), -self._cash_carry_quality_score(item), -item.estimated_net_profit)
+
+    def _cash_carry_opportunity_sort_key(self, item: CashCarryOpportunity) -> tuple[Decimal, Decimal]:
+        return (-self._cash_carry_quality_score(item), -item.estimated_net_profit)
+
+    def _cash_carry_quality_score(self, item: CashCarryOpportunity) -> Decimal:
+        return cash_carry_quality_score(
+            self._settings,
+            item.basis_pct,
+            item.funding_rate_pct / Decimal("100"),
+            min(item.spot_volume_24h_usdt, item.perp_volume_24h_usdt),
+            item.estimated_net_profit,
+            item.max_safe_notional_usdt,
         )
 
     def _dedupe_reasons(self, reasons: list[str]) -> list[str]:
@@ -410,6 +427,14 @@ class LiveRuntimeCache:
 
 def _cash_carry_runtime_enabled() -> bool:
     return env_bool("MAIN_DASHBOARD_CASH_CARRY_RUNTIME", default=True)
+
+
+def _cash_carry_full_scan_interval() -> float:
+    try:
+        value = float(os.getenv("MAIN_DASHBOARD_CASH_CARRY_FULL_SCAN_SECONDS", str(FULL_SCAN_INTERVAL_SECONDS)))
+    except ValueError:
+        return FULL_SCAN_INTERVAL_SECONDS
+    return max(60.0, value)
 
 
 def _cash_carry_scan_subprocess_enabled() -> bool:

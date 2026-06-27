@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from app.core.models import BotSettings, CashCarryPositionRow, ExchangeName, PositionSnapshot
 from app.services.arbitrage_engine import ArbitrageEngine
+from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.market_checks import TransferNetworks, bidirectional_route_check
 from app.services.settings_store import SettingsStore
 
@@ -96,6 +97,26 @@ def test_cash_carry_liquidation_distance_warns_when_too_close(tmp_path) -> None:
     event = next(item for item in events if item.id == "liq-distance-BITGET-ABCUSDT")
     assert event.title == "正向期现强平距离过近"
     assert event.severity == "critical"
+
+
+def test_cash_carry_v2_performance_event_reports_win_rate(tmp_path) -> None:
+    state = tmp_path / "cash_carry_execution_state.json"
+    state.write_text(
+        '{"positions":['
+        '{"exchange":"BITGET","symbol":"AAAUSDT","status":"closed","closed_at":"2026-06-27T01:00:00+00:00","history":{"actual_net_profit":"1.2"}},'
+        '{"exchange":"BITGET","symbol":"BBBUSDT","status":"closed","closed_at":"2026-06-27T02:00:00+00:00","history":{"actual_net_profit":"-0.4"}}'
+        ']}',
+        encoding="utf-8",
+    )
+    engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
+    engine.cash_carry_history_quality = CashCarryHistoryQuality(state)
+
+    events = engine.get_risk_events(BotSettings(),)
+
+    event = next(item for item in events if item.id == "cash-carry-v2-performance")
+    assert event.title == "正向期现V2统计"
+    assert "历史真实样本 2 单" in event.detail
+    assert "胜率 50.00%" in event.detail
 
 
 def _cash_position() -> CashCarryPositionRow:

@@ -10,7 +10,7 @@ from app.core.pnl import calculate_spread_pct
 from app.services.asset_identity import MarketAsset, asset_from_market, local_identity_reasons
 from app.services.cash_carry_depth_estimator import estimate_max_safe_notional
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
-from app.services.cash_carry_quality import entry_quality_reasons, estimated_entry_net_profit, convergence_basis_profit
+from app.services.cash_carry_quality import cash_carry_quality_score, entry_quality_reasons, estimated_entry_net_profit, convergence_basis_profit
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES
 from app.services.exchange_factory import build_ccxt_exchange
 from app.services.live_market_types import CashCarryScan, SPOT_EXCHANGE_IDS, SWAP_EXCHANGE_IDS
@@ -65,9 +65,9 @@ class CashCarryScanner:
                 for item in self._exchange_opportunities(exchange_data, settings)
             ]
             opportunities = [item for item in checked if not item.blocked_reasons]
-            candidates = sorted(checked, key=lambda item: (len(item.blocked_reasons), -item.estimated_net_profit))[:50]
+            candidates = sorted(checked, key=lambda item: self._candidate_sort_key(item, settings))[:50]
             return CashCarryScan(
-                opportunities=sorted(opportunities, key=lambda item: item.estimated_net_profit, reverse=True),
+                opportunities=sorted(opportunities, key=lambda item: self._opportunity_sort_key(item, settings)),
                 candidates=candidates,
                 issues=[issue for item in data for issue in item.issues],
             )
@@ -318,7 +318,7 @@ class CashCarryScanner:
         ready = [item for item in items if not item.blocked_reasons]
         top_keys = {
             item.symbol
-            for item in sorted(ready, key=lambda row: -row.estimated_net_profit)[:5]
+            for item in sorted(ready, key=lambda row: self._opportunity_sort_key(row, settings))[:10]
         }
         if not top_keys:
             return items
@@ -357,6 +357,22 @@ class CashCarryScanner:
                 f"盘口深度不足，最大安全本金 {safe_notional}U < 单笔 {q(settings.order_notional_usdt, '0.01')}U",
             ]
         return item.model_copy(update=updates)
+
+    def _candidate_sort_key(self, item: CashCarryOpportunity, settings: BotSettings) -> tuple[int, Decimal, Decimal]:
+        return (len(item.blocked_reasons), -self._quality_score(item, settings), -item.estimated_net_profit)
+
+    def _opportunity_sort_key(self, item: CashCarryOpportunity, settings: BotSettings) -> tuple[Decimal, Decimal]:
+        return (-self._quality_score(item, settings), -item.estimated_net_profit)
+
+    def _quality_score(self, item: CashCarryOpportunity, settings: BotSettings) -> Decimal:
+        return cash_carry_quality_score(
+            settings,
+            item.basis_pct,
+            item.funding_rate_pct / Decimal("100"),
+            min(item.spot_volume_24h_usdt, item.perp_volume_24h_usdt),
+            item.estimated_net_profit,
+            item.max_safe_notional_usdt,
+        )
 
     def _is_pre_market(self, market: dict[str, Any]) -> bool:
         info = market.get("info") if isinstance(market.get("info"), dict) else {}

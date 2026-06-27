@@ -144,6 +144,32 @@ def test_cash_carry_blocks_symbol_with_loss_history(tmp_path) -> None:
     assert "历史累计真实净利 -2.5000U" in reasons
 
 
+def test_cash_carry_v2_sort_prefers_higher_quality_signal() -> None:
+    scanner = CashCarryScanner()
+    settings = BotSettings(order_notional_usdt=Decimal("300"))
+    low_quality = scanner._build_opportunity("ABCUSDT", _data("101.8", "0.00001"), settings)
+    high_quality = scanner._build_opportunity("ABCUSDT", _data("101.35", "0.0005"), settings)
+
+    assert low_quality is not None
+    assert high_quality is not None
+    low_quality = low_quality.model_copy(update={
+        "symbol": "LOWUSDT",
+        "estimated_net_profit": Decimal("2.8"),
+        "spot_volume_24h_usdt": Decimal("300000"),
+        "perp_volume_24h_usdt": Decimal("300000"),
+    })
+    high_quality = high_quality.model_copy(update={
+        "symbol": "HIGHUSDT",
+        "estimated_net_profit": Decimal("2.0"),
+        "spot_volume_24h_usdt": Decimal("3000000"),
+        "perp_volume_24h_usdt": Decimal("3000000"),
+    })
+
+    ranked = sorted([low_quality, high_quality], key=lambda item: scanner._candidate_sort_key(item, settings))
+
+    assert ranked[0].symbol == "HIGHUSDT"
+
+
 def test_cash_carry_fast_refresh_drops_blacklisted_symbol() -> None:
     scanner = CashCarryScanner()
     item = scanner._build_opportunity("ABCUSDT", _data("101", "0.0002"), BotSettings(order_notional_usdt=Decimal("100")))
