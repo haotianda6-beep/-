@@ -11,7 +11,7 @@ from app.core.models import BotSettings, CashCarryOpportunity, CashCarryPosition
 from app.services.account_fee_rates import account_taker_fee_map, cached_account_taker_fee
 from app.services.cash_carry_add_executor import evaluate_cash_carry_add
 from app.services.cash_carry_close_policy import CashCarryCloseDecision, cash_carry_close_decision
-from app.services.cash_carry_execution_guard import forward_close_depth_guard, forward_open_depth_guard
+from app.services.cash_carry_execution_guard import forward_close_depth_guard, forward_open_depth_guard, forward_perp_entry_guard_after_spot
 from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION, CashCarryPosition
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_reconciler import build_cash_carry_external_perp_close_history, build_cash_carry_history
@@ -174,6 +174,49 @@ class CashCarryExecutor:
             base_qty = filled_base_quantity(spot, spot_symbol, spot_order, item.quantity)
             spot_entry_price = order_average_price(spot_order, item.spot_price)
             spot_order_id = self._order_id(spot_order)
+            post_spot_guard = self._post_spot_open_guard(item, settings, swap, swap_symbol, base_qty, spot_entry_price)
+            if not post_spot_guard.ok:
+                steps[3].status = "failed"
+                steps[3].detail = post_spot_guard.reason
+                rollback = self._rollback_spot_after_open_failure(spot, spot_symbol, base, base_qty)
+                if rollback.get("closed"):
+                    return self.state.remember(
+                        ExecutionResult(
+                            str(uuid.uuid4()),
+                            "blocked_by_depth",
+                            f"{post_spot_guard.reason}；已自动卖出现货回滚，避免低质量双腿",
+                            steps,
+                            position=item,
+                        )
+                    )
+                position = CashCarryPosition(
+                    id=str(uuid.uuid4()),
+                    exchange=item.exchange,
+                    symbol=item.symbol,
+                    base_asset=base,
+                    quantity=base_qty,
+                    spot_entry_price=spot_entry_price,
+                    perp_entry_price=post_spot_guard.perp_price if post_spot_guard.perp_price > 0 else item.perp_price,
+                    spot_order_id=spot_order_id,
+                    perp_order_id=None,
+                    opened_at=datetime.now(timezone.utc),
+                    status="spot_only",
+                    entry_basis_pct=post_spot_guard.basis_pct if post_spot_guard.basis_pct else item.basis_pct,
+                    entry_estimated_net_profit=post_spot_guard.estimated_net_profit,
+                    entry_estimated_funding_income=item.estimated_funding_income,
+                    entry_estimated_open_close_fee=item.estimated_open_close_fee,
+                    entry_notional_usdt=q(base_qty * spot_entry_price, "0.01"),
+                )
+                self.state.save_position(position)
+                return self.state.remember(
+                    ExecutionResult(
+                        str(uuid.uuid4()),
+                        "failed",
+                        f"{post_spot_guard.reason}；现货回滚失败 {rollback.get('reason', '未知原因')}，已记录现货孤腿",
+                        steps,
+                        position=item,
+                    )
+                )
             contract_qty = contract_order_amount(swap, swap_symbol, base_qty)
             perp_order_raw = self._run(
                 steps[3],
@@ -876,6 +919,31 @@ class CashCarryExecutor:
             "estimated_open_close_fee": q(open_close_fee),
             "notional_usdt": q(notional, "0.01"),
         }
+
+    def _post_spot_open_guard(
+        self,
+        item: CashCarryOpportunity,
+        settings: BotSettings,
+        swap,
+        swap_symbol: str,
+        base_qty: Decimal,
+        spot_entry_price: Decimal,
+    ):
+        notional = base_qty * spot_entry_price
+        reference = item.notional_usdt or settings.order_notional_usdt
+        factor = notional / reference if reference > 0 and notional > 0 else Decimal("1")
+        gate = self.history_quality.entry_quality_gate(settings)
+        return forward_perp_entry_guard_after_spot(
+            swap,
+            swap_symbol,
+            base_qty,
+            spot_entry_price,
+            self._open_min_basis_pct(item, settings),
+            min_net_profit=gate.min_net_profit * factor,
+            open_close_fee=item.estimated_open_close_fee * factor,
+            funding_income=item.estimated_funding_income * factor,
+            close_basis_pct=settings.cash_carry_close_basis_pct,
+        )
 
     def _safe_taker_fee(self, exchange: ExchangeName, market_type: str, symbol: str) -> Decimal:
         try:

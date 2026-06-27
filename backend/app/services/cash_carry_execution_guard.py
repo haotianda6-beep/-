@@ -56,6 +56,48 @@ def forward_open_depth_guard(
         return DepthGuardResult(False, f"开仓深度校验失败 {str(exc)[:160]}")
 
 
+def forward_perp_entry_guard_after_spot(
+    swap,
+    swap_symbol: str,
+    base_quantity: Decimal,
+    spot_entry_price: Decimal,
+    min_basis_pct: Decimal,
+    *,
+    min_net_profit: Decimal = Decimal("0"),
+    open_close_fee: Decimal = Decimal("0"),
+    funding_income: Decimal = Decimal("0"),
+    close_basis_pct: Decimal = Decimal("0"),
+) -> DepthGuardResult:
+    try:
+        if base_quantity <= 0 or spot_entry_price <= 0:
+            return DepthGuardResult(False, "现货真实成交数量或价格无效，取消合约开仓")
+        if hasattr(swap, "load_markets"):
+            swap.load_markets()
+        contract_size = Decimal(str(swap.market(swap_symbol).get("contractSize") or "1"))
+        swap_book = swap.fetch_order_book(swap_symbol, limit=20)
+        _, perp_avg = _sell_vwap_base(swap_book.get("bids") or [], base_quantity, contract_size)
+        if perp_avg <= 0:
+            return DepthGuardResult(False, "现货已成交后合约买盘深度不足，取消合约开仓")
+        basis = (perp_avg - spot_entry_price) / spot_entry_price * Decimal("100")
+        if basis < min_basis_pct:
+            return DepthGuardResult(False, f"现货成交后合约可成交基差 {basis:.4f}% 低于 {min_basis_pct}%", spot_entry_price, perp_avg, basis)
+        notional = base_quantity * spot_entry_price
+        tradable_basis = max(Decimal("0"), basis - close_basis_pct)
+        estimated_net = notional * tradable_basis / Decimal("100") + funding_income - open_close_fee
+        if estimated_net < min_net_profit:
+            return DepthGuardResult(
+                False,
+                f"现货成交后净利预估 {estimated_net:.4f} USDT 低于稳定开仓安全垫 {min_net_profit:.4f} USDT",
+                spot_entry_price,
+                perp_avg,
+                basis,
+                estimated_net,
+            )
+        return DepthGuardResult(True, "ok", spot_entry_price, perp_avg, basis, estimated_net)
+    except Exception as exc:  # noqa: BLE001
+        return DepthGuardResult(False, f"现货成交后合约二次校验失败 {str(exc)[:160]}")
+
+
 def forward_close_depth_guard(
     spot,
     swap,

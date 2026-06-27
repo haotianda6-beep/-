@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app.services.cash_carry_execution_guard import forward_close_depth_guard, forward_open_depth_guard
+from app.services.cash_carry_execution_guard import forward_close_depth_guard, forward_open_depth_guard, forward_perp_entry_guard_after_spot
 
 
 def test_forward_open_depth_guard_blocks_when_vwap_basis_is_too_low() -> None:
@@ -53,6 +53,23 @@ def test_forward_close_depth_guard_blocks_when_executable_net_would_be_loss() ->
     assert not result.ok
     assert result.estimated_net_profit < 0
     assert "盘口可成交净利" in result.reason
+
+
+def test_forward_perp_entry_guard_after_spot_blocks_when_basis_slips() -> None:
+    result = forward_perp_entry_guard_after_spot(
+        _DepthExchange(asks=[[102, 10]], bids=[[100.3, 10]]),
+        "AIA/USDT:USDT",
+        Decimal("1"),
+        Decimal("100.25"),
+        Decimal("0.8"),
+        min_net_profit=Decimal("0.9"),
+        open_close_fee=Decimal("0.2"),
+        funding_income=Decimal("0.01"),
+        close_basis_pct=Decimal("0.05"),
+    )
+
+    assert not result.ok
+    assert "现货成交后合约可成交基差" in result.reason
 
 
 class _DepthExchange:
