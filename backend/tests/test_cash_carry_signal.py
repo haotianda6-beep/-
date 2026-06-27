@@ -127,6 +127,43 @@ def test_cash_carry_signal_keeps_full_wait_when_net_cushion_is_thin() -> None:
     assert "信号持续不足" in " / ".join(result.candidates[0].blocked_reasons)
 
 
+def test_cash_carry_signal_fast_captures_thick_net_after_two_ticks() -> None:
+    tracker = CashCarrySignalTracker()
+    settings = _settings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_min_basis_pct=Decimal("0.8"),
+        cash_carry_signal_min_seconds=Decimal("20"),
+        cash_carry_signal_min_samples=5,
+        cash_carry_signal_min_history_samples=30,
+        cash_carry_signal_min_basis_percentile=Decimal("75"),
+    )
+    soft_reason = ["V3冷启动净利预估 0.1000U < 冷启动安全垫 0.9000U"]
+    for offset in range(6):
+        tracker.apply(CashCarryScan(candidates=[_candidate("ABCUSDT", Decimal("0.3"), soft_reason, net=Decimal("0.1"))]), settings, now=100.0 + offset)
+
+    tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal("0.9"), net=Decimal("1.6"))]), settings, now=106.0)
+    result = tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal("0.9"), net=Decimal("1.6"))]), settings, now=108.0)
+
+    assert result.opportunities
+    assert result.opportunities[0].symbol == "ABCUSDT"
+
+
+def test_cash_carry_signal_fast_capture_requires_entry_basis() -> None:
+    tracker = CashCarrySignalTracker()
+    settings = _settings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_min_basis_pct=Decimal("0.8"),
+        cash_carry_signal_min_seconds=Decimal("20"),
+        cash_carry_signal_min_samples=5,
+    )
+
+    for offset in [0, 2]:
+        result = tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal("0.7"), net=Decimal("1.8"))]), settings, now=100.0 + offset)
+
+    assert result.opportunities == []
+    assert "信号持续不足" in " / ".join(result.candidates[0].blocked_reasons)
+
+
 def test_cash_carry_signal_relaxes_percentile_when_net_cushion_is_high() -> None:
     tracker = CashCarrySignalTracker()
     settings = _settings(
