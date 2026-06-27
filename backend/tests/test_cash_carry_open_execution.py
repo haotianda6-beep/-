@@ -25,6 +25,19 @@ def test_cash_carry_open_records_actual_fill_prices(tmp_path) -> None:
     assert state["entry_notional_usdt"] == "100.00"
 
 
+def test_cash_carry_open_still_records_position_when_fee_lookup_fails(tmp_path) -> None:
+    executor = _FeeFailOpeningExecutor(tmp_path / "state.json")
+    settings = BotSettings(manual_confirm_required=False, cash_carry_auto_open_enabled=True)
+
+    result = executor._execute_open(_opportunity(), settings, executor._open_plan(_opportunity(), settings))
+
+    assert result.status == "open_submitted"
+    state = executor.state.read()["positions"][0]
+    assert state["spot_order_id"] == "spot-open"
+    assert state["perp_order_id"] == "perp-open"
+    assert state["entry_estimated_open_close_fee"] == "0.2418"
+
+
 def _opportunity() -> CashCarryOpportunity:
     return CashCarryOpportunity(
         exchange=ExchangeName.GATE,
@@ -97,3 +110,8 @@ class _OpeningExecutor(CashCarryExecutor):
 
     def _exchange(self, exchange_name, default_type):
         return self.spot if default_type == "spot" else self.swap
+
+
+class _FeeFailOpeningExecutor(_OpeningExecutor):
+    def _taker_fee(self, exchange, market_type, symbol):
+        raise RuntimeError("fee lookup failed")

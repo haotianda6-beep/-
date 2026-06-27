@@ -860,8 +860,9 @@ class CashCarryExecutor:
         basis_pct = (perp_entry_price - spot_entry_price) / spot_entry_price * Decimal("100")
         funding_rate = item.funding_rate_pct / Decimal("100")
         funding_income = notional * funding_rate
-        spot_fee = self._taker_fee(ExchangeName(item.exchange), "spot", spot_symbol)
-        swap_fee = self._taker_fee(ExchangeName(item.exchange), "swap", swap_symbol)
+        exchange_name = ExchangeName(item.exchange)
+        spot_fee = self._safe_taker_fee(exchange_name, "spot", spot_symbol)
+        swap_fee = self._safe_taker_fee(exchange_name, "swap", swap_symbol)
         open_close_fee = (
             base_qty * spot_entry_price * spot_fee
             + base_qty * perp_entry_price * swap_fee
@@ -875,6 +876,13 @@ class CashCarryExecutor:
             "estimated_open_close_fee": q(open_close_fee),
             "notional_usdt": q(notional, "0.01"),
         }
+
+    def _safe_taker_fee(self, exchange: ExchangeName, market_type: str, symbol: str) -> Decimal:
+        try:
+            fee = self._taker_fee(exchange, market_type, symbol)
+        except Exception:  # noqa: BLE001 - metrics recording must not leave an opened pair untracked.
+            return self._fee_rate(exchange)
+        return fee if fee > 0 else self._fee_rate(exchange)
 
     def _open_min_basis_pct(self, item: CashCarryOpportunity, settings: BotSettings) -> Decimal:
         if self.history_quality.bootstrap_basis_allows(item.basis_pct, item.estimated_net_profit, settings):
