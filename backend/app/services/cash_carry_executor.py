@@ -6,6 +6,7 @@ from typing import Any
 from dotenv import load_dotenv
 from app.core.env import ENV_PATH, env_bool
 from app.core.market_math import FEE_RATES
+from app.core.market_math import q
 from app.core.models import BotSettings, CashCarryOpportunity, CashCarryPositionRow, ExchangeName
 from app.services.cash_carry_add_executor import evaluate_cash_carry_add
 from app.services.cash_carry_close_policy import CashCarryCloseDecision, cash_carry_close_decision
@@ -69,7 +70,15 @@ class CashCarryExecutor:
             and self._exposure_allows(item, settings)
         ]
         if not ready:
-            return None
+            probe = self._probe_open_candidate(rows, settings, blocked_keys, active_counts, allowed_open_exchanges)
+            if not probe:
+                return None
+            item, open_settings = probe
+            steps = self._open_plan(item, open_settings)
+            gate_reasons = self._safety_gate(open_settings, opening=True)
+            if gate_reasons:
+                return self.state.remember(ExecutionResult(str(uuid.uuid4()), "blocked_by_safety_gate", " / ".join(gate_reasons), steps))
+            return self._execute_open(item, open_settings, "恢复小额试单")
         item = max(ready, key=lambda row: row.estimated_net_profit)
         steps = self._open_plan(item, settings)
         gate_reasons = self._safety_gate(settings, opening=True)
@@ -118,7 +127,7 @@ class CashCarryExecutor:
             return self._execute_close(record, steps, decision.reason, settings, live.spot_quantity, live.perp_base_quantity, live)
         return None
 
-    def _execute_open(self, item: CashCarryOpportunity, settings: BotSettings, steps: list[ExecutionStep]) -> ExecutionResult:
+    def _execute_open(self, item: CashCarryOpportunity, settings: BotSettings, steps: list[ExecutionStep], mode_label: str = "") -> ExecutionResult:
         if ExchangeName(item.exchange) not in CASH_CARRY_EXCHANGE_SET:
             return self.state.remember(ExecutionResult(str(uuid.uuid4()), "blocked_by_safety_gate", f"{item.exchange} 已不允许正向期现开仓", steps))
         spot = self._exchange(item.exchange, "spot")
@@ -175,7 +184,8 @@ class CashCarryExecutor:
                 opened_at=datetime.now(timezone.utc),
             )
             self.state.save_position(position)
-            return self.state.remember(ExecutionResult(position.id, "open_submitted", "已提交正向期现开仓流程", steps))
+            suffix = f"（{mode_label}）" if mode_label else ""
+            return self.state.remember(ExecutionResult(position.id, "open_submitted", f"已提交正向期现开仓流程{suffix}", steps))
         except Exception as exc:  # noqa: BLE001
             if spot_order_id and not perp_order_id:
                 rollback = self._rollback_spot_after_open_failure(spot, spot_symbol, base, base_qty)
@@ -437,6 +447,70 @@ class CashCarryExecutor:
             ExecutionStep("buy_spot", "pending", f"买入现货 {item.symbol}，数量 {item.quantity}"),
             ExecutionStep("open_perp_short", "pending", f"做空合约 {item.symbol}，数量 {item.quantity}"),
         ]
+
+    def _probe_open_candidate(
+        self,
+        rows: list[CashCarryOpportunity],
+        settings: BotSettings,
+        blocked_keys: set[tuple[ExchangeName, str]],
+        active_counts: dict[ExchangeName, int],
+        allowed_open_exchanges: set[ExchangeName] | None,
+    ) -> tuple[CashCarryOpportunity, BotSettings] | None:
+        if not settings.cash_carry_recovery_probe_enabled or settings.cash_carry_recovery_probe_notional_usdt <= 0:
+            return None
+        probe_notional = min(settings.cash_carry_recovery_probe_notional_usdt, settings.order_notional_usdt)
+        if probe_notional <= 0:
+            return None
+        probe_settings = settings.model_copy(update={"order_notional_usdt": probe_notional})
+        candidates = []
+        for item in rows:
+            exchange = ExchangeName(item.exchange)
+            if exchange not in CASH_CARRY_EXCHANGE_SET:
+                continue
+            if (item.exchange, item.symbol) in blocked_keys:
+                continue
+            if active_counts.get(exchange, 0) >= settings.cash_carry_max_positions_per_exchange:
+                continue
+            if allowed_open_exchanges is not None and exchange not in allowed_open_exchanges:
+                continue
+            if self.history_quality.blocked_reasons(exchange, item.symbol, settings):
+                continue
+            if not self._probe_blockers_only(item.blocked_reasons):
+                continue
+            adjusted = self._probe_item(item, probe_settings)
+            if not self._probe_net_allows(adjusted, probe_settings):
+                continue
+            if not self._exposure_allows(adjusted, probe_settings):
+                continue
+            candidates.append(adjusted)
+        if not candidates:
+            return None
+        return max(candidates, key=lambda row: row.estimated_net_profit), probe_settings
+
+    def _probe_blockers_only(self, reasons: list[str]) -> bool:
+        return bool(reasons) and all(reason.startswith("V2历史胜率保护") for reason in reasons)
+
+    def _probe_net_allows(self, item: CashCarryOpportunity, settings: BotSettings) -> bool:
+        if settings.order_notional_usdt <= 0:
+            return False
+        min_net = settings.order_notional_usdt * settings.cash_carry_recovery_probe_min_net_pct / Decimal("100")
+        return item.estimated_net_profit >= min_net
+
+    def _probe_item(self, item: CashCarryOpportunity, settings: BotSettings) -> CashCarryOpportunity:
+        if item.notional_usdt > 0:
+            factor = settings.order_notional_usdt / item.notional_usdt
+        else:
+            factor = settings.order_notional_usdt / max(settings.order_notional_usdt, Decimal("1"))
+        return item.model_copy(update={
+            "quantity": q(item.quantity * factor, "0.000001"),
+            "estimated_basis_profit": q(item.estimated_basis_profit * factor),
+            "estimated_funding_income": q(item.estimated_funding_income * factor),
+            "estimated_open_close_fee": q(item.estimated_open_close_fee * factor),
+            "estimated_net_profit": q(item.estimated_net_profit * factor),
+            "notional_usdt": q(settings.order_notional_usdt, "0.01"),
+            "margin_required_usdt": q(settings.order_notional_usdt / settings.default_leverage if settings.default_leverage > 0 else settings.order_notional_usdt, "0.01"),
+            "blocked_reasons": [],
+        })
 
     def _close_plan(
         self,

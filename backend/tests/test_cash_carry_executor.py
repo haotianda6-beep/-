@@ -135,6 +135,49 @@ def test_cash_carry_executor_blocks_historical_loser_even_if_candidate_is_ready(
     assert executor.evaluate_open([_opportunity("ABCUSDT", "3", exchange=ExchangeName.GATE)], settings) is None
 
 
+def test_cash_carry_executor_allows_small_recovery_probe_only_for_global_win_rate_gate(tmp_path) -> None:
+    executor = CashCarryExecutor(tmp_path / "state.json")
+    settings = BotSettings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_recovery_probe_notional_usdt=Decimal("100"),
+        manual_confirm_required=False,
+        cash_carry_auto_open_enabled=True,
+        cash_carry_auto_trade_enabled=False,
+    )
+    candidate = _opportunity("ABCUSDT", "3", exchange=ExchangeName.GATE).model_copy(update={
+        "notional_usdt": Decimal("300"),
+        "blocked_reasons": ["V2历史胜率保护：净利预估 3.0000U < 动态安全垫 6.0000U"],
+    })
+
+    result = executor.evaluate_open([candidate], settings)
+
+    assert result is not None
+    assert result.status == "blocked_by_safety_gate"
+    assert "正向期现自动下单未开启" in result.reason
+    assert "单笔名义 100" in result.steps[0].detail
+    assert "数量 0.333333" in result.steps[2].detail
+
+
+def test_cash_carry_executor_recovery_probe_does_not_bypass_other_blockers(tmp_path) -> None:
+    executor = CashCarryExecutor(tmp_path / "state.json")
+    settings = BotSettings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_recovery_probe_notional_usdt=Decimal("100"),
+        manual_confirm_required=False,
+        cash_carry_auto_open_enabled=True,
+        cash_carry_auto_trade_enabled=False,
+    )
+    candidate = _opportunity("ABCUSDT", "3", exchange=ExchangeName.GATE).model_copy(update={
+        "notional_usdt": Decimal("300"),
+        "blocked_reasons": [
+            "V2历史胜率保护：净利预估 3.0000U < 动态安全垫 6.0000U",
+            "现货/合约最低24h成交量低于 300000U",
+        ],
+    })
+
+    assert executor.evaluate_open([candidate], settings) is None
+
+
 def test_cash_carry_executor_allows_other_exchange_when_one_exchange_is_active(tmp_path) -> None:
     state = tmp_path / "state.json"
     state.write_text(
