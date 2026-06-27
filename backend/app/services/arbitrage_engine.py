@@ -215,17 +215,19 @@ class ArbitrageEngine:
 
     def _cash_carry_v2_performance_event(self, settings: BotSettings, now: datetime) -> RiskEvent:
         summary = self.cash_carry_history_quality.performance_summary(settings, now)
+        gate = self.cash_carry_history_quality.entry_quality_gate(settings, now)
         total_rate = f"{summary.total_win_rate_pct:.2f}%"
         day_rate = f"{summary.win_rate_24h_pct:.2f}%" if summary.trades_24h else "暂无样本"
         severity = "info"
-        if summary.total_trades >= 5 and summary.total_win_rate_pct < Decimal("70"):
+        if summary.total_trades >= 5 and summary.total_win_rate_pct < settings.cash_carry_target_win_rate_pct:
             severity = "warning"
         detail = (
             f"历史真实样本 {summary.total_trades} 单，胜率 {total_rate}，累计真实净利 {summary.total_net:.4f}U；"
             f"近24小时 {summary.trades_24h} 单，胜率 {day_rate}，净利 {summary.net_24h:.4f}U；"
-            f"历史风控已拦截 {summary.blocked_symbols} 个币种。"
+            f"历史风控已拦截 {summary.blocked_symbols} 个币种；"
+            f"当前动态开仓净利安全垫 {gate.min_net_profit:.4f}U。"
         )
-        action = "目标是胜率不低于70%、约10单/日；若近24小时单数不足，优先等待当前持仓退出后由V2候选池补新仓，不建议人工放开历史亏损币。"
+        action = f"目标是胜率不低于{settings.cash_carry_target_win_rate_pct}%、约{settings.cash_carry_target_daily_trades}单/日；低于目标时系统会自动提高开仓净利门槛，不建议人工放开历史亏损币。"
         return RiskEvent(id="cash-carry-v2-performance", severity=severity, title="正向期现V2统计", detail=detail, action=action, created_at=now)
 
     def _cash_carry_turnover_events(self, settings: BotSettings, rows: list[CashCarryPositionRow], now: datetime) -> list[RiskEvent]:

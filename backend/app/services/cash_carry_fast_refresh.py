@@ -4,6 +4,7 @@ from decimal import Decimal
 from app.core.market_math import q
 from app.core.models import BotSettings, CashCarryOpportunity, ExchangeName
 from app.core.pnl import calculate_spread_pct
+from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_quality import convergence_basis_profit, entry_basis_risk_reasons, entry_quality_reasons, estimated_entry_net_profit
 from app.services.live_market_types import CashCarryScan
 from app.services.live_read import decimal_from
@@ -12,8 +13,9 @@ from app.services.ws_ticker_cache import WSTickerCache
 
 
 class CashCarryFastRefresher:
-    def __init__(self, ticker_cache: WSTickerCache) -> None:
+    def __init__(self, ticker_cache: WSTickerCache, history_quality: CashCarryHistoryQuality | None = None) -> None:
         self.ticker_cache = ticker_cache
+        self.history_quality = history_quality or CashCarryHistoryQuality()
 
     def refresh(self, scan: CashCarryScan, settings: BotSettings) -> CashCarryScan:
         items = [item for item in self._unique_items(scan) if not _symbol_blacklisted(item.symbol, settings.symbol_blacklist)]
@@ -100,7 +102,7 @@ class CashCarryFastRefresher:
         estimated_net_profit: Decimal,
         settings: BotSettings,
     ) -> list[str]:
-        reasons = self._preserved(current, ("合约溢价未达", "开仓基差异常过高", "资金费率低于", "资金费率不是正数", "现货/合约最低24h成交量低于", "回归到平仓线后的净利预估"))
+        reasons = self._preserved(current, ("合约溢价未达", "开仓基差异常过高", "资金费率低于", "资金费率不是正数", "现货/合约最低24h成交量低于", "回归到平仓线后的净利预估", "V2历史胜率保护"))
         if basis_pct < settings.cash_carry_min_basis_pct:
             reasons.append(f"合约溢价未达 {settings.cash_carry_min_basis_pct}%")
         reasons.extend(entry_basis_risk_reasons(basis_pct, settings))
@@ -111,6 +113,7 @@ class CashCarryFastRefresher:
         if min(spot_volume, perp_volume) < settings.cash_carry_min_volume_usdt:
             reasons.append(f"现货/合约最低24h成交量低于 {settings.cash_carry_min_volume_usdt}U")
         reasons.extend(entry_quality_reasons(estimated_net_profit, settings))
+        reasons.extend(self.history_quality.global_entry_reasons(estimated_net_profit, settings))
         return self._dedupe(reasons)
 
     def _preserved(self, current: list[str], dynamic_prefixes: tuple[str, ...]) -> list[str]:

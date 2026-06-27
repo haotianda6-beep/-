@@ -261,6 +261,7 @@ class CashCarryScanner:
         reasons = self._blocked_reasons(basis_pct, funding_rate, spot_volume, perp_volume, settings)
         reasons.extend(entry_basis_risk_reasons(basis_pct, settings))
         reasons.extend(entry_quality_reasons(estimated_net_profit, settings))
+        reasons.extend(self.history_quality.global_entry_reasons(estimated_net_profit, settings))
         reasons.extend(self.history_quality.blocked_reasons(data.exchange, symbol, settings))
         reasons.extend(local_identity_reasons(data.exchange.value, data.swap_markets[symbol].asset, data.spot_markets[symbol].asset))
         if self._pre_market_spot_transfer_closed(data.swap_markets[symbol], data.spot_markets[symbol]):

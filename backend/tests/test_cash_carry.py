@@ -1,4 +1,5 @@
 from decimal import Decimal
+from pathlib import Path
 
 from app.core.models import BotSettings, ExchangeName
 from app.services.asset_identity import MarketAsset
@@ -8,8 +9,19 @@ from app.services.cash_carry_scanner import CashCarryExchangeData, CashCarryScan
 from app.services.live_market_types import CashCarryScan
 
 
+EMPTY_HISTORY = Path(__file__).with_name("missing_cash_carry_history.json")
+
+
+def _scanner() -> CashCarryScanner:
+    return CashCarryScanner(CashCarryHistoryQuality(EMPTY_HISTORY))
+
+
+def _fast_refresher() -> CashCarryFastRefresher:
+    return CashCarryFastRefresher(_ticker_cache(), CashCarryHistoryQuality(EMPTY_HISTORY))
+
+
 def test_cash_carry_opportunity_accepts_positive_basis_and_funding() -> None:
-    scanner = CashCarryScanner()
+    scanner = _scanner()
     item = scanner._build_opportunity("ABCUSDT", _data("101.5", "0.0002"), BotSettings(order_notional_usdt=Decimal("100")))
 
     assert item is not None
@@ -20,7 +32,7 @@ def test_cash_carry_opportunity_accepts_positive_basis_and_funding() -> None:
 
 
 def test_cash_carry_candidate_explains_negative_funding_and_low_basis() -> None:
-    scanner = CashCarryScanner()
+    scanner = _scanner()
     item = scanner._build_opportunity("ABCUSDT", _data("100.5", "-0.0001"), BotSettings())
 
     assert item is not None
@@ -29,7 +41,7 @@ def test_cash_carry_candidate_explains_negative_funding_and_low_basis() -> None:
 
 
 def test_cash_carry_applies_strategy_specific_volume_threshold() -> None:
-    scanner = CashCarryScanner()
+    scanner = _scanner()
     settings = BotSettings(cash_carry_min_volume_usdt=Decimal("2000000"))
     item = scanner._build_opportunity("ABCUSDT", _data("101", "0.0002"), settings)
 
@@ -38,7 +50,7 @@ def test_cash_carry_applies_strategy_specific_volume_threshold() -> None:
 
 
 def test_cash_carry_symbol_blacklist_accepts_base_asset_name() -> None:
-    scanner = CashCarryScanner()
+    scanner = _scanner()
     data = _data("101", "0.0002")
     settings = BotSettings(symbol_blacklist=["ABC"])
 
@@ -48,7 +60,7 @@ def test_cash_carry_symbol_blacklist_accepts_base_asset_name() -> None:
 
 
 def test_cash_carry_scan_only_uses_gate_and_bitget(monkeypatch) -> None:
-    scanner = CashCarryScanner()
+    scanner = _scanner()
     loaded: list[ExchangeName] = []
 
     def fake_load(exchange: ExchangeName) -> CashCarryExchangeData:
@@ -63,7 +75,7 @@ def test_cash_carry_scan_only_uses_gate_and_bitget(monkeypatch) -> None:
 
 
 def test_cash_carry_scan_respects_blacklist_inside_allowed_exchanges(monkeypatch) -> None:
-    scanner = CashCarryScanner()
+    scanner = _scanner()
     loaded: list[ExchangeName] = []
 
     def fake_load(exchange: ExchangeName) -> CashCarryExchangeData:
@@ -78,7 +90,7 @@ def test_cash_carry_scan_respects_blacklist_inside_allowed_exchanges(monkeypatch
 
 
 def test_cash_carry_blocks_same_symbol_with_different_base_id() -> None:
-    scanner = CashCarryScanner()
+    scanner = _scanner()
     item = scanner._build_opportunity(
         "ABCUSDT",
         _data("101", "0.0002", spot_asset=MarketAsset("ABC", "ABCOLD"), swap_asset=MarketAsset("ABC", "ABCNEW")),
@@ -90,7 +102,7 @@ def test_cash_carry_blocks_same_symbol_with_different_base_id() -> None:
 
 
 def test_cash_carry_allows_pre_market_contracts() -> None:
-    scanner = CashCarryScanner()
+    scanner = _scanner()
     item = scanner._build_opportunity("ABCUSDT", _data("101.5", "0.0002", is_pre_market=True), BotSettings())
 
     assert item is not None
@@ -98,7 +110,7 @@ def test_cash_carry_allows_pre_market_contracts() -> None:
 
 
 def test_cash_carry_blocks_abnormally_high_entry_basis() -> None:
-    scanner = CashCarryScanner()
+    scanner = _scanner()
     item = scanner._build_opportunity("ABCUSDT", _data("104", "0.0002"), BotSettings())
 
     assert item is not None
@@ -106,7 +118,7 @@ def test_cash_carry_blocks_abnormally_high_entry_basis() -> None:
 
 
 def test_cash_carry_blocks_pre_market_when_spot_transfer_is_closed() -> None:
-    scanner = CashCarryScanner()
+    scanner = _scanner()
     item = scanner._build_opportunity("ABCUSDT", _data("101", "0.0002", is_pre_market=True, spot_transfer_closed=True), BotSettings())
 
     assert item is not None
@@ -114,10 +126,10 @@ def test_cash_carry_blocks_pre_market_when_spot_transfer_is_closed() -> None:
 
 
 def test_cash_carry_fast_refresh_uses_ws_prices() -> None:
-    scanner = CashCarryScanner()
+    scanner = _scanner()
     item = scanner._build_opportunity("ABCUSDT", _data("101", "0.0002"), BotSettings(order_notional_usdt=Decimal("100")))
 
-    refreshed = CashCarryFastRefresher(_ticker_cache()).refresh(CashCarryScan(candidates=[item]), BotSettings(order_notional_usdt=Decimal("100")))
+    refreshed = _fast_refresher().refresh(CashCarryScan(candidates=[item]), BotSettings(order_notional_usdt=Decimal("100")))
 
     assert refreshed.opportunities
     assert refreshed.opportunities[0].basis_pct == Decimal("1.5000")
@@ -125,7 +137,7 @@ def test_cash_carry_fast_refresh_uses_ws_prices() -> None:
 
 
 def test_cash_carry_blocks_low_stable_net_profit() -> None:
-    scanner = CashCarryScanner()
+    scanner = _scanner()
     settings = BotSettings(order_notional_usdt=Decimal("300"))
 
     item = scanner._build_opportunity("ABCUSDT", _data("100.95", "0.0002"), settings)
@@ -152,8 +164,54 @@ def test_cash_carry_blocks_symbol_with_loss_history(tmp_path) -> None:
     assert "历史累计真实净利 -2.5000U" in reasons
 
 
+def test_cash_carry_global_history_gate_raises_entry_floor_after_low_win_rate(tmp_path) -> None:
+    state = tmp_path / "cash_carry_execution_state.json"
+    state.write_text(
+        '{"positions":['
+        + ",".join(
+            f'{{"exchange":"GATE","symbol":"OLD{i}USDT","status":"closed","history":{{"actual_net_profit":"-1"}}}}'
+            for i in range(10)
+        )
+        + "]}",
+        encoding="utf-8",
+    )
+    scanner = CashCarryScanner(CashCarryHistoryQuality(state))
+    data = _data("101.5", "0.0002")
+    data.exchange = ExchangeName.GATE
+    settings = BotSettings(order_notional_usdt=Decimal("300"))
+
+    item = scanner._build_opportunity("ABCUSDT", data, settings)
+
+    assert item is not None
+    reasons = " / ".join(item.blocked_reasons)
+    assert "V2历史胜率保护" in reasons
+    assert "动态安全垫" in reasons
+
+
+def test_cash_carry_global_history_gate_can_be_disabled(tmp_path) -> None:
+    state = tmp_path / "cash_carry_execution_state.json"
+    state.write_text(
+        '{"positions":['
+        + ",".join(
+            f'{{"exchange":"GATE","symbol":"OLD{i}USDT","status":"closed","history":{{"actual_net_profit":"-1"}}}}'
+            for i in range(10)
+        )
+        + "]}",
+        encoding="utf-8",
+    )
+    scanner = CashCarryScanner(CashCarryHistoryQuality(state))
+    data = _data("101.5", "0.0002")
+    data.exchange = ExchangeName.GATE
+    settings = BotSettings(order_notional_usdt=Decimal("300"), cash_carry_adaptive_quality_enabled=False)
+
+    item = scanner._build_opportunity("ABCUSDT", data, settings)
+
+    assert item is not None
+    assert "V2历史胜率保护" not in " / ".join(item.blocked_reasons)
+
+
 def test_cash_carry_v2_sort_prefers_higher_quality_signal() -> None:
-    scanner = CashCarryScanner()
+    scanner = _scanner()
     settings = BotSettings(order_notional_usdt=Decimal("300"))
     low_quality = scanner._build_opportunity("ABCUSDT", _data("101.8", "0.00001"), settings)
     high_quality = scanner._build_opportunity("ABCUSDT", _data("101.35", "0.0005"), settings)
@@ -179,17 +237,17 @@ def test_cash_carry_v2_sort_prefers_higher_quality_signal() -> None:
 
 
 def test_cash_carry_fast_refresh_drops_blacklisted_symbol() -> None:
-    scanner = CashCarryScanner()
+    scanner = _scanner()
     item = scanner._build_opportunity("ABCUSDT", _data("101", "0.0002"), BotSettings(order_notional_usdt=Decimal("100")))
 
-    refreshed = CashCarryFastRefresher(_ticker_cache()).refresh(CashCarryScan(opportunities=[item]), BotSettings(symbol_blacklist=["ABC"]))
+    refreshed = _fast_refresher().refresh(CashCarryScan(opportunities=[item]), BotSettings(symbol_blacklist=["ABC"]))
 
     assert refreshed.opportunities == []
     assert refreshed.candidates == []
 
 
 def test_cash_carry_depth_zero_blocks_ready_opportunity() -> None:
-    scanner = CashCarryScanner()
+    scanner = _scanner()
     settings = BotSettings(order_notional_usdt=Decimal("500"), max_slippage_pct=Decimal("0.2"), min_funding_net_usdt=Decimal("0.01"))
     item = scanner._build_opportunity("ABCUSDT", _data("101", "0.0002"), settings)
     assert item is not None

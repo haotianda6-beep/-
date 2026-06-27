@@ -154,6 +154,9 @@ export type BotSettings = {
   min_funding_net_usdt: string;
   cash_carry_recovery_exit_max_loss_usdt: string;
   cash_carry_max_recovery_funding_intervals: string;
+  cash_carry_target_win_rate_pct: string;
+  cash_carry_target_daily_trades: number;
+  cash_carry_adaptive_quality_enabled: boolean;
   cash_carry_max_positions_per_exchange: number;
   max_add_count: number;
   add_notional_usdt: string;
