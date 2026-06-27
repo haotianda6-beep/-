@@ -183,6 +183,15 @@ class CashCarryExecutor:
             perp_order = fetch_order_snapshot(swap, swap_symbol, perp_order_raw)
             perp_order_id = self._order_id(perp_order)
             perp_entry_price = order_average_price(perp_order, item.perp_price)
+            entry_metrics = self._actual_entry_metrics(
+                item,
+                settings,
+                base_qty,
+                spot_entry_price,
+                perp_entry_price,
+                spot_symbol,
+                swap_symbol,
+            )
             position = CashCarryPosition(
                 id=str(uuid.uuid4()),
                 exchange=item.exchange,
@@ -194,11 +203,11 @@ class CashCarryExecutor:
                 spot_order_id=spot_order_id,
                 perp_order_id=perp_order_id,
                 opened_at=datetime.now(timezone.utc),
-                entry_basis_pct=item.basis_pct,
-                entry_estimated_net_profit=item.estimated_net_profit,
-                entry_estimated_funding_income=item.estimated_funding_income,
-                entry_estimated_open_close_fee=item.estimated_open_close_fee,
-                entry_notional_usdt=item.notional_usdt or settings.order_notional_usdt,
+                entry_basis_pct=entry_metrics["basis_pct"],
+                entry_estimated_net_profit=entry_metrics["estimated_net_profit"],
+                entry_estimated_funding_income=entry_metrics["estimated_funding_income"],
+                entry_estimated_open_close_fee=entry_metrics["estimated_open_close_fee"],
+                entry_notional_usdt=entry_metrics["notional_usdt"],
             )
             self.state.save_position(position)
             suffix = f"（{mode_label}）" if mode_label else ""
@@ -828,6 +837,44 @@ class CashCarryExecutor:
 
     def _fee_rate(self, exchange: ExchangeName) -> Decimal:
         return FEE_RATES.get(ExchangeName(exchange), Decimal("0.0006"))
+
+    def _actual_entry_metrics(
+        self,
+        item: CashCarryOpportunity,
+        settings: BotSettings,
+        base_qty: Decimal,
+        spot_entry_price: Decimal,
+        perp_entry_price: Decimal,
+        spot_symbol: str,
+        swap_symbol: str,
+    ) -> dict[str, Decimal]:
+        notional = base_qty * spot_entry_price
+        if base_qty <= 0 or spot_entry_price <= 0 or perp_entry_price <= 0 or notional <= 0:
+            return {
+                "basis_pct": item.basis_pct,
+                "estimated_net_profit": item.estimated_net_profit,
+                "estimated_funding_income": item.estimated_funding_income,
+                "estimated_open_close_fee": item.estimated_open_close_fee,
+                "notional_usdt": item.notional_usdt or settings.order_notional_usdt,
+            }
+        basis_pct = (perp_entry_price - spot_entry_price) / spot_entry_price * Decimal("100")
+        funding_rate = item.funding_rate_pct / Decimal("100")
+        funding_income = notional * funding_rate
+        spot_fee = self._taker_fee(ExchangeName(item.exchange), "spot", spot_symbol)
+        swap_fee = self._taker_fee(ExchangeName(item.exchange), "swap", swap_symbol)
+        open_close_fee = (
+            base_qty * spot_entry_price * spot_fee
+            + base_qty * perp_entry_price * swap_fee
+        ) * Decimal("2")
+        tradable_basis = max(Decimal("0"), basis_pct - settings.cash_carry_close_basis_pct)
+        estimated_net = notional * tradable_basis / Decimal("100") + funding_income - open_close_fee
+        return {
+            "basis_pct": q(basis_pct),
+            "estimated_net_profit": q(estimated_net),
+            "estimated_funding_income": q(funding_income),
+            "estimated_open_close_fee": q(open_close_fee),
+            "notional_usdt": q(notional, "0.01"),
+        }
 
     def _open_min_basis_pct(self, item: CashCarryOpportunity, settings: BotSettings) -> Decimal:
         if self.history_quality.bootstrap_basis_allows(item.basis_pct, item.estimated_net_profit, settings):
