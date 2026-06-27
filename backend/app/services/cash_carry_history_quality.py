@@ -7,6 +7,7 @@ from typing import Any
 
 from app.core.models import BotSettings, ExchangeName
 from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION
+from app.services.cash_carry_quality import entry_net_floor
 
 
 TARGET_WIN_RATE_PCT = Decimal("70")
@@ -219,8 +220,7 @@ class CashCarryHistoryQuality:
         return set(self._stats)
 
     def _base_entry_net_floor(self, settings: BotSettings) -> Decimal:
-        pct_floor = settings.order_notional_usdt * settings.cash_carry_min_entry_net_pct / Decimal("100")
-        return max(settings.min_funding_net_usdt, pct_floor)
+        return entry_net_floor(settings)
 
     def _max_reasonable_entry_floor(self, settings: BotSettings) -> Decimal:
         tradable_basis_pct = max(Decimal("0"), settings.cash_carry_max_entry_basis_pct - settings.cash_carry_close_basis_pct)

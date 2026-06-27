@@ -36,6 +36,7 @@ type DecimalKey =
   | "min_funding_net_usdt"
   | "cash_carry_recovery_exit_max_loss_usdt"
   | "cash_carry_max_recovery_funding_intervals"
+  | "cash_carry_v3_min_profit_pct"
   | "cash_carry_signal_min_basis_percentile"
   | "add_notional_usdt"
   | "add_trigger_spread_pct"
@@ -64,6 +65,7 @@ const cashCarryDecimalFields: Array<{ key: DecimalKey; label: string; suffix: st
   { key: "cash_carry_min_volume_usdt", label: "期现最低24h成交量", suffix: "USDT" },
   { key: "cash_carry_recovery_exit_max_loss_usdt", label: "恢复不足释放亏损", suffix: "USDT" },
   { key: "cash_carry_max_recovery_funding_intervals", label: "最大恢复资金费期数", suffix: "期" },
+  { key: "cash_carry_v3_min_profit_pct", label: "V3单笔目标净利", suffix: "%" },
   { key: "cash_carry_signal_min_basis_percentile", label: "基差高位分位", suffix: "%" },
 ];
 

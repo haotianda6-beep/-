@@ -210,6 +210,7 @@ class BotSettings(BaseSchema):
     cash_carry_target_win_rate_pct: Decimal = Decimal("70")
     cash_carry_target_daily_trades: int = 10
     cash_carry_adaptive_quality_enabled: bool = True
+    cash_carry_v3_min_profit_pct: Decimal = Decimal("0.2")
     cash_carry_recovery_probe_enabled: bool = True
     cash_carry_recovery_probe_notional_usdt: Decimal = Decimal("100")
     cash_carry_recovery_probe_min_net_pct: Decimal = Decimal("0.8")
@@ -298,6 +299,7 @@ class BotSettings(BaseSchema):
         "cash_carry_recovery_exit_max_loss_usdt",
         "cash_carry_max_recovery_funding_intervals",
         "cash_carry_target_win_rate_pct",
+        "cash_carry_v3_min_profit_pct",
         "cash_carry_recovery_probe_notional_usdt",
         "cash_carry_recovery_probe_min_net_pct",
         "cash_carry_signal_min_seconds",

@@ -157,6 +157,7 @@ export type BotSettings = {
   cash_carry_target_win_rate_pct: string;
   cash_carry_target_daily_trades: number;
   cash_carry_adaptive_quality_enabled: boolean;
+  cash_carry_v3_min_profit_pct: string;
   cash_carry_recovery_probe_enabled: boolean;
   cash_carry_recovery_probe_notional_usdt: string;
   cash_carry_recovery_probe_min_net_pct: string;

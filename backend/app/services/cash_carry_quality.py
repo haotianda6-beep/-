@@ -24,7 +24,8 @@ HARD_BLOCKER_PREFIXES = (
 
 def entry_net_floor(settings: BotSettings) -> Decimal:
     pct_floor = settings.order_notional_usdt * settings.cash_carry_min_entry_net_pct / Decimal("100")
-    return max(settings.min_funding_net_usdt, pct_floor)
+    v3_profit_floor = close_execution_buffer(settings) + settings.order_notional_usdt * settings.cash_carry_v3_min_profit_pct / Decimal("100")
+    return max(settings.min_funding_net_usdt, close_execution_buffer(settings), min(pct_floor, v3_profit_floor))
 
 
 def close_execution_buffer(settings: BotSettings) -> Decimal:

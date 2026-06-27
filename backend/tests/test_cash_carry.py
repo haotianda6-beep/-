@@ -6,6 +6,7 @@ from app.services.asset_identity import MarketAsset
 from app.services.cash_carry_fast_refresh import CashCarryFastRefresher
 from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
+from app.services.cash_carry_quality import entry_net_floor
 from app.services.cash_carry_scope import CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.cash_carry_scanner import CashCarryExchangeData, CashCarryScanner, TradeMarket
 from app.services.live_market_types import CashCarryScan
@@ -160,10 +161,21 @@ def test_cash_carry_blocks_low_stable_net_profit() -> None:
     scanner = _scanner()
     settings = BotSettings(order_notional_usdt=Decimal("300"))
 
-    item = scanner._build_opportunity("ABCUSDT", _data("100.95", "0.0002"), settings)
+    item = scanner._build_opportunity("ABCUSDT", _data("100.7", "0.0002"), settings)
 
     assert item is not None
     assert "稳定开仓安全垫" in " / ".join(item.blocked_reasons)
+
+
+def test_cash_carry_v3_entry_floor_caps_legacy_percent_for_frequency() -> None:
+    settings = BotSettings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_min_entry_net_pct=Decimal("0.8"),
+        cash_carry_v3_min_profit_pct=Decimal("0.2"),
+        max_slippage_pct=Decimal("0.01"),
+    )
+
+    assert entry_net_floor(settings) == Decimal("1.20")
 
 
 def test_cash_carry_blocks_symbol_with_loss_history(tmp_path) -> None:
