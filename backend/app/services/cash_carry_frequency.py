@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from app.core.models import BotSettings, CashCarryOpportunity, RiskEvent
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
+from app.services.cash_carry_market_memory import CashCarryMarketMemorySummary
 
 
 BLOCKER_PREFIXES = {
@@ -23,6 +24,7 @@ def cash_carry_frequency_event(
     candidates: list[CashCarryOpportunity],
     history_quality: CashCarryHistoryQuality,
     now: datetime,
+    memory_summary: CashCarryMarketMemorySummary | None = None,
 ) -> RiskEvent | None:
     if not settings.cash_carry_enabled or not candidates:
         return None
@@ -42,6 +44,12 @@ def cash_carry_frequency_event(
         detail_parts.append(
             f"离开仓最近的是 {nearest.exchange} {nearest.symbol}：预估净利 {nearest.estimated_net_profit:.4f}U，还差 {gap:.4f}U"
         )
+    if memory_summary and memory_summary.best:
+        best_gap = max(Decimal("0"), gate.min_net_profit - memory_summary.best.estimated_net_profit)
+        detail_parts.append(
+            f"近{memory_summary.window_minutes}分钟观察 {memory_summary.observations} 次/{memory_summary.symbols} 币，最高为 {memory_summary.best.exchange} {memory_summary.best.symbol}：基差 {memory_summary.best.basis_pct:.4f}%，净利 {memory_summary.best.estimated_net_profit:.4f}U，距门槛 {best_gap:.4f}U"
+        )
+        detail_parts.append(f"近门槛样本 {memory_summary.near_count} 次，基础质量样本 {memory_summary.base_quality_count} 次")
     if counts:
         detail_parts.append("主要卡点：" + "，".join(f"{name}{count}个" for name, count in counts.most_common(4)))
     return RiskEvent(

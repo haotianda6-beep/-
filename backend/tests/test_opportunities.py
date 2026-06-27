@@ -147,6 +147,17 @@ def test_cash_carry_frequency_event_explains_why_no_ready_opportunity(tmp_path) 
     assert "净利不足1个" in event.detail
 
 
+def test_cash_carry_frequency_event_includes_rolling_memory(tmp_path) -> None:
+    engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
+    candidates = [_candidate("MEMUSDT", Decimal("5"), ["V2历史胜率保护：净利预估 5.0000U < 动态安全垫 6.0000U"])]
+
+    events = engine.get_risk_events(BotSettings(order_notional_usdt=Decimal("300")), cash_carry_candidates=candidates)
+
+    event = next(item for item in events if item.id == "cash-carry-frequency-diagnostic")
+    assert "近30分钟观察" in event.detail
+    assert "MEMUSDT" in event.detail
+
+
 def test_cash_carry_frequency_event_is_hidden_when_ready_opportunity_exists(tmp_path) -> None:
     engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
 
