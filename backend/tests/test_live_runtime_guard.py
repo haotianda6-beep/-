@@ -156,6 +156,24 @@ def test_runtime_rebuild_keeps_internal_candidate_pool(tmp_path) -> None:
     assert len(scan.candidates) == CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 
 
+def test_runtime_marks_recent_depth_failed_symbol_as_candidate(tmp_path) -> None:
+    state = tmp_path / "cash.json"
+    blocked_at = datetime.now(timezone.utc).isoformat()
+    state.write_text(
+        f'{{"positions":[],"last_result":{{"status":"blocked_by_depth","exchange":"GATE","symbol":"ABCUSDT","reason":"深度均价开仓基差 -0.2469% 低于 0.6%","at":"{blocked_at}"}}}}',
+        encoding="utf-8",
+    )
+    runtime = _runtime(tmp_path, cash_executor=CashCarryExecutor(state))
+
+    scan = runtime._apply_cash_carry_open_scope(
+        CashCarryScan(opportunities=[_cash_opportunity(ExchangeName.GATE, "ABCUSDT", "3")])
+    )
+
+    assert scan.opportunities == []
+    assert len(scan.candidates) == 1
+    assert "最近执行深度失败" in " / ".join(scan.candidates[0].blocked_reasons)
+
+
 def test_mt4_scan_uses_independent_slot(tmp_path) -> None:
     runtime = _runtime(tmp_path)
     assert runtime._full_scan_slots.acquire(blocking=False) is True

@@ -178,6 +178,37 @@ def test_cash_carry_executor_recovery_probe_does_not_bypass_other_blockers(tmp_p
     assert executor.evaluate_open([candidate], settings) is None
 
 
+def test_cash_carry_executor_skips_recent_depth_failed_symbol(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    blocked_at = datetime.now(timezone.utc).isoformat()
+    state.write_text(
+        f'{{"positions":[],"last_result":{{"status":"blocked_by_depth","exchange":"GATE","symbol":"ABCUSDT","reason":"深度均价开仓基差 -0.2469% 低于 0.6%","at":"{blocked_at}"}}}}',
+        encoding="utf-8",
+    )
+    executor = CashCarryExecutor(state)
+    settings = BotSettings(manual_confirm_required=False, cash_carry_auto_open_enabled=True, cash_carry_auto_trade_enabled=False)
+
+    assert executor.state.recent_depth_blocked_reasons(executor.depth_block_cooldown_seconds)
+    assert executor.evaluate_open([_opportunity("ABCUSDT", "3", exchange=ExchangeName.GATE)], settings) is None
+
+
+def test_cash_carry_executor_depth_failure_does_not_block_other_symbol(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    blocked_at = datetime.now(timezone.utc).isoformat()
+    state.write_text(
+        f'{{"positions":[],"last_result":{{"status":"blocked_by_depth","exchange":"GATE","symbol":"ABCUSDT","reason":"深度均价开仓基差 -0.2469% 低于 0.6%","at":"{blocked_at}"}}}}',
+        encoding="utf-8",
+    )
+    executor = CashCarryExecutor(state)
+    settings = BotSettings(manual_confirm_required=False, cash_carry_auto_open_enabled=True, cash_carry_auto_trade_enabled=False)
+
+    result = executor.evaluate_open([_opportunity("XYZUSDT", "3", exchange=ExchangeName.GATE)], settings)
+
+    assert result is not None
+    assert result.status == "blocked_by_safety_gate"
+    assert "XYZUSDT" in result.steps[2].detail
+
+
 def test_cash_carry_executor_uses_bootstrap_basis_floor_before_v3_samples(tmp_path) -> None:
     executor = CashCarryExecutor(tmp_path / "state.json")
     settings = BotSettings(

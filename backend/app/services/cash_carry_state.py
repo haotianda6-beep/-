@@ -71,6 +71,22 @@ class CashCarryStateStore:
                 continue
         return keys
 
+    def recent_depth_blocked_reasons(self, cooldown_seconds: int, now: datetime | None = None) -> dict[tuple[ExchangeName, str], str]:
+        current = now or datetime.now(timezone.utc)
+        result = self.read().get("last_result")
+        if not isinstance(result, dict) or result.get("status") != "blocked_by_depth":
+            return {}
+        try:
+            at = datetime.fromisoformat(str(result.get("at", "")).replace("Z", "+00:00"))
+            if (current - at).total_seconds() > cooldown_seconds:
+                return {}
+            key = (ExchangeName(result["exchange"]), str(result["symbol"]))
+        except (KeyError, ValueError):
+            return {}
+        reason = str(result.get("reason") or "开仓深度不足")
+        remaining = max(0, int(cooldown_seconds - (current - at).total_seconds()))
+        return {key: f"最近执行深度失败，约 {remaining}s 后重试：{reason}"}
+
     def mark_added(
         self,
         position_id: str,
@@ -104,7 +120,11 @@ class CashCarryStateStore:
 
     def remember(self, result: ExecutionResult) -> ExecutionResult:
         state = self.read()
-        state["last_result"] = {"id": result.id, "status": result.status, "reason": result.reason, "at": datetime.now(timezone.utc).isoformat()}
+        payload = {"id": result.id, "status": result.status, "reason": result.reason, "at": datetime.now(timezone.utc).isoformat()}
+        context = self._result_context(result)
+        if context:
+            payload.update(context)
+        state["last_result"] = payload
         self.write(state)
         return result
 
@@ -161,6 +181,18 @@ class CashCarryStateStore:
             )
         except (KeyError, ValueError):
             return None
+
+    def _result_context(self, result: ExecutionResult) -> dict[str, str]:
+        item = result.position
+        if item is None:
+            return {}
+        try:
+            exchange = item.exchange if hasattr(item, "exchange") else item["exchange"]
+            symbol = item.symbol if hasattr(item, "symbol") else item["symbol"]
+            exchange_name = ExchangeName(exchange)
+        except (KeyError, TypeError, ValueError):
+            return {}
+        return {"exchange": exchange_name.value, "symbol": str(symbol)}
 
     def _position_dict(self, item: CashCarryPosition) -> dict[str, Any]:
         exchange = item.exchange.value if hasattr(item.exchange, "value") else str(item.exchange)

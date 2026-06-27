@@ -27,6 +27,7 @@ from app.services.execution_models import ExecutionResult, ExecutionStep
 
 class CashCarryExecutor:
     reopen_cooldown_seconds = 3600
+    depth_block_cooldown_seconds = 90
     def __init__(self, state_path: Path | None = None) -> None:
         root = Path(__file__).resolve().parents[3]
         self.state_path = state_path or root / "config" / "cash_carry_execution_state.json"
@@ -59,6 +60,7 @@ class CashCarryExecutor:
         if not allow_open or not settings.cash_carry_auto_open_enabled:
             return None
         blocked_keys = self.state.active_keys() | self.state.recently_closed_keys(self.reopen_cooldown_seconds)
+        depth_blocked_keys = set(self.state.recent_depth_blocked_reasons(self.depth_block_cooldown_seconds))
         active_counts = self.state.active_counts_by_exchange()
         ready = [
             item for item in rows
@@ -66,12 +68,13 @@ class CashCarryExecutor:
             and ExchangeName(item.exchange) in CASH_CARRY_EXCHANGE_SET
             and not self.history_quality.blocked_reasons(ExchangeName(item.exchange), item.symbol, settings)
             and (item.exchange, item.symbol) not in blocked_keys
+            and (ExchangeName(item.exchange), item.symbol) not in depth_blocked_keys
             and active_counts.get(ExchangeName(item.exchange), 0) < settings.cash_carry_max_positions_per_exchange
             and (allowed_open_exchanges is None or ExchangeName(item.exchange) in allowed_open_exchanges)
             and self._exposure_allows(item, settings)
         ]
         if not ready:
-            probe = self._probe_open_candidate(rows, settings, blocked_keys, active_counts, allowed_open_exchanges)
+            probe = self._probe_open_candidate(rows, settings, blocked_keys | depth_blocked_keys, active_counts, allowed_open_exchanges)
             if not probe:
                 return None
             item, open_settings = probe
@@ -154,7 +157,7 @@ class CashCarryExecutor:
                 close_basis_pct=settings.cash_carry_close_basis_pct,
             )
             if not guard.ok:
-                return self.state.remember(ExecutionResult(str(uuid.uuid4()), "blocked_by_depth", guard.reason, steps))
+                return self.state.remember(ExecutionResult(str(uuid.uuid4()), "blocked_by_depth", guard.reason, steps, position=item))
             self._maybe_transfer(spot, item, settings, steps[0])
             self._run(steps[1], lambda: self._set_leverage(swap, swap_symbol, settings.default_leverage, settings.margin_mode), True)
             self._verify_leverage(swap, swap_symbol, settings.default_leverage, "short", settings.margin_mode, steps[1])

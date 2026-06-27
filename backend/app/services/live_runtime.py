@@ -280,10 +280,12 @@ class LiveRuntimeCache:
     def _apply_cash_carry_open_scope(self, scan: CashCarryScan) -> CashCarryScan:
         active_keys = self.cash_carry_executor.state.active_keys()
         active_counts = self.cash_carry_executor.state.active_counts_by_exchange()
+        depth_reasons = self.cash_carry_executor.state.recent_depth_blocked_reasons(self.cash_carry_executor.depth_block_cooldown_seconds)
+        items = [self._with_depth_block_reason(item, depth_reasons) for item in self._cash_carry_unique_items(scan)]
         if not active_counts:
-            return self._rebuild_cash_carry_scan([self._without_open_scope_reason(item) for item in self._cash_carry_unique_items(scan)], scan.issues)
+            return self._rebuild_cash_carry_scan([self._without_open_scope_reason(item) for item in items], scan.issues)
         rows = []
-        for item in self._cash_carry_unique_items(scan):
+        for item in items:
             exchange = ExchangeName(item.exchange)
             if (exchange, item.symbol) in active_keys:
                 rows.append(self._with_open_scope_reason(item, "该交易所该币种已有正向期现持仓，禁止重复开仓"))
@@ -295,6 +297,17 @@ class LiveRuntimeCache:
             reason = f"同交易所正向期现持仓槽位已满 {active_count}/{self._settings.cash_carry_max_positions_per_exchange}"
             rows.append(self._with_open_scope_reason(item, reason))
         return self._rebuild_cash_carry_scan(rows, scan.issues)
+
+    def _with_depth_block_reason(
+        self,
+        item: CashCarryOpportunity,
+        depth_reasons: dict[tuple[ExchangeName, str], str],
+    ) -> CashCarryOpportunity:
+        reason = depth_reasons.get((ExchangeName(item.exchange), item.symbol))
+        if not reason:
+            return item
+        reasons = [*item.blocked_reasons, reason]
+        return item.model_copy(update={"blocked_reasons": self._dedupe_reasons(reasons)})
 
     def _cash_carry_unique_items(self, scan: CashCarryScan) -> list[CashCarryOpportunity]:
         seen: set[tuple[ExchangeName, str]] = set()
