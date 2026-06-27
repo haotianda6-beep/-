@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 
 from app.core.models import BotSettings
 from app.services.cash_carry_executor import CashCarryExecutor
@@ -75,6 +76,47 @@ def test_cash_carry_auto_sells_state_only_spot_row(tmp_path) -> None:
     assert "自动卖出现货孤腿" in saved["close_reason"]
 
 
+def test_cash_carry_auto_sells_state_spot_only_status(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(
+        '{"positions":[{"id":"pos-1","exchange":"BITGET","symbol":"ABCUSDT","base_asset":"ABC","quantity":"10","spot_entry_price":"2","perp_entry_price":"2.1","spot_order_id":"spot-open","perp_order_id":"perp-open","opened_at":"2026-06-09T00:00:00+00:00","status":"spot_only"}]}',
+        encoding="utf-8",
+    )
+    executor = _OrphanCloseExecutor(state)
+    settings = BotSettings(manual_confirm_required=True, cash_carry_auto_close_enabled=True)
+    live = type("Row", (), {"exchange": "BITGET", "symbol": "ABCUSDT", "status": "spot_only"})()
+
+    result = executor.evaluate_close([], settings, [live])
+    saved = json.loads(state.read_text(encoding="utf-8"))["positions"][0]
+
+    assert result is not None
+    assert result.status == "close_submitted"
+    assert executor.spot.orders[0]["side"] == "sell"
+    assert saved["status"] == "closed"
+    assert "自动卖出现货孤腿" in saved["close_reason"]
+
+
+def test_cash_carry_auto_closes_state_perp_only_status(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(
+        '{"positions":[{"id":"pos-1","exchange":"BITGET","symbol":"ABCUSDT","base_asset":"ABC","quantity":"10","spot_entry_price":"2","perp_entry_price":"2.1","spot_order_id":"spot-open","perp_order_id":"perp-open","opened_at":"2026-06-09T00:00:00+00:00","status":"perp_only"}]}',
+        encoding="utf-8",
+    )
+    executor = _OrphanCloseExecutor(state)
+    settings = BotSettings(manual_confirm_required=True, cash_carry_auto_close_enabled=True)
+    live = type("Row", (), {"exchange": "BITGET", "symbol": "ABCUSDT", "status": "perp_only", "perp_base_quantity": Decimal("10")})()
+
+    result = executor.evaluate_close([], settings, [live])
+    saved = json.loads(state.read_text(encoding="utf-8"))["positions"][0]
+
+    assert result is not None
+    assert result.status == "close_submitted"
+    assert executor.swap.orders[0]["side"] == "buy"
+    assert executor.swap.orders[0]["params"] == {"reduceOnly": True}
+    assert saved["status"] == "closed"
+    assert "自动买回合约孤腿" in saved["close_reason"]
+
+
 class _OrphanCloseExecutor(CashCarryExecutor):
     def __init__(self, state_path):
         super().__init__(state_path)
@@ -122,4 +164,19 @@ class _FakeSpot:
 
 
 class _FakeSwap:
-    pass
+    def __init__(self):
+        self.orders = []
+
+    def load_markets(self):
+        return None
+
+    def market(self, symbol):
+        return {"contractSize": "1"}
+
+    def amount_to_precision(self, symbol, amount):
+        return str(amount)
+
+    def create_order(self, symbol, order_type, side, amount, price=None, params=None):
+        order = {"id": "perp-close", "symbol": symbol, "side": side, "amount": amount, "average": 2.5, "params": params}
+        self.orders.append(order)
+        return order

@@ -104,11 +104,13 @@ class CashCarryExecutor:
                 continue
             live = live_by_key.get((record.exchange, record.symbol))
             if not live:
-                if record.status in {"open", "mismatch"}:
+                if record.status in {"open", "mismatch", "spot_only"}:
                     return self._handle_missing_live_perp(record, settings)
                 continue
-            if live.status == "spot_only" and record.status in {"open", "mismatch"}:
+            if live.status == "spot_only" and record.status in {"open", "mismatch", "spot_only"}:
                 return self._handle_missing_live_perp(record, settings)
+            if live.status == "perp_only" and record.status in {"open", "mismatch", "perp_only"}:
+                return self._execute_orphan_perp_close(record, live, settings)
             if record.status == "mismatch" and live.status == "matched":
                 self.state.mark_status(record.id, "open")
             if live.status == "mismatch" and record.status in {"open", "mismatch"}:
@@ -403,6 +405,36 @@ class CashCarryExecutor:
             return self.state.remember(ExecutionResult(record.id, "close_submitted", f"{reason}；系统已自动卖出现货孤腿", steps))
         except Exception as exc:  # noqa: BLE001
             return self.state.remember(ExecutionResult(record.id, "failed", f"{reason}；自动卖出现货孤腿失败 {self._sanitize(str(exc))}", steps))
+
+    def _execute_orphan_perp_close(
+        self,
+        record: CashCarryPosition,
+        live: CashCarryPositionRow,
+        settings: BotSettings,
+    ) -> ExecutionResult:
+        reason = f"{record.exchange} {record.symbol} 现货腿为空，合约空单仍持有，已识别为合约孤腿"
+        steps = [ExecutionStep("close_orphan_perp", "pending", f"{reason}，reduceOnly 买回合约孤腿")]
+        gate_reasons = self._safety_gate(settings, opening=False, protective=True)
+        if gate_reasons:
+            return self.state.remember(ExecutionResult(record.id, "blocked_by_safety_gate", " / ".join(gate_reasons), steps))
+        if live.perp_base_quantity <= 0:
+            self.state.mark_status(record.id, "mismatch", f"{reason}；合约数量为 0，需人工核对")
+            return self.state.remember(ExecutionResult(record.id, "failed", f"{reason}；合约数量为 0，需人工核对", steps))
+        swap = self._exchange(record.exchange, "swap")
+        swap_symbol = f"{record.base_asset}/USDT:USDT"
+        try:
+            contract_qty = contract_order_amount(swap, swap_symbol, live.perp_base_quantity)
+            order = self._run(steps[0], lambda: swap.create_order(swap_symbol, "market", "buy", contract_qty, None, {"reduceOnly": True}), True)
+            close_fields = {
+                "close_perp_order_id": self._order_id(order),
+                "perp_close_price": self._order_price(order),
+                "close_perp_raw": order if isinstance(order, dict) else None,
+            }
+            self.state.mark_closed(record.id, f"{reason}；系统已自动买回合约孤腿", close_fields)
+            return self.state.remember(ExecutionResult(record.id, "close_submitted", f"{reason}；系统已自动买回合约孤腿", steps))
+        except Exception as exc:  # noqa: BLE001
+            self.state.mark_status(record.id, "perp_only", f"{reason}；自动买回合约孤腿失败 {self._sanitize(str(exc))}")
+            return self.state.remember(ExecutionResult(record.id, "failed", f"{reason}；自动买回合约孤腿失败 {self._sanitize(str(exc))}", steps))
 
     def _execute_mismatch_rebalance(
         self,

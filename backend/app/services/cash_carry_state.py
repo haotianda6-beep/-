@@ -9,6 +9,9 @@ from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION,
 from app.services.execution_models import ExecutionResult
 
 
+ACTIVE_POSITION_STATUSES = {"open", "mismatch", "spot_only", "perp_only"}
+
+
 class CashCarryStateStore:
     def __init__(self, state_path: Path) -> None:
         self.state_path = state_path
@@ -19,7 +22,7 @@ class CashCarryStateStore:
             status = item.get("status")
             if status == "closed" or (not include_non_open and status != "open"):
                 continue
-            if include_non_open and status not in {"open", "mismatch"}:
+            if include_non_open and status not in ACTIVE_POSITION_STATUSES:
                 continue
             position = self._parse_position(item)
             if position:
