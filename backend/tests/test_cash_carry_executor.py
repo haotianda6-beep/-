@@ -178,6 +178,20 @@ def test_cash_carry_executor_recovery_probe_does_not_bypass_other_blockers(tmp_p
     assert executor.evaluate_open([candidate], settings) is None
 
 
+def test_cash_carry_executor_uses_bootstrap_basis_floor_before_v3_samples(tmp_path) -> None:
+    executor = CashCarryExecutor(tmp_path / "state.json")
+    settings = BotSettings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_close_basis_pct=Decimal("0.05"),
+        max_slippage_pct=Decimal("0.01"),
+    )
+    item = _opportunity("ABCUSDT", net="0.95", basis="0.66", funding="0.005").model_copy(
+        update={"estimated_open_close_fee": Decimal("0.9")}
+    )
+
+    assert executor._open_min_basis_pct(item, settings) == Decimal("0.6")
+
+
 def test_cash_carry_executor_allows_other_exchange_when_one_exchange_is_active(tmp_path) -> None:
     state = tmp_path / "state.json"
     state.write_text(

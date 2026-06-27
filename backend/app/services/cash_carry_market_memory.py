@@ -76,6 +76,7 @@ def _base_quality_allows(item: CashCarryMarketSample) -> bool:
     soft_blockers = (
         "V2历史胜率保护",
         "V3历史胜率保护",
+        "V3冷启动净利预估",
         "信号持续不足",
         "基差波动过大",
         "基差分位样本不足",

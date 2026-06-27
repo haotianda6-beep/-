@@ -161,6 +161,19 @@ def test_cash_carry_frequency_event_includes_rolling_memory(tmp_path) -> None:
     assert "MEMUSDT" in event.detail
 
 
+def test_cash_carry_frequency_event_uses_bootstrap_basis_floor(tmp_path) -> None:
+    state = tmp_path / "cash_carry_execution_state.json"
+    state.write_text('{"positions":[]}', encoding="utf-8")
+    engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
+    engine.cash_carry_history_quality = CashCarryHistoryQuality(state)
+    candidates = [_candidate("BOOTUSDT", Decimal("0.5"), ["V3冷启动净利预估 0.5000U < 冷启动安全垫 0.9000U"])]
+
+    events = engine.get_risk_events(BotSettings(order_notional_usdt=Decimal("300")), cash_carry_candidates=candidates)
+
+    event = next(item for item in events if item.id == "cash-carry-frequency-diagnostic")
+    assert "至少约需基差 0.6567%" in event.detail
+
+
 def test_cash_carry_frequency_event_is_hidden_when_ready_opportunity_exists(tmp_path) -> None:
     engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
 

@@ -15,7 +15,7 @@ from app.services.cash_carry_execution_guard import forward_close_depth_guard, f
 from app.services.cash_carry_execution_models import CashCarryPosition
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_reconciler import build_cash_carry_external_perp_close_history, build_cash_carry_history
-from app.services.cash_carry_quality import close_execution_buffer, entry_net_floor
+from app.services.cash_carry_quality import close_execution_buffer
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGE_SET
 from app.services.cash_carry_state import CashCarryStateStore
 from app.services.cash_carry_transfer import transfer_usdt_to_spot
@@ -147,8 +147,8 @@ class CashCarryExecutor:
                 spot_symbol,
                 swap_symbol,
                 settings.order_notional_usdt,
-                settings.cash_carry_min_basis_pct,
-                min_net_profit=entry_net_floor(settings),
+                self._open_min_basis_pct(item, settings),
+                min_net_profit=self.history_quality.entry_quality_gate(settings).min_net_profit,
                 open_close_fee=item.estimated_open_close_fee,
                 funding_income=item.estimated_funding_income,
                 close_basis_pct=settings.cash_carry_close_basis_pct,
@@ -739,6 +739,11 @@ class CashCarryExecutor:
 
     def _fee_rate(self, exchange: ExchangeName) -> Decimal:
         return FEE_RATES.get(ExchangeName(exchange), Decimal("0.0006"))
+
+    def _open_min_basis_pct(self, item: CashCarryOpportunity, settings: BotSettings) -> Decimal:
+        if self.history_quality.bootstrap_basis_allows(item.basis_pct, item.estimated_net_profit, settings):
+            return settings.cash_carry_bootstrap_min_basis_pct
+        return settings.cash_carry_min_basis_pct
 
     def _taker_fee(self, exchange: ExchangeName, market_type: str, symbol: str) -> Decimal:
         exchange = ExchangeName(exchange)

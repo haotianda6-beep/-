@@ -7,7 +7,7 @@ from typing import Any
 
 from app.core.models import BotSettings, ExchangeName
 from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION
-from app.services.cash_carry_quality import entry_net_floor
+from app.services.cash_carry_quality import close_execution_buffer, entry_net_floor
 
 
 TARGET_WIN_RATE_PCT = Decimal("70")
@@ -91,10 +91,31 @@ class CashCarryHistoryQuality:
             f"V3历史胜率保护：净利预估 {estimated_net_profit:.4f}U < 动态安全垫 {gate.min_net_profit:.4f}U（{reason_text}）"
         ]
 
+    def entry_net_reasons(
+        self,
+        estimated_net_profit: Decimal,
+        settings: BotSettings,
+        now: datetime | None = None,
+    ) -> list[str]:
+        gate = self.entry_quality_gate(settings, now)
+        if estimated_net_profit >= gate.min_net_profit:
+            return []
+        if gate.min_net_profit > gate.base_min_net_profit:
+            reason_text = "；".join(gate.reasons) if gate.reasons else "历史表现未达标"
+            return [
+                f"V3历史胜率保护：净利预估 {estimated_net_profit:.4f}U < 动态安全垫 {gate.min_net_profit:.4f}U（{reason_text}）"
+            ]
+        if gate.min_net_profit < gate.base_min_net_profit:
+            return [
+                f"V3冷启动净利预估 {estimated_net_profit:.4f}U < 冷启动安全垫 {gate.min_net_profit:.4f}U"
+            ]
+        return [f"回归到平仓线后的净利预估 {estimated_net_profit:.4f}U < 稳定开仓安全垫 {gate.min_net_profit:.4f}U"]
+
     def entry_quality_gate(self, settings: BotSettings, now: datetime | None = None) -> CashCarryEntryQualityGate:
-        base = self._base_entry_net_floor(settings)
+        normal_base = self._base_entry_net_floor(settings)
+        base = self._bootstrap_entry_net_floor(settings) if self.bootstrap_active(settings, now) else normal_base
         if not settings.cash_carry_adaptive_quality_enabled:
-            return CashCarryEntryQualityGate(base, base)
+            return CashCarryEntryQualityGate(base, normal_base)
         summary = self.performance_summary(settings, now)
         adjusted = base
         reasons: list[str] = []
@@ -124,7 +145,25 @@ class CashCarryHistoryQuality:
         capped = min(adjusted, self._max_reasonable_entry_floor(settings))
         if capped < adjusted:
             reasons.append("已按最大开仓基差限制封顶动态安全垫")
-        return CashCarryEntryQualityGate(capped, base, tuple(reasons))
+        return CashCarryEntryQualityGate(capped, normal_base, tuple(reasons))
+
+    def bootstrap_active(self, settings: BotSettings, now: datetime | None = None) -> bool:
+        if not settings.cash_carry_bootstrap_enabled or settings.cash_carry_bootstrap_min_trades <= 0:
+            return False
+        return self.performance_summary(settings, now).total_trades < settings.cash_carry_bootstrap_min_trades
+
+    def bootstrap_basis_allows(
+        self,
+        basis_pct: Decimal,
+        estimated_net_profit: Decimal,
+        settings: BotSettings,
+        now: datetime | None = None,
+    ) -> bool:
+        if not self.bootstrap_active(settings, now):
+            return False
+        if basis_pct < settings.cash_carry_bootstrap_min_basis_pct:
+            return False
+        return estimated_net_profit >= self.entry_quality_gate(settings, now).min_net_profit
 
     def stats_for(self, exchange: ExchangeName, symbol: str) -> CashCarrySymbolStats:
         self._refresh_if_needed()
@@ -231,6 +270,10 @@ class CashCarryHistoryQuality:
 
     def _base_entry_net_floor(self, settings: BotSettings) -> Decimal:
         return entry_net_floor(settings)
+
+    def _bootstrap_entry_net_floor(self, settings: BotSettings) -> Decimal:
+        bootstrap = close_execution_buffer(settings) + settings.order_notional_usdt * settings.cash_carry_bootstrap_min_profit_pct / Decimal("100")
+        return min(self._base_entry_net_floor(settings), bootstrap)
 
     def _max_reasonable_entry_floor(self, settings: BotSettings) -> Decimal:
         tradable_basis_pct = max(Decimal("0"), settings.cash_carry_max_entry_basis_pct - settings.cash_carry_close_basis_pct)

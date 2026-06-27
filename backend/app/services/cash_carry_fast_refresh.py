@@ -10,7 +10,6 @@ from app.services.cash_carry_quality import (
     cash_carry_quality_score,
     convergence_basis_profit,
     entry_basis_risk_reasons,
-    entry_quality_reasons,
     estimated_entry_net_profit,
 )
 from app.services.live_market_types import CashCarryScan
@@ -119,6 +118,7 @@ class CashCarryFastRefresher:
                 "资金费率不是正数",
                 "现货/合约最低24h成交量低于",
                 "回归到平仓线后的净利预估",
+                "V3冷启动净利预估",
                 "V2历史胜率保护",
                 "V3历史胜率保护",
                 "信号持续不足",
@@ -127,7 +127,7 @@ class CashCarryFastRefresher:
                 "基差分位不足",
             ),
         )
-        if basis_pct < settings.cash_carry_min_basis_pct:
+        if basis_pct < settings.cash_carry_min_basis_pct and not self.history_quality.bootstrap_basis_allows(basis_pct, estimated_net_profit, settings):
             reasons.append(f"合约溢价未达 {settings.cash_carry_min_basis_pct}%")
         reasons.extend(entry_basis_risk_reasons(basis_pct, settings))
         if funding_rate <= 0:
@@ -136,8 +136,7 @@ class CashCarryFastRefresher:
             reasons.append(f"资金费率低于 {settings.cash_carry_min_funding_rate_pct}%")
         if min(spot_volume, perp_volume) < settings.cash_carry_min_volume_usdt:
             reasons.append(f"现货/合约最低24h成交量低于 {settings.cash_carry_min_volume_usdt}U")
-        reasons.extend(entry_quality_reasons(estimated_net_profit, settings))
-        reasons.extend(self.history_quality.global_entry_reasons(estimated_net_profit, settings))
+        reasons.extend(self.history_quality.entry_net_reasons(estimated_net_profit, settings))
         return self._dedupe(reasons)
 
     def _preserved(self, current: list[str], dynamic_prefixes: tuple[str, ...]) -> list[str]:

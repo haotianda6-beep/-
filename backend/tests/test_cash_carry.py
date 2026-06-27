@@ -160,7 +160,7 @@ def test_cash_carry_fast_refresh_uses_ws_prices() -> None:
 
 def test_cash_carry_blocks_low_stable_net_profit() -> None:
     scanner = _scanner()
-    settings = BotSettings(order_notional_usdt=Decimal("300"))
+    settings = BotSettings(order_notional_usdt=Decimal("300"), cash_carry_bootstrap_enabled=False)
 
     item = scanner._build_opportunity("ABCUSDT", _data("100.7", "0.0002"), settings)
 
@@ -307,6 +307,47 @@ def test_cash_carry_v3_entry_gate_raises_after_negative_estimate_gap(tmp_path) -
     assert gate.base_min_net_profit == Decimal("1.20")
     assert gate.min_net_profit == Decimal("1.950")
     assert "V3真实成交比预估平均低 0.6000U" in " / ".join(gate.reasons)
+
+
+def test_cash_carry_v3_bootstrap_allows_positive_near_miss_before_first_samples() -> None:
+    scanner = _scanner()
+    settings = BotSettings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_close_basis_pct=Decimal("0.05"),
+        max_slippage_pct=Decimal("0.01"),
+    )
+
+    item = scanner._build_opportunity("ABCUSDT", _data("100.6612", "0.00005"), settings)
+
+    assert item is not None
+    assert item.estimated_net_profit == Decimal("0.9486")
+    assert item.blocked_reasons == []
+
+
+def test_cash_carry_v3_bootstrap_stops_after_minimum_real_samples(tmp_path) -> None:
+    state = tmp_path / "cash_carry_execution_state.json"
+    state.write_text(
+        '{"positions":['
+        + ",".join(
+            f'{{"exchange":"GATE","symbol":"DONE{i}USDT","status":"closed","strategy_version":"{CASH_CARRY_RULESET_VERSION}","history":{{"actual_net_profit":"0.2"}}}}'
+            for i in range(3)
+        )
+        + "]}",
+        encoding="utf-8",
+    )
+    scanner = CashCarryScanner(CashCarryHistoryQuality(state))
+    settings = BotSettings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_close_basis_pct=Decimal("0.05"),
+        max_slippage_pct=Decimal("0.01"),
+    )
+
+    item = scanner._build_opportunity("ABCUSDT", _data("100.6612", "0.00005"), settings)
+
+    assert item is not None
+    reasons = " / ".join(item.blocked_reasons)
+    assert "合约溢价未达 0.8%" in reasons
+    assert "稳定开仓安全垫 1.2000U" in reasons
 
 
 def test_cash_carry_v3_sort_prefers_higher_quality_signal() -> None:

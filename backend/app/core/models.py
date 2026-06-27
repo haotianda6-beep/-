@@ -211,6 +211,10 @@ class BotSettings(BaseSchema):
     cash_carry_target_daily_trades: int = 10
     cash_carry_adaptive_quality_enabled: bool = True
     cash_carry_v3_min_profit_pct: Decimal = Decimal("0.2")
+    cash_carry_bootstrap_enabled: bool = True
+    cash_carry_bootstrap_min_trades: int = 3
+    cash_carry_bootstrap_min_profit_pct: Decimal = Decimal("0.1")
+    cash_carry_bootstrap_min_basis_pct: Decimal = Decimal("0.6")
     cash_carry_recovery_probe_enabled: bool = True
     cash_carry_recovery_probe_notional_usdt: Decimal = Decimal("100")
     cash_carry_recovery_probe_min_net_pct: Decimal = Decimal("0.8")
@@ -263,6 +267,13 @@ class BotSettings(BaseSchema):
             raise ValueError("cash_carry_signal_min_samples must be between 1 and 60")
         return value
 
+    @field_validator("cash_carry_bootstrap_min_trades")
+    @classmethod
+    def validate_cash_carry_bootstrap_min_trades(cls, value: int) -> int:
+        if value < 0 or value > 20:
+            raise ValueError("cash_carry_bootstrap_min_trades must be between 0 and 20")
+        return value
+
     @field_validator("cash_carry_signal_min_history_samples")
     @classmethod
     def validate_cash_carry_signal_history_samples(cls, value: int) -> int:
@@ -300,6 +311,8 @@ class BotSettings(BaseSchema):
         "cash_carry_max_recovery_funding_intervals",
         "cash_carry_target_win_rate_pct",
         "cash_carry_v3_min_profit_pct",
+        "cash_carry_bootstrap_min_profit_pct",
+        "cash_carry_bootstrap_min_basis_pct",
         "cash_carry_recovery_probe_notional_usdt",
         "cash_carry_recovery_probe_min_net_pct",
         "cash_carry_signal_min_seconds",

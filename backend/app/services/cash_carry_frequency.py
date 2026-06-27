@@ -9,7 +9,7 @@ from app.services.cash_carry_market_memory import CashCarryMarketMemorySummary
 
 BLOCKER_PREFIXES = {
     "基差不足": ("合约溢价未达",),
-    "净利不足": ("回归到平仓线后的净利预估", "V2历史胜率保护", "V3历史胜率保护"),
+    "净利不足": ("回归到平仓线后的净利预估", "V3冷启动净利预估", "V2历史胜率保护", "V3历史胜率保护"),
     "资金费不足": ("资金费率不是正数", "资金费率低于"),
     "成交量不足": ("现货/合约最低24h成交量低于",),
     "异常高基差": ("开仓基差异常过高",),
@@ -41,7 +41,7 @@ def cash_carry_frequency_event(
     ]
     if nearest:
         gap = max(Decimal("0"), gate.min_net_profit - nearest.estimated_net_profit)
-        required_basis = _required_entry_basis_pct(nearest, settings, gate.min_net_profit)
+        required_basis = _required_entry_basis_pct(nearest, settings, gate.min_net_profit, history_quality)
         detail_parts.append(
             f"离开仓最近的是 {nearest.exchange} {nearest.symbol}：预估净利 {nearest.estimated_net_profit:.4f}U，还差 {gap:.4f}U"
         )
@@ -87,9 +87,17 @@ def _nearest_to_entry_gate(candidates: list[CashCarryOpportunity]) -> CashCarryO
     return max(filtered or candidates, key=lambda item: item.estimated_net_profit, default=None)
 
 
-def _required_entry_basis_pct(item: CashCarryOpportunity, settings: BotSettings, min_net_profit: Decimal) -> Decimal | None:
+def _required_entry_basis_pct(
+    item: CashCarryOpportunity,
+    settings: BotSettings,
+    min_net_profit: Decimal,
+    history_quality: CashCarryHistoryQuality | None = None,
+) -> Decimal | None:
     notional = item.notional_usdt or settings.order_notional_usdt
     if notional <= 0:
         return None
     required_tradable_pct = (min_net_profit - item.estimated_funding_income + item.estimated_open_close_fee) / notional * Decimal("100")
-    return max(settings.cash_carry_min_basis_pct, settings.cash_carry_close_basis_pct + required_tradable_pct)
+    min_basis = settings.cash_carry_min_basis_pct
+    if history_quality and history_quality.bootstrap_active(settings):
+        min_basis = settings.cash_carry_bootstrap_min_basis_pct
+    return max(min_basis, settings.cash_carry_close_basis_pct + required_tradable_pct)

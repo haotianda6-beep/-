@@ -11,7 +11,7 @@ from app.services.asset_identity import MarketAsset, asset_from_market, local_id
 from app.services.account_fee_rates import account_taker_fee_map
 from app.services.cash_carry_depth_estimator import estimate_max_safe_notional
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
-from app.services.cash_carry_quality import cash_carry_candidate_sort_key, cash_carry_quality_score, entry_basis_risk_reasons, entry_quality_reasons, estimated_entry_net_profit, convergence_basis_profit
+from app.services.cash_carry_quality import cash_carry_candidate_sort_key, cash_carry_quality_score, entry_basis_risk_reasons, estimated_entry_net_profit, convergence_basis_profit
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES, CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.exchange_factory import build_ccxt_exchange
 from app.services.live_market_types import CashCarryScan, SPOT_EXCHANGE_IDS, SWAP_EXCHANGE_IDS
@@ -277,10 +277,9 @@ class CashCarryScanner:
         basis_profit = convergence_basis_profit(settings, basis_pct)
         funding_income = settings.order_notional_usdt * funding_rate
         estimated_net_profit = estimated_entry_net_profit(settings, basis_pct, funding_rate, fees)
-        reasons = self._blocked_reasons(basis_pct, funding_rate, spot_volume, perp_volume, settings)
+        reasons = self._blocked_reasons(basis_pct, funding_rate, spot_volume, perp_volume, estimated_net_profit, settings)
         reasons.extend(entry_basis_risk_reasons(basis_pct, settings))
-        reasons.extend(entry_quality_reasons(estimated_net_profit, settings))
-        reasons.extend(self.history_quality.global_entry_reasons(estimated_net_profit, settings))
+        reasons.extend(self.history_quality.entry_net_reasons(estimated_net_profit, settings))
         reasons.extend(self.history_quality.blocked_reasons(data.exchange, symbol, settings))
         reasons.extend(local_identity_reasons(data.exchange.value, data.swap_markets[symbol].asset, data.spot_markets[symbol].asset))
         if self._pre_market_spot_transfer_closed(data.swap_markets[symbol], data.spot_markets[symbol]):
@@ -313,10 +312,11 @@ class CashCarryScanner:
         funding_rate: Decimal,
         spot_volume: Decimal,
         perp_volume: Decimal,
+        estimated_net_profit: Decimal,
         settings: BotSettings,
     ) -> list[str]:
         reasons: list[str] = []
-        if basis_pct < settings.cash_carry_min_basis_pct:
+        if basis_pct < settings.cash_carry_min_basis_pct and not self.history_quality.bootstrap_basis_allows(basis_pct, estimated_net_profit, settings):
             reasons.append(f"合约溢价未达 {settings.cash_carry_min_basis_pct}%")
         funding_rate_pct = funding_rate * Decimal("100")
         if funding_rate <= 0:
