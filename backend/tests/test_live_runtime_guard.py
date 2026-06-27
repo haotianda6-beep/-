@@ -1,7 +1,7 @@
 from decimal import Decimal
 from datetime import datetime, timezone
 
-from app.core.models import CashCarryOpportunity, DataSource, ExchangeBalance, ExchangeName, PositionSnapshot
+from app.core.models import BotSettings, CashCarryOpportunity, DataSource, ExchangeBalance, ExchangeName, PositionSnapshot
 from app.services.cash_carry_executor import CashCarryExecutor
 from app.services.live_market_types import CashCarryScan
 from app.services.live_read import LiveAccountSnapshot
@@ -55,6 +55,7 @@ def test_runtime_open_guard_allows_single_exchange_strategies_on_other_exchanges
             )
         ]
     )
+    runtime._settings = BotSettings(cash_carry_max_positions_per_exchange=1)
 
     assert runtime._auto_open_allowed(STRATEGY_CASH) is True
     allowed = runtime._allowed_single_exchange_open_exchanges()
@@ -99,10 +100,34 @@ def test_runtime_ignores_untracked_positions_outside_cash_carry_exchanges(tmp_pa
     assert runtime._auto_open_allowed(STRATEGY_CASH) is True
 
 
-def test_runtime_marks_same_exchange_cash_carry_opportunities_blocked(tmp_path) -> None:
+def test_runtime_allows_same_exchange_cash_carry_opportunities_when_slot_is_available(tmp_path) -> None:
     state = tmp_path / "cash.json"
     state.write_text('{"positions":[{"exchange":"BITGET","symbol":"JCTUSDT","status":"open"}]}', encoding="utf-8")
     runtime = _runtime(tmp_path, cash_executor=CashCarryExecutor(state))
+    runtime._settings = BotSettings(cash_carry_max_positions_per_exchange=2)
+
+    scan = runtime._apply_cash_carry_open_scope(
+        CashCarryScan(
+            opportunities=[
+                _cash_opportunity(ExchangeName.BITGET, "SKYAIUSDT", "3"),
+                _cash_opportunity(ExchangeName.GATE, "XYZUSDT", "2"),
+            ]
+        )
+    )
+
+    assert [(item.exchange, item.symbol) for item in scan.opportunities] == [
+        (ExchangeName.BITGET, "SKYAIUSDT"),
+        (ExchangeName.GATE, "XYZUSDT"),
+    ]
+    bitget = next(item for item in scan.candidates if item.exchange == ExchangeName.BITGET)
+    assert bitget.blocked_reasons == []
+
+
+def test_runtime_marks_same_exchange_cash_carry_opportunities_blocked_when_slots_are_full(tmp_path) -> None:
+    state = tmp_path / "cash.json"
+    state.write_text('{"positions":[{"exchange":"BITGET","symbol":"JCTUSDT","status":"open"}]}', encoding="utf-8")
+    runtime = _runtime(tmp_path, cash_executor=CashCarryExecutor(state))
+    runtime._settings = BotSettings(cash_carry_max_positions_per_exchange=1)
 
     scan = runtime._apply_cash_carry_open_scope(
         CashCarryScan(
@@ -115,7 +140,7 @@ def test_runtime_marks_same_exchange_cash_carry_opportunities_blocked(tmp_path) 
 
     assert [(item.exchange, item.symbol) for item in scan.opportunities] == [(ExchangeName.GATE, "XYZUSDT")]
     bitget = next(item for item in scan.candidates if item.exchange == ExchangeName.BITGET)
-    assert "一所一币规则" in " / ".join(bitget.blocked_reasons)
+    assert "持仓槽位已满" in " / ".join(bitget.blocked_reasons)
 
 
 def test_mt4_scan_uses_independent_slot(tmp_path) -> None:

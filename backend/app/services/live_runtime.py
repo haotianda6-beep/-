@@ -276,20 +276,20 @@ class LiveRuntimeCache:
 
     def _apply_cash_carry_open_scope(self, scan: CashCarryScan) -> CashCarryScan:
         active_keys = self.cash_carry_executor.state.active_keys()
-        active_exchanges = {exchange for exchange, _symbol in active_keys}
-        if not active_exchanges:
+        active_counts = self.cash_carry_executor.state.active_counts_by_exchange()
+        if not active_counts:
             return self._rebuild_cash_carry_scan([self._without_open_scope_reason(item) for item in self._cash_carry_unique_items(scan)], scan.issues)
         rows = []
         for item in self._cash_carry_unique_items(scan):
             exchange = ExchangeName(item.exchange)
-            if exchange not in active_exchanges:
+            if (exchange, item.symbol) in active_keys:
+                rows.append(self._with_open_scope_reason(item, "该交易所该币种已有正向期现持仓，禁止重复开仓"))
+                continue
+            active_count = active_counts.get(exchange, 0)
+            if active_count < self._settings.cash_carry_max_positions_per_exchange:
                 rows.append(self._without_open_scope_reason(item))
                 continue
-            reason = (
-                "该交易所该币种已有正向期现持仓，禁止重复开仓"
-                if (exchange, item.symbol) in active_keys
-                else "同交易所已有正向期现持仓，按一所一币规则禁止开仓"
-            )
+            reason = f"同交易所正向期现持仓槽位已满 {active_count}/{self._settings.cash_carry_max_positions_per_exchange}"
             rows.append(self._with_open_scope_reason(item, reason))
         return self._rebuild_cash_carry_scan(rows, scan.issues)
 
@@ -314,7 +314,7 @@ class LiveRuntimeCache:
         return item.model_copy(update={"blocked_reasons": self._dedupe_reasons(reasons)})
 
     def _is_open_scope_reason(self, reason: str) -> bool:
-        return "一所一币规则" in reason or "已有正向期现持仓" in reason
+        return "一所一币规则" in reason or "已有正向期现持仓" in reason or "持仓槽位已满" in reason
 
     def _rebuild_cash_carry_scan(self, rows: list[CashCarryOpportunity], issues: list[str]) -> CashCarryScan:
         opportunities = [item for item in rows if not item.blocked_reasons]
@@ -406,8 +406,12 @@ class LiveRuntimeCache:
             return set()
         with self._lock:
             healthy = self._healthy_account_exchanges_locked()
-        used = self.cash_carry_executor.state.active_exchanges()
-        return (healthy & CASH_CARRY_EXCHANGE_SET) - used
+        counts = self.cash_carry_executor.state.active_counts_by_exchange()
+        return {
+            exchange
+            for exchange in (healthy & CASH_CARRY_EXCHANGE_SET)
+            if counts.get(exchange, 0) < self._settings.cash_carry_max_positions_per_exchange
+        }
 
     def _healthy_account_exchanges_locked(self) -> set[ExchangeName]:
         return {ExchangeName(item.exchange) for item in self._account.balances}

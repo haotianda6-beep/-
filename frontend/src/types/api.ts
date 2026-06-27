@@ -150,6 +150,7 @@ export type BotSettings = {
   stop_loss_usdt: string;
   max_slippage_pct: string;
   min_funding_net_usdt: string;
+  cash_carry_max_positions_per_exchange: number;
   max_add_count: number;
   add_notional_usdt: string;
   add_trigger_spread_pct: string;

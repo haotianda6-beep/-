@@ -121,6 +121,12 @@ class CashCarryStateStore:
     def active_exchanges(self) -> set[ExchangeName]:
         return {exchange for exchange, _ in self.active_keys()}
 
+    def active_counts_by_exchange(self) -> dict[ExchangeName, int]:
+        counts: dict[ExchangeName, int] = {}
+        for exchange, _symbol in self.active_keys():
+            counts[exchange] = counts.get(exchange, 0) + 1
+        return counts
+
     def read(self) -> dict[str, Any]:
         return json.loads(self.state_path.read_text(encoding="utf-8")) if self.state_path.exists() else {"positions": []}
 

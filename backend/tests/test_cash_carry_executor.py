@@ -72,7 +72,7 @@ def test_cash_carry_executor_ignores_removed_exchanges(tmp_path) -> None:
     assert executor.evaluate_open([_opportunity("XYZUSDT", "9", exchange=ExchangeName.BYBIT)], settings) is None
 
 
-def test_cash_carry_executor_blocks_same_exchange_new_symbol(tmp_path) -> None:
+def test_cash_carry_executor_blocks_same_exchange_new_symbol_when_slots_are_full(tmp_path) -> None:
     state = tmp_path / "state.json"
     state.write_text(
         '{"positions":[{"exchange":"BITGET","symbol":"JCTUSDT","base_asset":"JCT","quantity":"85483.5902","spot_entry_price":"0.0058373725531173","perp_entry_price":"0.00586","opened_at":"2026-06-12T00:00:00+00:00","status":"open"}]}',
@@ -84,12 +84,38 @@ def test_cash_carry_executor_blocks_same_exchange_new_symbol(tmp_path) -> None:
         single_exchange_max_notional_usdt=Decimal("1000"),
         max_total_notional_usdt=Decimal("2000"),
         max_symbol_notional_usdt=Decimal("500"),
+        cash_carry_max_positions_per_exchange=1,
         manual_confirm_required=False,
         cash_carry_auto_open_enabled=True,
         cash_carry_auto_trade_enabled=False,
     )
 
     assert executor.evaluate_open([_opportunity("SKYAIUSDT", "3", exchange=ExchangeName.BITGET)], settings) is None
+
+
+def test_cash_carry_executor_allows_same_exchange_new_symbol_when_slot_is_available(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(
+        '{"positions":[{"exchange":"BITGET","symbol":"JCTUSDT","base_asset":"JCT","quantity":"90000","spot_entry_price":"0.006","perp_entry_price":"0.0061","opened_at":"2026-06-12T00:00:00+00:00","status":"open"}]}',
+        encoding="utf-8",
+    )
+    executor = CashCarryExecutor(state)
+    settings = BotSettings(
+        order_notional_usdt=Decimal("300"),
+        single_exchange_max_notional_usdt=Decimal("1000"),
+        max_total_notional_usdt=Decimal("2000"),
+        max_symbol_notional_usdt=Decimal("500"),
+        cash_carry_max_positions_per_exchange=2,
+        manual_confirm_required=False,
+        cash_carry_auto_open_enabled=True,
+        cash_carry_auto_trade_enabled=False,
+    )
+
+    result = executor.evaluate_open([_opportunity("SKYAIUSDT", "3", exchange=ExchangeName.BITGET)], settings)
+
+    assert result is not None
+    assert result.status == "blocked_by_safety_gate"
+    assert "SKYAIUSDT" in result.steps[2].detail
 
 
 def test_cash_carry_executor_blocks_historical_loser_even_if_candidate_is_ready(tmp_path) -> None:

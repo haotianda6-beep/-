@@ -49,7 +49,7 @@ def _add_candidate(item: CashCarryOpportunity | None) -> CashCarryOpportunity | 
 
 
 def _is_open_scope_reason(reason: str) -> bool:
-    return "一所一币规则" in reason or "已有正向期现持仓" in reason
+    return "一所一币规则" in reason or "已有正向期现持仓" in reason or "持仓槽位已满" in reason
 
 
 def _execute_add(

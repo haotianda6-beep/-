@@ -166,6 +166,20 @@ export function SettingsPage({ settings, onSaved }: Props) {
 
       <div className="settings-grid">
         <label className="field">
+          <span>每所最大组合数</span>
+          <div className="input-row">
+            <input
+              type="number"
+              min="1"
+              max="5"
+              value={draft.cash_carry_max_positions_per_exchange}
+              onChange={(event) => updateDraft((current) => ({ ...current, cash_carry_max_positions_per_exchange: Number(event.target.value) }))}
+            />
+            <small>组</small>
+          </div>
+        </label>
+
+        <label className="field">
           <span>最大补仓次数</span>
           <div className="input-row">
             <input

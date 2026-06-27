@@ -57,13 +57,14 @@ class CashCarryExecutor:
         if not allow_open or not settings.cash_carry_auto_open_enabled:
             return None
         blocked_keys = self.state.active_keys() | self.state.recently_closed_keys(self.reopen_cooldown_seconds)
+        active_counts = self.state.active_counts_by_exchange()
         ready = [
             item for item in rows
             if not item.blocked_reasons
             and ExchangeName(item.exchange) in CASH_CARRY_EXCHANGE_SET
             and not self.history_quality.blocked_reasons(ExchangeName(item.exchange), item.symbol, settings)
             and (item.exchange, item.symbol) not in blocked_keys
-            and ExchangeName(item.exchange) not in self.state.active_exchanges()
+            and active_counts.get(ExchangeName(item.exchange), 0) < settings.cash_carry_max_positions_per_exchange
             and (allowed_open_exchanges is None or ExchangeName(item.exchange) in allowed_open_exchanges)
             and self._exposure_allows(item, settings)
         ]
@@ -717,7 +718,7 @@ class CashCarryExecutor:
         return max(choices, key=lambda item: item.estimated_net_profit) if choices else None
 
     def _is_open_scope_reason(self, reason: str) -> bool:
-        return "一所一币规则" in reason or "已有正向期现持仓" in reason
+        return "一所一币规则" in reason or "已有正向期现持仓" in reason or "持仓槽位已满" in reason
 
     def _dead_release_loss_cap(self, settings: BotSettings) -> Decimal:
         return min(settings.take_profit_usdt, max(Decimal("1"), settings.order_notional_usdt * Decimal("0.0075")))

@@ -203,6 +203,7 @@ class BotSettings(BaseSchema):
     stop_loss_usdt: Decimal = Decimal("12")
     max_slippage_pct: Decimal = Decimal("0.2")
     min_funding_net_usdt: Decimal = Decimal("0.01")
+    cash_carry_max_positions_per_exchange: int = 3
     max_add_count: int = 2
     add_notional_usdt: Decimal = Decimal("0")
     add_trigger_spread_pct: Decimal = Decimal("2.2")
@@ -223,6 +224,13 @@ class BotSettings(BaseSchema):
     def validate_add_count(cls, value: int) -> int:
         if value < 0 or value > 10:
             raise ValueError("max_add_count must be between 0 and 10")
+        return value
+
+    @field_validator("cash_carry_max_positions_per_exchange")
+    @classmethod
+    def validate_cash_carry_slots(cls, value: int) -> int:
+        if value < 1 or value > 5:
+            raise ValueError("cash_carry_max_positions_per_exchange must be between 1 and 5")
         return value
 
     @field_validator(
