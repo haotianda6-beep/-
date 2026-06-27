@@ -21,7 +21,7 @@ from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_frequency import cash_carry_frequency_event
 from app.services.cash_carry_market_memory import CashCarryMarketMemory
 from app.services.cash_carry_positions import CashCarryPositionBuilder
-from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES
+from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES, CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.cash_carry_scanner import CashCarryScanner
 from app.services.cash_carry_state import CashCarryStateStore
 from app.services.cash_carry_quality import close_execution_buffer
@@ -38,7 +38,7 @@ class ArbitrageEngine:
     def __init__(self, settings_store: SettingsStore) -> None:
         self.settings_store = settings_store
         self.live_read = LiveReadService()
-        self.ticker_cache = WSTickerCache()
+        self.ticker_cache = WSTickerCache(max_symbols_per_stream=CASH_CARRY_INTERNAL_CANDIDATE_LIMIT)
         self.cash_carry_scanner = CashCarryScanner()
         self.cash_carry_history_quality = CashCarryHistoryQuality()
         self.cash_carry_market_memory = CashCarryMarketMemory()

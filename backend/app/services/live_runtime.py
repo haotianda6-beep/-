@@ -74,7 +74,7 @@ class LiveRuntimeCache:
         self.cash_carry_scanner = cash_carry_scanner
         self.cash_carry_executor = cash_carry_executor or CashCarryExecutor()
         self.mt4_spread_scanner = mt4_spread_scanner
-        self.ticker_cache = ticker_cache or WSTickerCache()
+        self.ticker_cache = ticker_cache or WSTickerCache(max_symbols_per_stream=CASH_CARRY_INTERNAL_CANDIDATE_LIMIT)
         self.cash_carry_refresher = CashCarryFastRefresher(self.ticker_cache)
         self.cash_carry_signal_tracker = CashCarrySignalTracker()
         self.cash_position_builder = CashCarryPositionBuilder(self.ticker_cache)

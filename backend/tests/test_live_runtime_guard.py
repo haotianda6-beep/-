@@ -156,6 +156,12 @@ def test_runtime_rebuild_keeps_internal_candidate_pool(tmp_path) -> None:
     assert len(scan.candidates) == CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 
 
+def test_runtime_default_ws_capacity_covers_internal_candidate_pool(tmp_path) -> None:
+    runtime = _runtime(tmp_path)
+
+    assert runtime.ticker_cache.max_symbols_per_stream == CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
+
+
 def test_runtime_marks_recent_depth_failed_symbol_as_candidate(tmp_path) -> None:
     state = tmp_path / "cash.json"
     blocked_at = datetime.now(timezone.utc).isoformat()
