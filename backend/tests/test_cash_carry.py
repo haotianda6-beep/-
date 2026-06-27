@@ -466,6 +466,45 @@ def test_cash_carry_depth_zero_blocks_ready_opportunity() -> None:
     assert "盘口深度不足" in " / ".join(checked.blocked_reasons)
 
 
+def test_cash_carry_depth_estimate_uses_bootstrap_basis_floor() -> None:
+    scanner = _scanner()
+    settings = BotSettings(
+        order_notional_usdt=Decimal("100"),
+        cash_carry_close_basis_pct=Decimal("0.05"),
+        cash_carry_bootstrap_enabled=True,
+        cash_carry_bootstrap_min_trades=3,
+        cash_carry_bootstrap_min_basis_pct=Decimal("0.6"),
+    )
+    item = scanner._build_opportunity("ABCUSDT", _data("100.75", "0.002"), settings)
+    assert item is not None
+    data = _data("100.75", "0.002")
+    data.spot_exchange = _BookExchange(asks=[[100, 2]], bids=[[99, 2]])
+    data.swap_exchange = _BookExchange(asks=[[101, 2]], bids=[[100.65, 2]])
+
+    checked = scanner._with_depth_estimate(item, data, settings)
+
+    assert checked.max_safe_notional_usdt is not None
+    assert checked.max_safe_notional_usdt >= Decimal("100")
+    assert "盘口深度不足" not in " / ".join(checked.blocked_reasons)
+
+
+def test_cash_carry_depth_estimate_runs_for_soft_blocked_candidates() -> None:
+    scanner = _scanner()
+    settings = BotSettings(order_notional_usdt=Decimal("100"), cash_carry_close_basis_pct=Decimal("0.05"))
+    item = scanner._build_opportunity("ABCUSDT", _data("100.45", "0.002"), settings)
+    assert item is not None
+    assert item.estimated_net_profit > 0
+    assert item.blocked_reasons
+    data = _data("100.45", "0.002")
+    data.spot_exchange = _BookExchange(asks=[[100, 2]], bids=[[99, 2]])
+    data.swap_exchange = _BookExchange(asks=[[101, 2]], bids=[[99.90, 2]])
+
+    checked = scanner._attach_depth_estimates([item], data, settings)[0]
+
+    assert checked.max_safe_notional_usdt == Decimal("0.00")
+    assert "盘口深度不足" in " / ".join(checked.blocked_reasons)
+
+
 def _data(
     perp_bid: str,
     funding_rate: str,

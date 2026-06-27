@@ -336,10 +336,10 @@ class CashCarryScanner:
     ) -> list[CashCarryOpportunity]:
         if not data.spot_exchange or not data.swap_exchange:
             return items
-        ready = [item for item in items if not item.blocked_reasons]
+        ready = [item for item in items if self._should_estimate_depth(item, settings)]
         top_keys = {
             item.symbol
-            for item in sorted(ready, key=lambda row: self._opportunity_sort_key(row, settings))[:10]
+            for item in sorted(ready, key=lambda row: self._candidate_sort_key(row, settings))[:20]
         }
         if not top_keys:
             return items
@@ -347,6 +347,30 @@ class CashCarryScanner:
             self._with_depth_estimate(item, data, settings) if item.symbol in top_keys else item
             for item in items
         ]
+
+    def _should_estimate_depth(self, item: CashCarryOpportunity, settings: BotSettings) -> bool:
+        hard_reasons = [
+            reason for reason in item.blocked_reasons
+            if not reason.startswith(
+                (
+                    "合约溢价未达",
+                    "回归到平仓线后的净利预估",
+                    "V3冷启动净利预估",
+                    "V2历史胜率保护",
+                    "V3历史胜率保护",
+                    "信号持续不足",
+                    "基差波动过大",
+                    "基差分位样本不足",
+                    "基差分位不足",
+                )
+            )
+        ]
+        if hard_reasons:
+            return False
+        min_basis = settings.cash_carry_bootstrap_min_basis_pct if self.history_quality.bootstrap_active(settings) else settings.cash_carry_min_basis_pct
+        if item.basis_pct < min_basis:
+            return item.estimated_net_profit > Decimal("0")
+        return item.estimated_net_profit >= Decimal("0")
 
     def _with_depth_estimate(
         self,
@@ -367,6 +391,7 @@ class CashCarryScanner:
             spot_market.taker_fee or FEE_RATES[data.exchange],
             swap_market.taker_fee or FEE_RATES[data.exchange],
             data.funding_rates.get(item.symbol, Decimal("0")),
+            self._depth_min_basis_pct(item, settings),
         )
         if estimate is None:
             return item
@@ -378,6 +403,11 @@ class CashCarryScanner:
                 f"盘口深度不足，最大安全本金 {safe_notional}U < 单笔 {q(settings.order_notional_usdt, '0.01')}U",
             ]
         return item.model_copy(update=updates)
+
+    def _depth_min_basis_pct(self, item: CashCarryOpportunity, settings: BotSettings) -> Decimal:
+        if self.history_quality.bootstrap_basis_allows(item.basis_pct, item.estimated_net_profit, settings):
+            return settings.cash_carry_bootstrap_min_basis_pct
+        return settings.cash_carry_min_basis_pct
 
     def _candidate_sort_key(self, item: CashCarryOpportunity, settings: BotSettings) -> tuple[int, int, Decimal, Decimal, Decimal, Decimal]:
         return cash_carry_candidate_sort_key(

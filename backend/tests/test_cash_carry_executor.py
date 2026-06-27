@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -219,6 +219,31 @@ def test_cash_carry_executor_tracks_multiple_recent_depth_failures(tmp_path) -> 
     reasons = executor.state.recent_depth_blocked_reasons(executor.depth_block_cooldown_seconds)
     assert (ExchangeName.GATE, "ABCUSDT") in reasons
     assert (ExchangeName.GATE, "XYZUSDT") in reasons
+
+
+def test_cash_carry_executor_extends_cooldown_for_repeated_depth_failures(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    now = datetime.now(timezone.utc)
+    first = (now - timedelta(seconds=1200)).replace(microsecond=0).isoformat()
+    second = (now - timedelta(seconds=120)).replace(microsecond=0).isoformat()
+    state.write_text(
+        (
+            '{"positions":[],"recent_depth_blocks":['
+            f'{{"status":"blocked_by_depth","exchange":"GATE","symbol":"ABCUSDT","reason":"第一次深度失败","at":"{first}"}},'
+            f'{{"status":"blocked_by_depth","exchange":"GATE","symbol":"ABCUSDT","reason":"第二次深度失败","at":"{second}"}}'
+            ']}'
+        ),
+        encoding="utf-8",
+    )
+    executor = CashCarryExecutor(state)
+
+    reasons = executor.state.recent_depth_blocked_reasons(
+        executor.depth_block_cooldown_seconds,
+        now=now.replace(microsecond=0),
+    )
+
+    assert (ExchangeName.GATE, "ABCUSDT") in reasons
+    assert "第二次深度失败" in reasons[(ExchangeName.GATE, "ABCUSDT")]
 
 
 def test_cash_carry_executor_retries_smaller_notional_when_depth_is_thin(tmp_path) -> None:

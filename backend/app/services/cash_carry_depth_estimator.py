@@ -12,6 +12,7 @@ def estimate_max_safe_notional(
     spot_fee: Decimal,
     swap_fee: Decimal,
     funding_rate: Decimal,
+    min_basis_pct: Decimal | None = None,
 ) -> Decimal | None:
     try:
         spot_book = spot.fetch_order_book(spot_symbol, limit=50)
@@ -30,7 +31,7 @@ def estimate_max_safe_notional(
         contract_size,
         notional,
         max_slippage,
-        settings.cash_carry_min_basis_pct,
+        min_basis_pct if min_basis_pct is not None else settings.cash_carry_min_basis_pct,
         min_net,
         spot_fee,
         swap_fee,

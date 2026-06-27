@@ -12,6 +12,8 @@ from app.services.execution_models import ExecutionResult
 ACTIVE_POSITION_STATUSES = {"open", "mismatch", "spot_only", "perp_only"}
 DEPTH_BLOCK_RETENTION_SECONDS = 3600
 DEPTH_BLOCK_RETENTION_LIMIT = 100
+DEPTH_BLOCK_REPEAT_COOLDOWN_SECONDS = 900
+DEPTH_BLOCK_REPEAT_THRESHOLD = 2
 
 
 class CashCarryStateStore:
@@ -76,20 +78,28 @@ class CashCarryStateStore:
                 continue
         return keys
 
-    def recent_depth_blocked_reasons(self, cooldown_seconds: int, now: datetime | None = None) -> dict[tuple[ExchangeName, str], str]:
+    def recent_depth_blocked_reasons(
+        self,
+        cooldown_seconds: int,
+        now: datetime | None = None,
+        repeat_cooldown_seconds: int = DEPTH_BLOCK_REPEAT_COOLDOWN_SECONDS,
+        repeat_threshold: int = DEPTH_BLOCK_REPEAT_THRESHOLD,
+        repeat_count_window_seconds: int = DEPTH_BLOCK_RETENTION_SECONDS,
+    ) -> dict[tuple[ExchangeName, str], str]:
         current = now or datetime.now(timezone.utc)
+        records = self._parsed_depth_block_records(current)
+        repeat_window = max(cooldown_seconds, repeat_cooldown_seconds)
+        repeat_counts: dict[tuple[ExchangeName, str], int] = {}
+        for key, at, _reason in records:
+            if (current - at).total_seconds() <= repeat_count_window_seconds:
+                repeat_counts[key] = repeat_counts.get(key, 0) + 1
         reasons: dict[tuple[ExchangeName, str], str] = {}
-        for result in self._depth_block_records(self.read()):
-            try:
-                at = datetime.fromisoformat(str(result.get("at", "")).replace("Z", "+00:00"))
-                age = (current - at).total_seconds()
-                if age > cooldown_seconds:
-                    continue
-                key = (ExchangeName(result["exchange"]), str(result["symbol"]))
-            except (KeyError, ValueError):
+        for key, at, reason in records:
+            age = (current - at).total_seconds()
+            effective_cooldown = repeat_window if repeat_counts.get(key, 0) >= repeat_threshold else cooldown_seconds
+            if age > effective_cooldown:
                 continue
-            reason = str(result.get("reason") or "开仓深度不足")
-            remaining = max(0, int(cooldown_seconds - age))
+            remaining = max(0, int(effective_cooldown - age))
             reasons[key] = f"最近执行深度失败，约 {remaining}s 后重试：{reason}"
         return reasons
 
@@ -167,6 +177,27 @@ class CashCarryStateStore:
         if isinstance(last_result, dict) and last_result.get("status") == "blocked_by_depth":
             records.append(last_result)
         return records
+
+    def _parsed_depth_block_records(self, current: datetime) -> list[tuple[tuple[ExchangeName, str], datetime, str]]:
+        parsed = []
+        seen = set()
+        for result in self._depth_block_records(self.read()):
+            try:
+                at = datetime.fromisoformat(str(result.get("at", "")).replace("Z", "+00:00"))
+                if at.tzinfo is None:
+                    at = at.replace(tzinfo=timezone.utc)
+                if (current - at).total_seconds() > DEPTH_BLOCK_RETENTION_SECONDS:
+                    continue
+                key = (ExchangeName(result["exchange"]), str(result["symbol"]))
+            except (KeyError, ValueError):
+                continue
+            reason = str(result.get("reason") or "开仓深度不足")
+            marker = (key, at.isoformat(), reason)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            parsed.append((key, at, reason))
+        return parsed
 
     def _remember_depth_block(self, state: dict[str, Any], payload: dict[str, Any]) -> None:
         if payload.get("status") != "blocked_by_depth" or not payload.get("exchange") or not payload.get("symbol"):
