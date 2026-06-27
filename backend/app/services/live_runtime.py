@@ -16,6 +16,7 @@ from app.services.cash_carry_fast_refresh import CashCarryFastRefresher
 from app.services.cash_carry_positions import CashCarryPositionBuilder
 from app.services.cash_carry_quality import cash_carry_quality_score
 from app.services.cash_carry_scanner import CashCarryScanner
+from app.services.cash_carry_signal import CashCarrySignalTracker
 from app.services.live_market_types import CashCarryScan
 from app.services.live_read import LiveAccountSnapshot, LiveReadService
 from app.services.mt4_bridge import Mt4SpreadScanner
@@ -75,6 +76,7 @@ class LiveRuntimeCache:
         self.mt4_spread_scanner = mt4_spread_scanner
         self.ticker_cache = ticker_cache or WSTickerCache()
         self.cash_carry_refresher = CashCarryFastRefresher(self.ticker_cache)
+        self.cash_carry_signal_tracker = CashCarrySignalTracker()
         self.cash_position_builder = CashCarryPositionBuilder(self.ticker_cache)
         self.alpha_scanner = BinanceAlphaScanner()
         self._account = LiveAccountSnapshot(issues=["账户数据后台加载中"])
@@ -154,6 +156,7 @@ class LiveRuntimeCache:
                 with self._lock:
                     current = self._cash_carry
                 result = self.cash_carry_refresher.refresh(current, self._settings)
+            result = self.cash_carry_signal_tracker.apply(result, self._settings)
             result = self._apply_cash_carry_open_scope(result)
             self._execute_cash_carry(result)
             with self._lock:
