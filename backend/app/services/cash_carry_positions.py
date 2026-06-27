@@ -20,11 +20,13 @@ class CashCarryPositionBuilder:
         self._spot_balance_cache: dict[tuple[ExchangeName, str], tuple[float, Decimal]] = {}
         self._contract_size_cache: dict[tuple[ExchangeName, str], tuple[float, Decimal]] = {}
         self._exit_price_cache: dict[tuple[ExchangeName, str, str], tuple[float, Decimal]] = {}
+        self._funding_rate_cache: dict[tuple[ExchangeName, str], tuple[float, Decimal]] = {}
 
     def clear_caches(self) -> None:
         self._spot_balance_cache = {}
         self._contract_size_cache = {}
         self._exit_price_cache = {}
+        self._funding_rate_cache = {}
 
     def build(self, positions: list[PositionSnapshot], prices: list[CashCarryOpportunity], settings: BotSettings) -> list[CashCarryPositionRow]:
         rows = []
@@ -74,7 +76,7 @@ class CashCarryPositionBuilder:
         basis = ((perp_mark - spot_price) / spot_price * Decimal("100")) if spot_price > 0 else Decimal("0")
         spot_pnl = (spot_price - spot_entry) * spot_quantity
         perp_pnl = self._perp_unrealized(position.side, perp_base, position.entry_price, perp_mark, position.unrealized_pnl)
-        funding_rate_pct = price.funding_rate_pct if price else Decimal("0")
+        funding_rate_pct = self._funding_rate_pct(exchange, swap_symbol, price)
         funding_income = self._funding_income(position.side, perp_base, perp_mark, funding_rate_pct)
         open_fee, close_fee = self._fees(exchange, f"{base}/USDT", swap_symbol, spot_quantity, spot_entry, spot_price, perp_base, position.entry_price, perp_mark)
         net = spot_pnl + perp_pnl + funding_income - open_fee - close_fee
@@ -124,7 +126,7 @@ class CashCarryPositionBuilder:
         perp_entry = decimal_from(state.get("perp_entry_price"))
         spot_pnl = (spot_price - spot_entry) * spot_quantity
         perp_base = Decimal("0")
-        funding_rate_pct = price.funding_rate_pct if price else Decimal("0")
+        funding_rate_pct = self._funding_rate_pct(exchange, swap_symbol, price)
         open_fee, close_fee = self._fees(exchange, f"{base}/USDT", swap_symbol, spot_quantity, spot_entry, spot_price, perp_base, perp_entry, perp_mark)
         net = spot_pnl - open_fee - close_fee
         return CashCarryPositionRow(
@@ -226,6 +228,35 @@ class CashCarryPositionBuilder:
             if price > 0:
                 return price
         return Decimal("0")
+
+    def _funding_rate_pct(self, exchange: ExchangeName, swap_symbol: str, price: CashCarryOpportunity | None) -> Decimal:
+        if price:
+            return price.funding_rate_pct
+        return self._cached_funding_rate_pct(exchange, swap_symbol)
+
+    def _cached_funding_rate_pct(self, exchange: ExchangeName, swap_symbol: str) -> Decimal:
+        key = (exchange, swap_symbol)
+        cached = self._funding_rate_cache.get(key)
+        if cached and time.monotonic() - cached[0] < 60:
+            return cached[1]
+        rate = Decimal("0")
+        swap = self._exchange(exchange, "swap")
+        try:
+            if swap.has.get("fetchFundingRate"):
+                rate = self._normalize_funding_rate(swap.fetch_funding_rate(swap_symbol))
+            elif swap.has.get("fetchFundingRates"):
+                raw = swap.fetch_funding_rates([swap_symbol])
+                items = raw.values() if isinstance(raw, dict) else raw
+                match = next((item for item in items if item.get("symbol") == swap_symbol), None)
+                rate = self._normalize_funding_rate(match or {})
+        except Exception:
+            rate = Decimal("0")
+        self._funding_rate_cache[key] = (time.monotonic(), rate)
+        return rate
+
+    def _normalize_funding_rate(self, raw: dict | None) -> Decimal:
+        rate = decimal_from((raw or {}).get("fundingRate") or (raw or {}).get("nextFundingRate") or (raw or {}).get("lastFundingRate"))
+        return rate * Decimal("100") if rate else Decimal("0")
 
     def _status(self, spot_quantity: Decimal, perp_base: Decimal) -> str:
         if spot_quantity <= 0 and perp_base > 0:

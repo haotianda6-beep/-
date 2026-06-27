@@ -47,6 +47,21 @@ def test_cash_carry_position_uses_separate_spot_and_swap_fee_rates() -> None:
     assert row.estimated_close_fee == Decimal("0.1505")
 
 
+def test_cash_carry_position_fetches_funding_when_position_is_not_in_candidates() -> None:
+    builder = _Builder(
+        _TickerCache({
+            ("spot", "AIAUSDT"): {"bid": "100", "ask": "100"},
+            ("swap", "AIAUSDT"): {"bid": "101", "ask": "101"},
+        }),
+        funding_rate_pct=Decimal("0.05"),
+    )
+
+    row = builder.build([_position()], [], BotSettings())[0]
+
+    assert row.estimated_funding_rate_pct == Decimal("0.0500")
+    assert row.estimated_funding_income == Decimal("0.0505")
+
+
 class _TickerCache:
     def __init__(self, tickers):
         self.tickers = tickers
@@ -59,6 +74,10 @@ class _TickerCache:
 
 
 class _Builder(CashCarryPositionBuilder):
+    def __init__(self, ticker_cache, funding_rate_pct=Decimal("0")):
+        super().__init__(ticker_cache)
+        self.funding_rate_pct = funding_rate_pct
+
     def _cached_spot_quantity(self, exchange, base):
         return Decimal("1")
 
@@ -76,6 +95,9 @@ class _Builder(CashCarryPositionBuilder):
 
     def _taker_fee(self, exchange, market_type, symbol):
         return Decimal("0.001") if market_type == "spot" else Decimal("0.0005")
+
+    def _cached_funding_rate_pct(self, exchange, swap_symbol):
+        return self.funding_rate_pct
 
 
 def _position() -> PositionSnapshot:
