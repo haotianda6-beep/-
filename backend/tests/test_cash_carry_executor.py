@@ -435,6 +435,52 @@ def test_cash_carry_v3_dead_release_waits_without_replacement(tmp_path) -> None:
     assert executor.swap.orders == []
 
 
+def test_cash_carry_v3_switches_slow_funding_recovery_when_replacement_covers_cost(tmp_path) -> None:
+    state = _state_with_position(tmp_path)
+    executor = _RecordingExecutor(state)
+    settings = BotSettings(
+        manual_confirm_required=False,
+        cash_carry_auto_close_enabled=True,
+        order_notional_usdt=Decimal("100"),
+        take_profit_usdt=Decimal("3"),
+        cash_carry_close_basis_pct=Decimal("0.2"),
+        cash_carry_target_daily_trades=10,
+    )
+    replacement = _opportunity("XYZUSDT", net="1.5", basis="1.2", funding="0.02").model_copy(
+        update={"blocked_reasons": ["同交易所已有正向期现持仓，按一所一币规则禁止开仓"]}
+    )
+
+    result = executor.evaluate_close([replacement], settings, [_position_row(net="-0.8", basis="0.6", funding="0.1")])
+
+    assert result is not None
+    assert result.status == "close_submitted"
+    assert "V3低效仓位切换" in result.reason
+    assert "超过周转上限" in result.reason
+    assert "XYZUSDT" in result.reason
+
+
+def test_cash_carry_v3_keeps_slow_funding_recovery_when_replacement_is_too_thin(tmp_path) -> None:
+    state = _state_with_position(tmp_path)
+    executor = _RecordingExecutor(state)
+    settings = BotSettings(
+        manual_confirm_required=False,
+        cash_carry_auto_close_enabled=True,
+        order_notional_usdt=Decimal("100"),
+        take_profit_usdt=Decimal("3"),
+        cash_carry_close_basis_pct=Decimal("0.2"),
+        cash_carry_target_daily_trades=10,
+    )
+    replacement = _opportunity("XYZUSDT", net="1.35", basis="1.2", funding="0.02").model_copy(
+        update={"blocked_reasons": ["同交易所已有正向期现持仓，按一所一币规则禁止开仓"]}
+    )
+
+    result = executor.evaluate_close([replacement], settings, [_position_row(net="-0.8", basis="0.6", funding="0.1")])
+
+    assert result is None
+    assert executor.spot.orders == []
+    assert executor.swap.orders == []
+
+
 def test_cash_carry_v3_dead_release_blocks_large_loss(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = _RecordingExecutor(state)

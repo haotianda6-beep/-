@@ -192,6 +192,7 @@ def test_cash_carry_turnover_event_warns_for_stale_unprofitable_position(tmp_pat
     event = next(item for item in events if item.id == "cash-carry-turnover-GATE-AAAUSDT")
     assert event.title == "正向期现持仓周转过慢"
     assert "影响约10单/日目标" in event.detail
+    assert "当前资金费不能覆盖恢复" in event.detail
 
 
 def _cash_position() -> CashCarryPositionRow:

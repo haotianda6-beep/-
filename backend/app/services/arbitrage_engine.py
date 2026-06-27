@@ -263,17 +263,34 @@ class ArbitrageEngine:
             if row.current_net_profit >= 0 and row.estimated_funding_rate_pct > settings.cash_carry_min_funding_rate_pct:
                 continue
             severity = "warning" if age_hours >= Decimal("24") else "info"
+            recovery_note = self._cash_carry_recovery_note(row, settings)
             events.append(
                 RiskEvent(
                     id=f"cash-carry-turnover-{record.exchange}-{record.symbol}",
                     severity=severity,
                     title="正向期现持仓周转过慢",
-                    detail=f"{record.exchange} {record.symbol} 已持仓 {age_hours:.1f} 小时，当前净利 {row.current_net_profit}U，基差 {row.basis_pct}%，资金费率 {row.estimated_funding_rate_pct}%。该仓位占用交易所槽位，影响约10单/日目标。",
-                    action="V3 不会单纯为了频率亏损平仓；若净利覆盖执行缓冲会自动周转止盈，若同交易所出现足以覆盖当前小亏的新机会，才允许死仓释放后切换机会。",
+                    detail=f"{record.exchange} {record.symbol} 已持仓 {age_hours:.1f} 小时，当前净利 {row.current_net_profit}U，基差 {row.basis_pct}%，资金费率 {row.estimated_funding_rate_pct}%。{recovery_note}该仓位占用交易所槽位，影响约10单/日目标。",
+                    action="V3 不会单纯为了频率亏损平仓；若净利覆盖执行缓冲会自动周转止盈，若同交易所出现足以覆盖当前小亏、平仓缓冲和放弃资金费的新机会，才允许低效仓位切换。",
                     created_at=now,
                 )
             )
         return events
+
+    def _cash_carry_recovery_note(self, row: CashCarryPositionRow, settings: BotSettings) -> str:
+        if row.current_net_profit >= 0:
+            return ""
+        if row.estimated_funding_rate_pct <= settings.cash_carry_min_funding_rate_pct:
+            return "当前资金费不能覆盖恢复。"
+        funding_income = row.estimated_funding_income
+        if funding_income <= 0:
+            notional = row.perp_base_quantity * row.perp_mark_price
+            if notional <= 0:
+                notional = settings.order_notional_usdt
+            funding_income = notional * row.estimated_funding_rate_pct / Decimal("100")
+        if funding_income <= 0:
+            return "当前资金费不能覆盖恢复。"
+        needed = abs(row.current_net_profit) / funding_income
+        return f"按当前资金费约需 {needed:.1f} 期恢复。"
 
     def _liquidation_distance_events(self, positions: list[PositionSnapshot], now: datetime) -> list[RiskEvent]:
         events = []

@@ -788,11 +788,20 @@ class CashCarryExecutor:
         loss = abs(live.current_net_profit)
         if loss > self._dead_release_loss_cap(settings):
             return None
-        if live.estimated_funding_rate_pct > settings.cash_carry_min_funding_rate_pct:
+        funding_income = self._recovery_funding_income(live, settings)
+        max_recovery_intervals = self._turnover_recovery_interval_limit(settings)
+        needed_intervals = None if funding_income <= 0 else loss / funding_income
+        if funding_income > 0 and needed_intervals is not None and needed_intervals <= max_recovery_intervals:
             return None
-        replacement = self._replacement_opportunity(record, rows, settings, loss)
+        replacement_required_net = loss + close_execution_buffer(settings) + max(Decimal("0"), funding_income)
+        replacement = self._replacement_opportunity(record, rows, replacement_required_net)
         if replacement is None:
             return None
+        if funding_income > 0 and needed_intervals is not None:
+            return CashCarryCloseDecision(
+                True,
+                f"V3低效仓位切换 {live.current_net_profit} USDT；按当前资金费约需 {needed_intervals:.1f} 期恢复，超过周转上限 {max_recovery_intervals:.1f} 期；同所替代机会 {replacement.symbol} 预估净利 {replacement.estimated_net_profit} USDT",
+            )
         return CashCarryCloseDecision(
             True,
             f"V3死仓释放 {live.current_net_profit} USDT；同所替代机会 {replacement.symbol} 预估净利 {replacement.estimated_net_profit} USDT",
@@ -802,10 +811,8 @@ class CashCarryExecutor:
         self,
         record: CashCarryPosition,
         rows: list[CashCarryOpportunity],
-        settings: BotSettings,
-        current_loss: Decimal,
+        required_net: Decimal,
     ) -> CashCarryOpportunity | None:
-        required_net = current_loss + close_execution_buffer(settings)
         choices = []
         for item in rows:
             if ExchangeName(item.exchange) != record.exchange or item.symbol == record.symbol:
@@ -845,14 +852,26 @@ class CashCarryExecutor:
         )
 
     def _recovery_funding_income(self, live: CashCarryPositionRow, settings: BotSettings) -> Decimal:
+        if live.estimated_funding_rate_pct <= settings.cash_carry_min_funding_rate_pct:
+            return Decimal("0")
         if live.estimated_funding_income > 0:
             return live.estimated_funding_income
-        if live.estimated_funding_rate_pct <= 0:
-            return Decimal("0")
         notional = live.perp_base_quantity * live.perp_mark_price
         if notional <= 0:
             notional = settings.order_notional_usdt
         return notional * live.estimated_funding_rate_pct / Decimal("100")
+
+    def _turnover_recovery_interval_limit(self, settings: BotSettings) -> Decimal:
+        configured = settings.cash_carry_max_recovery_funding_intervals
+        if settings.cash_carry_target_daily_trades <= 0:
+            return configured
+        per_exchange_daily_target = Decimal(settings.cash_carry_target_daily_trades) / Decimal(len(CASH_CARRY_EXCHANGE_SET))
+        if per_exchange_daily_target <= 0:
+            return configured
+        target_hold_hours = Decimal("24") / per_exchange_daily_target
+        funding_interval_hours = Decimal("8")
+        target_intervals = target_hold_hours / funding_interval_hours
+        return min(configured, max(Decimal("1"), target_intervals))
 
     def _is_open_scope_reason(self, reason: str) -> bool:
         return "一所一币规则" in reason or "已有正向期现持仓" in reason or "持仓槽位已满" in reason
