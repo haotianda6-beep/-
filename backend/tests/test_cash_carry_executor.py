@@ -767,6 +767,49 @@ def test_cash_carry_v3_converged_small_loss_waits_without_replacement(tmp_path) 
     assert executor.swap.orders == []
 
 
+def test_cash_carry_legacy_stale_loss_releases_slot_even_before_convergence(tmp_path) -> None:
+    state = _state_with_position(tmp_path, status="open")
+    executor = _RecordingExecutor(state)
+    settings = BotSettings(
+        manual_confirm_required=False,
+        cash_carry_auto_close_enabled=True,
+        cash_carry_close_basis_pct=Decimal("0.2"),
+        order_notional_usdt=Decimal("300"),
+        take_profit_usdt=Decimal("3"),
+        cash_carry_recovery_exit_max_loss_usdt=Decimal("8"),
+        cash_carry_target_daily_trades=10,
+    )
+
+    result = executor.evaluate_close([], settings, [_position_row(net="-2.6", basis="0.8", funding="0.1")])
+
+    assert result is not None
+    assert result.status == "close_submitted"
+    assert "旧规则低效仓位释放" in result.reason
+    assert "超过周转上限" in result.reason
+    assert executor.spot.orders == [{"id": "spot-close", "symbol": "ABC/USDT", "side": "sell", "amount": 1.0}]
+    assert executor.swap.orders == [{"id": "swap-close", "symbol": "ABC/USDT:USDT", "side": "buy", "amount": 10000.0, "params": {"reduceOnly": True}}]
+
+
+def test_cash_carry_v3_stale_loss_waits_even_before_convergence(tmp_path) -> None:
+    state = _state_with_position(tmp_path, status="open", strategy_version=CASH_CARRY_RULESET_VERSION)
+    executor = _RecordingExecutor(state)
+    settings = BotSettings(
+        manual_confirm_required=False,
+        cash_carry_auto_close_enabled=True,
+        cash_carry_close_basis_pct=Decimal("0.2"),
+        order_notional_usdt=Decimal("300"),
+        take_profit_usdt=Decimal("3"),
+        cash_carry_recovery_exit_max_loss_usdt=Decimal("8"),
+        cash_carry_target_daily_trades=10,
+    )
+
+    result = executor.evaluate_close([], settings, [_position_row(net="-2.6", basis="0.8", funding="0.1")])
+
+    assert result is None
+    assert executor.spot.orders == []
+    assert executor.swap.orders == []
+
+
 def test_cash_carry_loss_exit_switches_only_when_replacement_covers_loss(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = _RecordingExecutor(state)

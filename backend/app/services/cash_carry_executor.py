@@ -123,6 +123,8 @@ class CashCarryExecutor:
             if not decision.should_close:
                 decision = self._dead_position_release_decision(record, live, rows, settings) or decision
             if not decision.should_close:
+                decision = self._legacy_stale_release_decision(record, live, settings) or decision
+            if not decision.should_close:
                 decision = self._unrecoverable_converged_loss_decision(record, live, rows, settings) or decision
             if not decision.should_close or not self._live_close_safe(live):
                 continue
@@ -976,6 +978,8 @@ class CashCarryExecutor:
             return -self._dead_release_loss_cap(settings)
         if "V3恢复空间不足" in reason or "V3亏损切换" in reason:
             return -settings.cash_carry_recovery_exit_max_loss_usdt
+        if "旧规则低效仓位释放" in reason:
+            return -settings.cash_carry_recovery_exit_max_loss_usdt
         return base_floor
 
     def _close_guard_spot_entry(self, record: CashCarryPosition, live: CashCarryPositionRow | None) -> Decimal:
@@ -1034,6 +1038,44 @@ class CashCarryExecutor:
         return CashCarryCloseDecision(
             True,
             f"V3死仓释放 {live.current_net_profit} USDT；同所替代机会 {replacement.symbol} 预估净利 {replacement.estimated_net_profit} USDT",
+        )
+
+    def _legacy_stale_release_decision(
+        self,
+        record: CashCarryPosition,
+        live: CashCarryPositionRow,
+        settings: BotSettings,
+    ) -> CashCarryCloseDecision | None:
+        if record.strategy_version == CASH_CARRY_RULESET_VERSION:
+            return None
+        if live.current_net_profit >= 0:
+            return None
+        if live.basis_pct < settings.cash_carry_min_basis_pct:
+            return None
+        age_seconds = (datetime.now(timezone.utc) - self._aware_opened_at(record)).total_seconds()
+        if age_seconds < 24 * 60 * 60:
+            return None
+        loss = abs(live.current_net_profit)
+        release_cap = min(
+            settings.cash_carry_recovery_exit_max_loss_usdt,
+            max(settings.take_profit_usdt, self._dead_release_loss_cap(settings)),
+        )
+        if release_cap <= 0 or loss > release_cap:
+            return None
+        funding_income = self._recovery_funding_income(live, settings)
+        max_intervals = self._turnover_recovery_interval_limit(settings)
+        needed_intervals = None if funding_income <= 0 else loss / funding_income
+        if funding_income > 0 and needed_intervals is not None and needed_intervals <= max_intervals:
+            return None
+        age_hours = Decimal(str(age_seconds / 3600))
+        if funding_income > 0 and needed_intervals is not None:
+            return CashCarryCloseDecision(
+                True,
+                f"旧规则低效仓位释放 {live.current_net_profit} USDT；已持仓 {age_hours:.1f} 小时，按当前资金费约需 {needed_intervals:.1f} 期恢复，超过周转上限 {max_intervals:.1f} 期，释放交易所槽位",
+            )
+        return CashCarryCloseDecision(
+            True,
+            f"旧规则低效仓位释放 {live.current_net_profit} USDT；已持仓 {age_hours:.1f} 小时，当前资金费无法覆盖恢复，释放交易所槽位",
         )
 
     def _replacement_opportunity(
