@@ -8,7 +8,7 @@ from app.services.live_market_types import CashCarryScan
 
 def test_cash_carry_signal_blocks_first_ready_tick_until_persistent() -> None:
     tracker = CashCarrySignalTracker()
-    settings = BotSettings(cash_carry_signal_min_seconds=Decimal("10"), cash_carry_signal_min_samples=2)
+    settings = _settings(cash_carry_signal_min_seconds=Decimal("10"), cash_carry_signal_min_samples=2)
 
     first = tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal("1.2"))]), settings, now=100.0)
     second = tracker.apply(CashCarryScan(candidates=[first.candidates[0].model_copy(update={"blocked_reasons": []})]), settings, now=111.0)
@@ -21,7 +21,7 @@ def test_cash_carry_signal_blocks_first_ready_tick_until_persistent() -> None:
 
 def test_cash_carry_signal_blocks_unstable_basis() -> None:
     tracker = CashCarrySignalTracker()
-    settings = BotSettings(
+    settings = _settings(
         cash_carry_signal_min_seconds=Decimal("10"),
         cash_carry_signal_min_samples=2,
         cash_carry_signal_max_basis_swing_pct=Decimal("0.2"),
@@ -36,7 +36,7 @@ def test_cash_carry_signal_blocks_unstable_basis() -> None:
 
 def test_cash_carry_signal_resets_when_base_quality_fails() -> None:
     tracker = CashCarrySignalTracker()
-    settings = BotSettings(cash_carry_signal_min_seconds=Decimal("10"), cash_carry_signal_min_samples=2)
+    settings = _settings(cash_carry_signal_min_seconds=Decimal("10"), cash_carry_signal_min_samples=2)
 
     tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal("1.2"))]), settings, now=100.0)
     tracker.apply(CashCarryScan(candidates=[_candidate("ABCUSDT", Decimal("1.2"), ["资金费率不是正数，空头不能收资金费"])]), settings, now=105.0)
@@ -44,6 +44,67 @@ def test_cash_carry_signal_resets_when_base_quality_fails() -> None:
 
     assert result.opportunities == []
     assert "信号持续不足" in " / ".join(result.candidates[0].blocked_reasons)
+
+
+def test_cash_carry_signal_keeps_v2_gate_but_requires_stability_before_probe() -> None:
+    tracker = CashCarrySignalTracker()
+    settings = _settings(
+        cash_carry_signal_min_seconds=Decimal("10"),
+        cash_carry_signal_min_samples=2,
+        cash_carry_signal_min_history_samples=2,
+        cash_carry_signal_min_basis_percentile=Decimal("50"),
+    )
+    reasons = ["V2历史胜率保护：净利预估 3.0000U < 动态安全垫 6.0000U"]
+
+    first = tracker.apply(CashCarryScan(candidates=[_candidate("ABCUSDT", Decimal("1.2"), reasons)]), settings, now=100.0)
+    second = tracker.apply(CashCarryScan(candidates=[_candidate("ABCUSDT", Decimal("1.2"), reasons)]), settings, now=111.0)
+
+    assert "V2历史胜率保护" in " / ".join(first.candidates[0].blocked_reasons)
+    assert "信号持续不足" in " / ".join(first.candidates[0].blocked_reasons)
+    assert second.opportunities == []
+    assert second.candidates[0].blocked_reasons == reasons
+
+
+def test_cash_carry_signal_blocks_low_basis_percentile() -> None:
+    tracker = CashCarrySignalTracker()
+    settings = _settings(
+        cash_carry_signal_min_seconds=Decimal("0"),
+        cash_carry_signal_min_samples=1,
+        cash_carry_signal_max_basis_swing_pct=Decimal("0"),
+        cash_carry_signal_min_history_samples=4,
+        cash_carry_signal_min_basis_percentile=Decimal("75"),
+    )
+
+    for offset, basis in enumerate([Decimal("3"), Decimal("4"), Decimal("5"), Decimal("2")]):
+        result = tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", basis)]), settings, now=100.0 + offset)
+
+    assert result.opportunities == []
+    assert "基差分位不足" in " / ".join(result.candidates[0].blocked_reasons)
+
+
+def test_cash_carry_signal_allows_high_basis_percentile() -> None:
+    tracker = CashCarrySignalTracker()
+    settings = _settings(
+        cash_carry_signal_min_seconds=Decimal("0"),
+        cash_carry_signal_min_samples=1,
+        cash_carry_signal_max_basis_swing_pct=Decimal("0"),
+        cash_carry_signal_min_history_samples=4,
+        cash_carry_signal_min_basis_percentile=Decimal("75"),
+    )
+
+    for offset, basis in enumerate([Decimal("2"), Decimal("3"), Decimal("4"), Decimal("5")]):
+        result = tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", basis)]), settings, now=100.0 + offset)
+
+    assert result.opportunities
+    assert result.opportunities[0].symbol == "ABCUSDT"
+
+
+def _settings(**overrides) -> BotSettings:
+    defaults = {
+        "cash_carry_signal_min_history_samples": 1,
+        "cash_carry_signal_min_basis_percentile": Decimal("0"),
+    }
+    return BotSettings(**{**defaults, **overrides})
 
 
 def _candidate(symbol: str, basis: Decimal, reasons: list[str] | None = None) -> CashCarryOpportunity:

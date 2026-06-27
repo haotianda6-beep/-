@@ -36,6 +36,7 @@ type DecimalKey =
   | "min_funding_net_usdt"
   | "cash_carry_recovery_exit_max_loss_usdt"
   | "cash_carry_max_recovery_funding_intervals"
+  | "cash_carry_signal_min_basis_percentile"
   | "add_notional_usdt"
   | "add_trigger_spread_pct"
   | "single_exchange_max_notional_usdt";
@@ -63,6 +64,7 @@ const cashCarryDecimalFields: Array<{ key: DecimalKey; label: string; suffix: st
   { key: "cash_carry_min_volume_usdt", label: "期现最低24h成交量", suffix: "USDT" },
   { key: "cash_carry_recovery_exit_max_loss_usdt", label: "恢复不足释放亏损", suffix: "USDT" },
   { key: "cash_carry_max_recovery_funding_intervals", label: "最大恢复资金费期数", suffix: "期" },
+  { key: "cash_carry_signal_min_basis_percentile", label: "基差高位分位", suffix: "%" },
 ];
 
 const mt4SpreadDecimalFields: Array<{ key: DecimalKey; label: string; suffix: string }> = [
@@ -206,6 +208,20 @@ export function SettingsPage({ settings, onSaved }: Props) {
           <div className="input-row">
             <input value={draft.add_notional_usdt} inputMode="decimal" onChange={(event) => updateDecimal("add_notional_usdt", event.target.value)} />
             <small>USDT</small>
+          </div>
+        </label>
+
+        <label className="field">
+          <span>基差历史样本数</span>
+          <div className="input-row">
+            <input
+              type="number"
+              min="1"
+              max="2000"
+              value={draft.cash_carry_signal_min_history_samples}
+              onChange={(event) => updateDraft((current) => ({ ...current, cash_carry_signal_min_history_samples: Number(event.target.value) }))}
+            />
+            <small>次</small>
           </div>
         </label>
 

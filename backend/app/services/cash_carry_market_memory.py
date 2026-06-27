@@ -73,7 +73,16 @@ class CashCarryMarketMemory:
 
 
 def _base_quality_allows(item: CashCarryMarketSample) -> bool:
-    return all(reason.startswith(("V2历史胜率保护", "信号持续不足", "基差波动过大")) for reason in item.blocked_reasons)
+    soft_blockers = (
+        "V2历史胜率保护",
+        "信号持续不足",
+        "基差波动过大",
+        "基差分位样本不足",
+        "基差分位不足",
+    )
+    return all(
+        reason.startswith(soft_blockers) for reason in item.blocked_reasons
+    )
 
 
 def _not_hard_blocked(item: CashCarryMarketSample) -> bool:

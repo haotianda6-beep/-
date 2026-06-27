@@ -8,7 +8,8 @@ from app.services.cash_carry_scope import CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.live_market_types import CashCarryScan
 
 
-SIGNAL_REASON_PREFIXES = ("信号持续不足", "基差波动过大")
+SIGNAL_REASON_PREFIXES = ("信号持续不足", "基差波动过大", "基差分位样本不足", "基差分位不足")
+SIGNAL_ELIGIBLE_PREFIXES = ("V2历史胜率保护",)
 
 
 @dataclass(frozen=True)
@@ -36,7 +37,8 @@ class CashCarrySignalTracker:
     def _with_signal_reasons(self, item: CashCarryOpportunity, settings: BotSettings, now: float) -> CashCarryOpportunity:
         base_reasons = _without_signal_reasons(item.blocked_reasons)
         key = (ExchangeName(item.exchange), item.symbol)
-        eligible = not base_reasons
+        eligibility_reasons = _without_signal_eligible_reasons(base_reasons)
+        eligible = not eligibility_reasons
         samples = self._samples.setdefault(key, deque())
         samples.append(_SignalSample(now, item.basis_pct, item.estimated_net_profit, eligible))
         self._prune(samples, now, settings)
@@ -60,7 +62,23 @@ class CashCarrySignalTracker:
             swing = max(basis_values) - min(basis_values)
             if swing > max_swing:
                 return [f"基差波动过大 {swing:.4f}% > {max_swing}%，等待更稳定信号"]
+        percentile_reason = self._basis_percentile_reason(samples, settings)
+        if percentile_reason:
+            return [percentile_reason]
         return []
+
+    def _basis_percentile_reason(self, samples: deque[_SignalSample], settings: BotSettings) -> str | None:
+        min_samples = settings.cash_carry_signal_min_history_samples
+        if min_samples <= 0 or settings.cash_carry_signal_min_basis_percentile <= 0:
+            return None
+        if len(samples) < min_samples:
+            return f"基差分位样本不足 {len(samples)}/{min_samples}，等待近30分钟分布"
+        current_basis = samples[-1].basis_pct
+        lower_or_equal = sum(1 for item in samples if item.basis_pct <= current_basis)
+        percentile = Decimal(lower_or_equal) / Decimal(len(samples)) * Decimal("100")
+        if percentile < settings.cash_carry_signal_min_basis_percentile:
+            return f"基差分位不足 {percentile:.2f}% < {settings.cash_carry_signal_min_basis_percentile}%，等待相对高位基差"
+        return None
 
     def _ready_tail(self, samples: deque[_SignalSample]) -> list[_SignalSample]:
         ready = []
@@ -71,7 +89,7 @@ class CashCarrySignalTracker:
         return list(reversed(ready))
 
     def _prune(self, samples: deque[_SignalSample], now: float, settings: BotSettings) -> None:
-        keep_seconds = max(float(settings.cash_carry_signal_min_seconds) * 3, 120.0)
+        keep_seconds = max(float(settings.cash_carry_signal_min_seconds) * 3, 1800.0)
         while samples and now - samples[0].at > keep_seconds:
             samples.popleft()
 
@@ -89,3 +107,7 @@ class CashCarrySignalTracker:
 
 def _without_signal_reasons(reasons: list[str]) -> list[str]:
     return [reason for reason in reasons if not reason.startswith(SIGNAL_REASON_PREFIXES)]
+
+
+def _without_signal_eligible_reasons(reasons: list[str]) -> list[str]:
+    return [reason for reason in reasons if not reason.startswith(SIGNAL_ELIGIBLE_PREFIXES)]

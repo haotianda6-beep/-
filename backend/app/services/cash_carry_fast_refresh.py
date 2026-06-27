@@ -103,7 +103,22 @@ class CashCarryFastRefresher:
         estimated_net_profit: Decimal,
         settings: BotSettings,
     ) -> list[str]:
-        reasons = self._preserved(current, ("合约溢价未达", "开仓基差异常过高", "资金费率低于", "资金费率不是正数", "现货/合约最低24h成交量低于", "回归到平仓线后的净利预估", "V2历史胜率保护", "信号持续不足", "基差波动过大"))
+        reasons = self._preserved(
+            current,
+            (
+                "合约溢价未达",
+                "开仓基差异常过高",
+                "资金费率低于",
+                "资金费率不是正数",
+                "现货/合约最低24h成交量低于",
+                "回归到平仓线后的净利预估",
+                "V2历史胜率保护",
+                "信号持续不足",
+                "基差波动过大",
+                "基差分位样本不足",
+                "基差分位不足",
+            ),
+        )
         if basis_pct < settings.cash_carry_min_basis_pct:
             reasons.append(f"合约溢价未达 {settings.cash_carry_min_basis_pct}%")
         reasons.extend(entry_basis_risk_reasons(basis_pct, settings))

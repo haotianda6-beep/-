@@ -163,6 +163,8 @@ export type BotSettings = {
   cash_carry_signal_min_seconds: string;
   cash_carry_signal_min_samples: number;
   cash_carry_signal_max_basis_swing_pct: string;
+  cash_carry_signal_min_history_samples: number;
+  cash_carry_signal_min_basis_percentile: string;
   cash_carry_max_positions_per_exchange: number;
   max_add_count: number;
   add_notional_usdt: string;

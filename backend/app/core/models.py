@@ -216,6 +216,8 @@ class BotSettings(BaseSchema):
     cash_carry_signal_min_seconds: Decimal = Decimal("20")
     cash_carry_signal_min_samples: int = 3
     cash_carry_signal_max_basis_swing_pct: Decimal = Decimal("0.35")
+    cash_carry_signal_min_history_samples: int = 30
+    cash_carry_signal_min_basis_percentile: Decimal = Decimal("75")
     cash_carry_max_positions_per_exchange: int = 3
     max_add_count: int = 2
     add_notional_usdt: Decimal = Decimal("0")
@@ -260,6 +262,13 @@ class BotSettings(BaseSchema):
             raise ValueError("cash_carry_signal_min_samples must be between 1 and 60")
         return value
 
+    @field_validator("cash_carry_signal_min_history_samples")
+    @classmethod
+    def validate_cash_carry_signal_history_samples(cls, value: int) -> int:
+        if value < 1 or value > 2000:
+            raise ValueError("cash_carry_signal_min_history_samples must be between 1 and 2000")
+        return value
+
     @field_validator(
         "order_notional_usdt",
         "max_total_notional_usdt",
@@ -293,6 +302,7 @@ class BotSettings(BaseSchema):
         "cash_carry_recovery_probe_min_net_pct",
         "cash_carry_signal_min_seconds",
         "cash_carry_signal_max_basis_swing_pct",
+        "cash_carry_signal_min_basis_percentile",
         "add_notional_usdt",
         "add_trigger_spread_pct",
         "single_exchange_max_notional_usdt",
