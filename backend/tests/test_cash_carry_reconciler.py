@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from app.core.models import ExchangeName
 from app.services.cash_carry_execution_models import CashCarryPosition
-from app.services.cash_carry_reconciler import _forced_close, build_cash_carry_external_perp_close_history
+from app.services.cash_carry_reconciler import _forced_close, build_cash_carry_external_perp_close_history, build_cash_carry_history
 
 
 def test_build_external_perp_close_history_marks_liquidation() -> None:
@@ -34,6 +34,41 @@ def test_build_external_perp_close_history_marks_liquidation() -> None:
     assert history["short_pnl"] == "-5.0"
     assert history["actual_net_profit"] == "-5.3"
     assert history["reconcile_status"] == "verified"
+
+
+def test_build_cash_carry_history_includes_add_orders_in_open_cost() -> None:
+    opened_at = datetime(2026, 6, 11, 4, 18, 43, tzinfo=timezone.utc)
+    record = CashCarryPosition(
+        id="pos-1",
+        exchange=ExchangeName.BITGET,
+        symbol="ABCUSDT",
+        base_asset="ABC",
+        quantity=Decimal("20"),
+        spot_entry_price=Decimal("1.5"),
+        perp_entry_price=Decimal("2.15"),
+        spot_order_id="spot-open",
+        perp_order_id="perp-open",
+        opened_at=opened_at,
+        add_orders=[{"spot_order_id": "spot-add", "perp_order_id": "perp-add"}],
+    )
+
+    history = build_cash_carry_history(
+        _FakeSpotWithAdd(),
+        _FakeSwapWithAdd(),
+        record,
+        "ABC/USDT",
+        "ABC/USDT:USDT",
+        "spot-close",
+        "perp-close",
+    )
+
+    assert history["long_open_price"] == "1.5"
+    assert history["short_open_price"] == "2.15"
+    assert history["long_order_ids"] == ["spot-open", "spot-add", "spot-close"]
+    assert history["short_order_ids"] == ["perp-open", "perp-add", "perp-close"]
+    assert history["long_pnl"] == "6.0"
+    assert history["short_pnl"] == "5.00"
+    assert history["actual_net_profit"] == "11.00"
 
 
 def test_gate_liq_text_is_treated_as_liquidation() -> None:
@@ -77,6 +112,32 @@ class _FakeSwap:
                 "timestamp": 1781157992290,
                 "info": {"tradeSide": "burst_buy_single"},
             },
+        ]
+
+    def load_markets(self):
+        return None
+
+    def market(self, _symbol):
+        return {"contractSize": "1"}
+
+
+class _FakeSpotWithAdd:
+    def fetch_my_trades(self, _symbol, since=None, limit=100):
+        return [
+            {"order": "spot-open", "amount": "10", "cost": "20", "fee": {"currency": "USDT", "cost": "0"}, "timestamp": 1781151523210},
+            {"order": "spot-add", "amount": "10", "cost": "10", "fee": {"currency": "USDT", "cost": "0"}, "timestamp": 1781151524210},
+            {"order": "spot-close", "amount": "20", "cost": "36", "fee": {"currency": "USDT", "cost": "0"}, "timestamp": 1781151525210},
+        ]
+
+
+class _FakeSwapWithAdd:
+    has = {}
+
+    def fetch_my_trades(self, _symbol, since=None, limit=100):
+        return [
+            {"order": "perp-open", "side": "sell", "amount": "10", "cost": "22", "fee": {"currency": "USDT", "cost": "0"}, "timestamp": 1781151523210},
+            {"order": "perp-add", "side": "sell", "amount": "10", "cost": "21", "fee": {"currency": "USDT", "cost": "0"}, "timestamp": 1781151524210},
+            {"order": "perp-close", "side": "buy", "amount": "20", "cost": "38", "fee": {"currency": "USDT", "cost": "0"}, "timestamp": 1781151525210},
         ]
 
     def load_markets(self):

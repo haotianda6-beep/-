@@ -49,16 +49,18 @@ def build_cash_carry_external_perp_close_history(
 def _build(spot, swap, record, spot_symbol, swap_symbol, close_spot_order_id, close_perp_order_id) -> dict[str, Any]:
     if not all([record.spot_order_id, record.perp_order_id, close_spot_order_id, close_perp_order_id]):
         return {}
+    spot_open_ids = _open_spot_order_ids(record)
+    perp_open_ids = _open_perp_order_ids(record)
     since = int((record.opened_at - timedelta(minutes=5)).timestamp() * 1000)
     closed_at = datetime.now(record.opened_at.tzinfo)
-    spot_trades = _by_order(spot.fetch_my_trades(spot_symbol, since=since, limit=100), {record.spot_order_id, close_spot_order_id})
-    swap_trades = _by_order(swap.fetch_my_trades(swap_symbol, since=since, limit=100), {record.perp_order_id, close_perp_order_id})
-    spot_open = _spot_group(spot_trades.get(record.spot_order_id, []))
+    spot_trades = _by_order(spot.fetch_my_trades(spot_symbol, since=since, limit=100), {*spot_open_ids, close_spot_order_id})
+    swap_trades = _by_order(swap.fetch_my_trades(swap_symbol, since=since, limit=100), {*perp_open_ids, close_perp_order_id})
+    spot_open = _spot_group(_ordered_group(spot_trades, spot_open_ids))
     spot_close = _spot_group(spot_trades.get(close_spot_order_id, []))
     if hasattr(swap, "load_markets"):
         swap.load_markets()
     contract_size = Decimal(str(swap.market(swap_symbol).get("contractSize") or "1"))
-    perp_open = _perp_group(swap_trades.get(record.perp_order_id, []), contract_size)
+    perp_open = _perp_group(_ordered_group(swap_trades, perp_open_ids), contract_size)
     perp_close = _perp_group(swap_trades.get(close_perp_order_id, []), contract_size)
     if not all([spot_open["qty"], spot_close["qty"], perp_open["qty"], perp_close["qty"]]):
         return {}
@@ -67,22 +69,24 @@ def _build(spot, swap, record, spot_symbol, swap_symbol, close_spot_order_id, cl
     long_pnl = (spot_close["avg"] - spot_open["avg"]) * spot_close["qty"]
     short_pnl = (perp_open["avg"] - perp_close["avg"]) * perp_close["qty"]
     total = long_pnl + short_pnl
-    return {"opened_at": record.opened_at.isoformat(), "quantity": str(min(spot_close["qty"], perp_close["qty"])), "long_open_price": str(spot_open["avg"]), "long_close_price": str(spot_close["avg"]), "short_open_price": str(perp_open["avg"]), "short_close_price": str(perp_close["avg"]), "actual_fee": str(fee), "total_pnl": str(total), "long_pnl": str(long_pnl), "short_pnl": str(short_pnl), "funding_net": str(funding), "actual_net_profit": str(total + funding - fee), "long_order_ids": [record.spot_order_id, close_spot_order_id], "short_order_ids": [record.perp_order_id, close_perp_order_id], "reconcile_status": "verified"}
+    return {"opened_at": record.opened_at.isoformat(), "quantity": str(min(spot_close["qty"], perp_close["qty"])), "long_open_price": str(spot_open["avg"]), "long_close_price": str(spot_close["avg"]), "short_open_price": str(perp_open["avg"]), "short_close_price": str(perp_close["avg"]), "actual_fee": str(fee), "total_pnl": str(total), "long_pnl": str(long_pnl), "short_pnl": str(short_pnl), "funding_net": str(funding), "actual_net_profit": str(total + funding - fee), "long_order_ids": [*spot_open_ids, close_spot_order_id], "short_order_ids": [*perp_open_ids, close_perp_order_id], "reconcile_status": "verified"}
 
 
 def _build_external_perp_close(spot, swap, record, spot_symbol, swap_symbol) -> dict[str, Any]:
     if not all([record.spot_order_id, record.perp_order_id]):
         return {}
+    spot_open_ids = _open_spot_order_ids(record)
+    perp_open_ids = _open_perp_order_ids(record)
     since = int((record.opened_at - timedelta(minutes=5)).timestamp() * 1000)
-    spot_trades = _by_order(spot.fetch_my_trades(spot_symbol, since=since, limit=100), {record.spot_order_id})
+    spot_trades = _by_order(spot.fetch_my_trades(spot_symbol, since=since, limit=100), set(spot_open_ids))
     all_swap_trades = swap.fetch_my_trades(swap_symbol, since=since, limit=100)
-    swap_trades = _by_order(all_swap_trades, {record.perp_order_id})
-    close_trades = _external_close_trades(all_swap_trades, record.perp_order_id, record.opened_at)
-    spot_open = _spot_group(spot_trades.get(record.spot_order_id, []))
+    swap_trades = _by_order(all_swap_trades, set(perp_open_ids))
+    close_trades = _external_close_trades(all_swap_trades, set(perp_open_ids), record.opened_at)
+    spot_open = _spot_group(_ordered_group(spot_trades, spot_open_ids))
     if hasattr(swap, "load_markets"):
         swap.load_markets()
     contract_size = Decimal(str(swap.market(swap_symbol).get("contractSize") or "1"))
-    perp_open = _perp_group(swap_trades.get(record.perp_order_id, []), contract_size)
+    perp_open = _perp_group(_ordered_group(swap_trades, perp_open_ids), contract_size)
     perp_close = _perp_group(close_trades, contract_size)
     if not all([spot_open["qty"], perp_open["qty"], perp_close["qty"]]):
         return {}
@@ -107,8 +111,8 @@ def _build_external_perp_close(spot, swap, record, spot_symbol, swap_symbol) -> 
         "short_pnl": str(short_pnl),
         "funding_net": str(funding),
         "actual_net_profit": str(short_pnl + funding - fee),
-        "long_order_ids": [record.spot_order_id],
-        "short_order_ids": [record.perp_order_id, *close_order_ids],
+        "long_order_ids": spot_open_ids,
+        "short_order_ids": [*perp_open_ids, *close_order_ids],
         "close_perp_order_id": close_order_ids[-1] if close_order_ids else None,
         "reconcile_status": "verified",
         "external_close_type": close_type,
@@ -124,11 +128,11 @@ def _by_order(trades: list[dict[str, Any]], ids: set[str | None]) -> dict[str, l
     return grouped
 
 
-def _external_close_trades(trades: list[dict[str, Any]], open_order_id: str, opened_at: datetime) -> list[dict[str, Any]]:
+def _external_close_trades(trades: list[dict[str, Any]], open_order_ids: set[str], opened_at: datetime) -> list[dict[str, Any]]:
     opened_ms = int(opened_at.timestamp() * 1000)
     result = []
     for trade in trades:
-        if str(trade.get("order") or "") == str(open_order_id):
+        if str(trade.get("order") or "") in open_order_ids:
             continue
         if str(trade.get("side") or "").lower() != "buy":
             continue
@@ -137,6 +141,34 @@ def _external_close_trades(trades: list[dict[str, Any]], open_order_id: str, ope
             continue
         result.append(trade)
     return result
+
+
+def _open_spot_order_ids(record: CashCarryPosition) -> list[str]:
+    return _dedupe_ids([record.spot_order_id, *(_add_order_ids(record, "spot_order_id"))])
+
+
+def _open_perp_order_ids(record: CashCarryPosition) -> list[str]:
+    return _dedupe_ids([record.perp_order_id, *(_add_order_ids(record, "perp_order_id"))])
+
+
+def _add_order_ids(record: CashCarryPosition, key: str) -> list[str | None]:
+    return [str(item.get(key)) for item in record.add_orders if isinstance(item, dict) and item.get(key)]
+
+
+def _dedupe_ids(ids: list[str | None]) -> list[str]:
+    result = []
+    for item in ids:
+        value = str(item or "")
+        if value and value not in result:
+            result.append(value)
+    return result
+
+
+def _ordered_group(grouped: dict[str, list[dict[str, Any]]], order_ids: list[str]) -> list[dict[str, Any]]:
+    rows = []
+    for order_id in order_ids:
+        rows.extend(grouped.get(order_id, []))
+    return rows
 
 
 def _ordered_ids(trades: list[dict[str, Any]]) -> list[str]:

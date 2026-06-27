@@ -1,6 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from app.core.models import ExchangeName
 
@@ -20,3 +21,5 @@ class CashCarryPosition:
     status: str = "open"
     add_count: int = 0
     last_add_basis_pct: Decimal | None = None
+    add_orders: list[dict[str, Any]] = field(default_factory=list)
+    rebalance_orders: list[dict[str, Any]] = field(default_factory=list)

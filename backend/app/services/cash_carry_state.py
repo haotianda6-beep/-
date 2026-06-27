@@ -150,6 +150,8 @@ class CashCarryStateStore:
                 status=item.get("status", "open"),
                 add_count=int(item.get("add_count") or 0),
                 last_add_basis_pct=Decimal(item["last_add_basis_pct"]) if item.get("last_add_basis_pct") not in (None, "") else None,
+                add_orders=item.get("add_orders") if isinstance(item.get("add_orders"), list) else [],
+                rebalance_orders=item.get("rebalance_orders") if isinstance(item.get("rebalance_orders"), list) else [],
             )
         except (KeyError, ValueError):
             return None

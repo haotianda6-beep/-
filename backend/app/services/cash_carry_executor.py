@@ -113,7 +113,7 @@ class CashCarryExecutor:
             gate_reasons = self._safety_gate(settings, opening=False)
             if gate_reasons:
                 return self.state.remember(ExecutionResult(str(uuid.uuid4()), "blocked_by_safety_gate", " / ".join(gate_reasons), steps))
-            return self._execute_close(record, steps, decision.reason, settings, live.spot_quantity, live.perp_base_quantity)
+            return self._execute_close(record, steps, decision.reason, settings, live.spot_quantity, live.perp_base_quantity, live)
         return None
 
     def _execute_open(self, item: CashCarryOpportunity, settings: BotSettings, steps: list[ExecutionStep]) -> ExecutionResult:
@@ -212,6 +212,7 @@ class CashCarryExecutor:
         settings: BotSettings | None = None,
         spot_quantity: Decimal | None = None,
         perp_quantity: Decimal | None = None,
+        live: CashCarryPositionRow | None = None,
     ) -> ExecutionResult:
         spot = self._exchange(record.exchange, "spot")
         swap = self._exchange(record.exchange, "swap")
@@ -228,8 +229,8 @@ class CashCarryExecutor:
                 swap_symbol,
                 spot_qty,
                 perp_qty,
-                record.spot_entry_price,
-                record.perp_entry_price,
+                self._close_guard_spot_entry(record, live),
+                self._close_guard_perp_entry(record, live),
                 self._fee_rate(record.exchange),
                 guard_floor,
             )
@@ -659,6 +660,16 @@ class CashCarryExecutor:
         if "V2死仓释放" in reason:
             return -self._dead_release_loss_cap(settings)
         return base_floor
+
+    def _close_guard_spot_entry(self, record: CashCarryPosition, live: CashCarryPositionRow | None) -> Decimal:
+        if live and live.spot_entry_price > 0:
+            return live.spot_entry_price
+        return record.spot_entry_price
+
+    def _close_guard_perp_entry(self, record: CashCarryPosition, live: CashCarryPositionRow | None) -> Decimal:
+        if live and live.perp_entry_price > 0:
+            return live.perp_entry_price
+        return record.perp_entry_price
 
     def _turnover_close_decision(
         self,

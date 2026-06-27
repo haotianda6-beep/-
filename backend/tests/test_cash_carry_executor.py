@@ -474,6 +474,27 @@ def test_cash_carry_fixed_take_profit_requires_depth_profit_above_target(tmp_pat
     assert executor.swap.orders == []
 
 
+def test_cash_carry_close_guard_uses_live_perp_entry_price(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(
+        '{"positions":[{"id":"pos-1","exchange":"GATE","symbol":"ABCUSDT","base_asset":"ABC","quantity":"1","spot_entry_price":"100","perp_entry_price":"98","spot_order_id":"s1","perp_order_id":"p1","opened_at":"2026-06-09T00:00:00+00:00","status":"open"}]}',
+        encoding="utf-8",
+    )
+    executor = _RecordingExecutor(state)
+    executor.spot.bids = [[100, 100]]
+    executor.swap.asks = [[96.8, 100000]]
+    settings = BotSettings(manual_confirm_required=False, cash_carry_auto_close_enabled=True, take_profit_usdt=Decimal("3"))
+    live = _position_row(net="4.2", basis="0.9")
+    live.perp_entry_price = Decimal("101")
+
+    result = executor.evaluate_close([_opportunity(basis="0.9")], settings, [live])
+
+    assert result is not None
+    assert result.status == "close_submitted"
+    assert executor.spot.orders == [{"id": "spot-close", "symbol": "ABC/USDT", "side": "sell", "amount": 1.0}]
+    assert executor.swap.orders == [{"id": "swap-close", "symbol": "ABC/USDT:USDT", "side": "buy", "amount": 10000.0, "params": {"reduceOnly": True}}]
+
+
 def test_cash_carry_close_blocks_when_depth_guard_estimates_loss(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = _RecordingExecutor(state)
