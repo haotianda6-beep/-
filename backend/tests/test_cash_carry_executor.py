@@ -381,16 +381,16 @@ def test_cash_carry_convergence_waits_when_loss_can_recover_from_funding(tmp_pat
     assert result is None
 
 
-def test_cash_carry_convergence_releases_small_loss_without_recovery(tmp_path) -> None:
+def test_cash_carry_convergence_waits_on_loss_without_replacement(tmp_path) -> None:
     state = _state_with_position(tmp_path)
-    executor = CashCarryExecutor(state)
+    executor = _RecordingExecutor(state)
     settings = BotSettings(manual_confirm_required=True, cash_carry_auto_close_enabled=True, stop_loss_usdt=Decimal("5"), cash_carry_close_basis_pct=Decimal("0.2"))
 
     result = executor.evaluate_close([_opportunity(basis="0.1", funding="0")], settings, [_position_row(net="-1.2", basis="0.1", funding="0")])
 
-    assert result is not None
-    assert result.status == "blocked_by_safety_gate"
-    assert "V3恢复空间不足" in result.steps[0].detail
+    assert result is None
+    assert executor.spot.orders == []
+    assert executor.swap.orders == []
 
 
 def test_cash_carry_convergence_keeps_loss_above_recovery_release_cap(tmp_path) -> None:
@@ -638,7 +638,7 @@ def test_cash_carry_close_blocks_when_depth_guard_estimates_loss(tmp_path) -> No
     assert executor.swap.orders == []
 
 
-def test_cash_carry_loss_exit_releases_converged_unrecoverable_loss(tmp_path) -> None:
+def test_cash_carry_loss_exit_waits_without_replacement(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = _RecordingExecutor(state)
     executor.spot.bids = [[99.9, 100]]
@@ -647,9 +647,32 @@ def test_cash_carry_loss_exit_releases_converged_unrecoverable_loss(tmp_path) ->
 
     result = executor.evaluate_close([_opportunity(basis="0.1", funding="0")], settings, [_position_row(net="-1.2", basis="0.1", funding="0")])
 
+    assert result is None
+    assert executor.spot.orders == []
+    assert executor.swap.orders == []
+
+
+def test_cash_carry_loss_exit_switches_only_when_replacement_covers_loss(tmp_path) -> None:
+    state = _state_with_position(tmp_path)
+    executor = _RecordingExecutor(state)
+    executor.spot.bids = [[99.9, 100]]
+    executor.swap.asks = [[101.2, 100000]]
+    settings = BotSettings(
+        manual_confirm_required=False,
+        cash_carry_auto_close_enabled=True,
+        cash_carry_close_basis_pct=Decimal("0.2"),
+        order_notional_usdt=Decimal("100"),
+    )
+    replacement = _opportunity("XYZUSDT", net="2.0", basis="1.2", funding="0.02").model_copy(
+        update={"blocked_reasons": ["同交易所已有正向期现持仓，按一所一币规则禁止开仓"]}
+    )
+
+    result = executor.evaluate_close([replacement], settings, [_position_row(net="-1.2", basis="0.1", funding="0")])
+
     assert result is not None
     assert result.status == "close_submitted"
-    assert "V3恢复空间不足" in result.reason
+    assert "V3亏损切换" in result.reason
+    assert "XYZUSDT" in result.reason
     assert executor.spot.orders == [{"id": "spot-close", "symbol": "ABC/USDT", "side": "sell", "amount": 1.0}]
     assert executor.swap.orders == [{"id": "swap-close", "symbol": "ABC/USDT:USDT", "side": "buy", "amount": 10000.0, "params": {"reduceOnly": True}}]
 

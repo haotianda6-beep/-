@@ -118,7 +118,7 @@ class CashCarryExecutor:
             if not decision.should_close:
                 decision = self._dead_position_release_decision(record, live, rows, settings) or decision
             if not decision.should_close:
-                decision = self._unrecoverable_converged_loss_decision(record, live, settings) or decision
+                decision = self._unrecoverable_converged_loss_decision(record, live, rows, settings) or decision
             if not decision.should_close or not self._live_close_safe(live):
                 continue
             steps = self._close_plan(record, live.basis_pct, decision.reason, live.spot_quantity)
@@ -762,7 +762,7 @@ class CashCarryExecutor:
             return settings.take_profit_usdt + base_floor
         if "V3死仓释放" in reason:
             return -self._dead_release_loss_cap(settings)
-        if "V3恢复空间不足" in reason:
+        if "V3恢复空间不足" in reason or "V3亏损切换" in reason:
             return -settings.cash_carry_recovery_exit_max_loss_usdt
         return base_floor
 
@@ -844,6 +844,7 @@ class CashCarryExecutor:
         self,
         record: CashCarryPosition,
         live: CashCarryPositionRow,
+        rows: list[CashCarryOpportunity],
         settings: BotSettings,
     ) -> CashCarryCloseDecision | None:
         if live.current_net_profit >= 0:
@@ -858,14 +859,21 @@ class CashCarryExecutor:
         if loss > max_loss:
             return None
         funding_income = self._recovery_funding_income(live, settings)
-        if funding_income <= 0:
-            return CashCarryCloseDecision(True, f"V3恢复空间不足 {live.current_net_profit} USDT；基差已收敛且资金费无法覆盖")
-        needed_intervals = loss / funding_income
-        if needed_intervals <= max_intervals:
+        needed_intervals = None if funding_income <= 0 else loss / funding_income
+        if needed_intervals is not None and needed_intervals <= max_intervals:
             return None
+        replacement_required_net = loss + close_execution_buffer(settings) + max(Decimal("0"), funding_income)
+        replacement = self._replacement_opportunity(record, rows, replacement_required_net)
+        if replacement is None:
+            return None
+        if funding_income <= 0:
+            return CashCarryCloseDecision(
+                True,
+                f"V3亏损切换 {live.current_net_profit} USDT；基差已收敛且资金费无法覆盖；同所替代机会 {replacement.symbol} 预估净利 {replacement.estimated_net_profit} USDT",
+            )
         return CashCarryCloseDecision(
             True,
-            f"V3恢复空间不足 {live.current_net_profit} USDT；按当前资金费约需 {needed_intervals:.1f} 期恢复，超过 {max_intervals} 期",
+            f"V3亏损切换 {live.current_net_profit} USDT；按当前资金费约需 {needed_intervals:.1f} 期恢复，超过 {max_intervals} 期；同所替代机会 {replacement.symbol} 预估净利 {replacement.estimated_net_profit} USDT",
         )
 
     def _recovery_funding_income(self, live: CashCarryPositionRow, settings: BotSettings) -> Decimal:
