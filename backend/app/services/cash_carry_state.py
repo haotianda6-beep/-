@@ -91,6 +91,17 @@ class CashCarryStateStore:
             item.setdefault("add_orders", []).append(add_order)
         self.write(state)
 
+    def mark_rebalanced(self, position_id: str, quantity: Decimal, rebalance_order: dict[str, Any]) -> None:
+        state = self.read()
+        for item in state.get("positions", []):
+            if item.get("id") != position_id:
+                continue
+            item["quantity"] = str(quantity)
+            item["status"] = "open"
+            item.pop("close_reason", None)
+            item.setdefault("rebalance_orders", []).append(rebalance_order)
+        self.write(state)
+
     def remember(self, result: ExecutionResult) -> ExecutionResult:
         state = self.read()
         state["last_result"] = {"id": result.id, "status": result.status, "reason": result.reason, "at": datetime.now(timezone.utc).isoformat()}

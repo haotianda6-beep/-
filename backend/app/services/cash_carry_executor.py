@@ -12,6 +12,7 @@ from app.services.cash_carry_close_policy import cash_carry_close_decision
 from app.services.cash_carry_execution_guard import forward_close_depth_guard, forward_open_depth_guard
 from app.services.cash_carry_execution_models import CashCarryPosition
 from app.services.cash_carry_reconciler import build_cash_carry_external_perp_close_history, build_cash_carry_history
+from app.services.cash_carry_quality import entry_net_floor
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGE_SET
 from app.services.cash_carry_state import CashCarryStateStore
 from app.services.cash_carry_transfer import transfer_usdt_to_spot
@@ -93,6 +94,10 @@ class CashCarryExecutor:
                 return self._handle_missing_live_perp(record, settings)
             if record.status == "mismatch" and live.status == "matched":
                 self.state.mark_status(record.id, "open")
+            if live.status == "mismatch" and record.status in {"open", "mismatch"}:
+                rebalance = self._execute_mismatch_rebalance(record, live, settings)
+                if rebalance:
+                    return rebalance
             decision = cash_carry_close_decision(live.current_net_profit, live.basis_pct, live.estimated_funding_rate_pct, settings, has_live_net=True)
             if not decision.should_close or not self._live_close_safe(live):
                 continue
@@ -116,7 +121,18 @@ class CashCarryExecutor:
         perp_order_id = None
         spot_entry_price = item.spot_price
         try:
-            guard = forward_open_depth_guard(spot, swap, spot_symbol, swap_symbol, settings.order_notional_usdt, settings.cash_carry_min_basis_pct)
+            guard = forward_open_depth_guard(
+                spot,
+                swap,
+                spot_symbol,
+                swap_symbol,
+                settings.order_notional_usdt,
+                settings.cash_carry_min_basis_pct,
+                min_net_profit=entry_net_floor(settings),
+                open_close_fee=item.estimated_open_close_fee,
+                funding_income=item.estimated_funding_income,
+                close_basis_pct=settings.cash_carry_close_basis_pct,
+            )
             if not guard.ok:
                 return self.state.remember(ExecutionResult(str(uuid.uuid4()), "blocked_by_depth", guard.reason, steps))
             self._maybe_transfer(spot, item, settings, steps[0])
@@ -152,6 +168,16 @@ class CashCarryExecutor:
             return self.state.remember(ExecutionResult(position.id, "open_submitted", "已提交正向期现开仓流程", steps))
         except Exception as exc:  # noqa: BLE001
             if spot_order_id and not perp_order_id:
+                rollback = self._rollback_spot_after_open_failure(spot, spot_symbol, base, base_qty)
+                if rollback.get("closed"):
+                    return self.state.remember(
+                        ExecutionResult(
+                            str(uuid.uuid4()),
+                            "failed",
+                            f"{self._sanitize(str(exc))}；合约未开成，已自动卖出现货回滚，避免单腿",
+                            steps,
+                        )
+                    )
                 position = CashCarryPosition(
                     id=str(uuid.uuid4()),
                     exchange=item.exchange,
@@ -166,6 +192,8 @@ class CashCarryExecutor:
                     status="spot_only",
                 )
                 self.state.save_position(position)
+                detail = f"{self._sanitize(str(exc))}；合约未开成，现货回滚失败 {rollback.get('reason', '未知原因')}，已记录现货孤腿"
+                return self.state.remember(ExecutionResult(str(uuid.uuid4()), "failed", detail, steps))
             return self.state.remember(ExecutionResult(str(uuid.uuid4()), "failed", self._sanitize(str(exc)), steps))
 
     def _execute_close(
@@ -285,6 +313,91 @@ class CashCarryExecutor:
         except Exception as exc:  # noqa: BLE001
             return self.state.remember(ExecutionResult(record.id, "failed", f"{reason}；自动卖出现货孤腿失败 {self._sanitize(str(exc))}", steps))
 
+    def _execute_mismatch_rebalance(
+        self,
+        record: CashCarryPosition,
+        live: CashCarryPositionRow,
+        settings: BotSettings,
+    ) -> ExecutionResult | None:
+        if live.spot_quantity <= 0 or live.perp_base_quantity <= 0:
+            return None
+        gap = live.quantity_gap
+        if gap == 0:
+            return None
+        target_qty = min(live.spot_quantity, live.perp_base_quantity)
+        if target_qty <= 0:
+            return None
+        if gap > 0:
+            return self._sell_excess_spot(record, live, gap, target_qty, settings)
+        return self._reduce_excess_perp(record, live, abs(gap), target_qty, settings)
+
+    def _sell_excess_spot(
+        self,
+        record: CashCarryPosition,
+        live: CashCarryPositionRow,
+        quantity: Decimal,
+        target_qty: Decimal,
+        settings: BotSettings,
+    ) -> ExecutionResult:
+        steps = [ExecutionStep("rebalance_sell_excess_spot", "pending", f"{record.symbol} 现货多出 {quantity}，卖出多余现货降低单腿风险")]
+        gate_reasons = self._safety_gate(settings, opening=False, protective=True)
+        if gate_reasons:
+            return self.state.remember(ExecutionResult(record.id, "blocked_by_safety_gate", " / ".join(gate_reasons), steps))
+        spot = self._exchange(record.exchange, "spot")
+        spot_symbol = f"{record.base_asset}/USDT"
+        try:
+            order = self._run(steps[0], lambda: spot.create_order(spot_symbol, "market", "sell", float(quantity)), True)
+            self.state.mark_rebalanced(
+                record.id,
+                target_qty,
+                {
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    "action": "sell_excess_spot",
+                    "quantity": str(quantity),
+                    "target_quantity": str(target_qty),
+                    "order_id": self._order_id(order),
+                    "spot_quantity_before": str(live.spot_quantity),
+                    "perp_base_quantity_before": str(live.perp_base_quantity),
+                },
+            )
+            return self.state.remember(ExecutionResult(record.id, "rebalance_submitted", "已卖出多余现货，正向期现组合重新对齐", steps))
+        except Exception as exc:  # noqa: BLE001
+            return self.state.remember(ExecutionResult(record.id, "failed", f"卖出多余现货失败 {self._sanitize(str(exc))}", steps))
+
+    def _reduce_excess_perp(
+        self,
+        record: CashCarryPosition,
+        live: CashCarryPositionRow,
+        quantity: Decimal,
+        target_qty: Decimal,
+        settings: BotSettings,
+    ) -> ExecutionResult:
+        steps = [ExecutionStep("rebalance_reduce_excess_perp", "pending", f"{record.symbol} 合约空单多出 {quantity}，reduceOnly 买回多余合约降低单腿风险")]
+        gate_reasons = self._safety_gate(settings, opening=False, protective=True)
+        if gate_reasons:
+            return self.state.remember(ExecutionResult(record.id, "blocked_by_safety_gate", " / ".join(gate_reasons), steps))
+        swap = self._exchange(record.exchange, "swap")
+        swap_symbol = f"{record.base_asset}/USDT:USDT"
+        try:
+            contract_qty = contract_order_amount(swap, swap_symbol, quantity)
+            order = self._run(steps[0], lambda: swap.create_order(swap_symbol, "market", "buy", contract_qty, None, {"reduceOnly": True}), True)
+            self.state.mark_rebalanced(
+                record.id,
+                target_qty,
+                {
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    "action": "reduce_excess_perp",
+                    "quantity": str(quantity),
+                    "target_quantity": str(target_qty),
+                    "order_id": self._order_id(order),
+                    "spot_quantity_before": str(live.spot_quantity),
+                    "perp_base_quantity_before": str(live.perp_base_quantity),
+                },
+            )
+            return self.state.remember(ExecutionResult(record.id, "rebalance_submitted", "已买回多余合约空单，正向期现组合重新对齐", steps))
+        except Exception as exc:  # noqa: BLE001
+            return self.state.remember(ExecutionResult(record.id, "failed", f"买回多余合约失败 {self._sanitize(str(exc))}", steps))
+
     def _orphan_close_history(self, spot, swap, record: CashCarryPosition, spot_symbol: str, swap_symbol: str, close_spot_order_id: str | None, close_perp_order_id: str | None) -> dict[str, Any]:
         return build_cash_carry_history(spot, swap, record, spot_symbol, swap_symbol, close_spot_order_id, close_perp_order_id)
 
@@ -292,6 +405,16 @@ class CashCarryExecutor:
         balance = exchange.fetch_balance({"type": "spot"})
         item = balance.get(base_asset, {}) if isinstance(balance, dict) else {}
         return decimal_from(item.get("free") or item.get("total"))
+
+    def _rollback_spot_after_open_failure(self, spot, spot_symbol: str, base_asset: str, quantity: Decimal) -> dict[str, Any]:
+        try:
+            spot_qty = min(self._spot_free_quantity(spot, base_asset), quantity)
+            if spot_qty <= self._dust_quantity(quantity):
+                return {"closed": False, "reason": "现货可卖数量为0"}
+            order = spot.create_order(spot_symbol, "market", "sell", float(spot_qty))
+            return {"closed": True, "order_id": self._order_id(order)}
+        except Exception as exc:  # noqa: BLE001
+            return {"closed": False, "reason": self._sanitize(str(exc))}
 
     def _dust_quantity(self, quantity: Decimal) -> Decimal:
         return max(Decimal("0.000001"), abs(quantity) * Decimal("0.000001"))

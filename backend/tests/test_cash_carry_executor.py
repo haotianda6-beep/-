@@ -241,16 +241,26 @@ def test_cash_carry_convergence_waits_when_loss_can_recover_from_funding(tmp_pat
     assert result is None
 
 
-def test_cash_carry_convergence_closes_when_loss_has_no_recovery_space(tmp_path) -> None:
+def test_cash_carry_convergence_does_not_close_loss_before_stop_loss(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = CashCarryExecutor(state)
     settings = BotSettings(manual_confirm_required=True, cash_carry_auto_close_enabled=True, stop_loss_usdt=Decimal("5"), cash_carry_close_basis_pct=Decimal("0.2"))
 
     result = executor.evaluate_close([_opportunity(basis="0.1", funding="0")], settings, [_position_row(net="-1.2", basis="0.1", funding="0")])
 
+    assert result is None
+
+
+def test_cash_carry_fixed_usdt_stop_loss_can_close_loss(tmp_path) -> None:
+    state = _state_with_position(tmp_path)
+    executor = CashCarryExecutor(state)
+    settings = BotSettings(manual_confirm_required=True, cash_carry_auto_close_enabled=True, stop_loss_usdt=Decimal("5"), cash_carry_close_basis_pct=Decimal("0.2"))
+
+    result = executor.evaluate_close([_opportunity(basis="0.1", funding="0")], settings, [_position_row(net="-5.2", basis="0.1", funding="0")])
+
     assert result is not None
     assert result.status == "blocked_by_safety_gate"
-    assert "恢复空间不足" in result.steps[0].detail
+    assert "固定U止损达到" in result.steps[0].detail
 
 
 def test_cash_carry_close_uses_live_matched_quantities_instead_of_stale_state(tmp_path) -> None:
@@ -268,6 +278,48 @@ def test_cash_carry_close_uses_live_matched_quantities_instead_of_stale_state(tm
     assert result.status == "close_submitted"
     assert executor.spot.orders[0]["amount"] == 1.97
     assert executor.swap.orders[0]["amount"] == 19800.0
+
+
+def test_cash_carry_mismatch_sells_excess_spot_before_close(tmp_path) -> None:
+    state = _state_with_position(tmp_path, status="open")
+    executor = _RecordingExecutor(state)
+    settings = BotSettings(manual_confirm_required=True, cash_carry_auto_close_enabled=True)
+    live = _position_row(net="3.2", basis="0.9")
+    live.status = "mismatch"
+    live.spot_quantity = Decimal("1.05")
+    live.perp_base_quantity = Decimal("1")
+    live.quantity_gap = Decimal("0.05")
+
+    result = executor.evaluate_close([_opportunity(basis="0.9")], settings, [live])
+
+    assert result is not None
+    assert result.status == "rebalance_submitted"
+    assert executor.spot.orders == [{"id": "spot-close", "symbol": "ABC/USDT", "side": "sell", "amount": 0.05}]
+    assert executor.swap.orders == []
+    position = executor.state.load_positions(include_non_open=True)[0]
+    assert position.status == "open"
+    assert position.quantity == Decimal("1")
+
+
+def test_cash_carry_mismatch_reduces_excess_perp_before_close(tmp_path) -> None:
+    state = _state_with_position(tmp_path, status="open")
+    executor = _RecordingExecutor(state)
+    settings = BotSettings(manual_confirm_required=True, cash_carry_auto_close_enabled=True)
+    live = _position_row(net="3.2", basis="0.9")
+    live.status = "mismatch"
+    live.spot_quantity = Decimal("1")
+    live.perp_base_quantity = Decimal("1.05")
+    live.quantity_gap = Decimal("-0.05")
+
+    result = executor.evaluate_close([_opportunity(basis="0.9")], settings, [live])
+
+    assert result is not None
+    assert result.status == "rebalance_submitted"
+    assert executor.spot.orders == []
+    assert executor.swap.orders == [{"id": "swap-close", "symbol": "ABC/USDT:USDT", "side": "buy", "amount": 500.0, "params": {"reduceOnly": True}}]
+    position = executor.state.load_positions(include_non_open=True)[0]
+    assert position.status == "open"
+    assert position.quantity == Decimal("1")
 
 
 def test_cash_carry_fixed_take_profit_requires_depth_profit_above_target(tmp_path) -> None:
@@ -303,7 +355,7 @@ def test_cash_carry_close_blocks_when_depth_guard_estimates_loss(tmp_path) -> No
     assert executor.swap.orders == []
 
 
-def test_cash_carry_loss_exit_is_blocked_by_profit_floor(tmp_path) -> None:
+def test_cash_carry_loss_exit_waits_before_stop_loss(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = _RecordingExecutor(state)
     executor.spot.bids = [[99.9, 100]]
@@ -312,9 +364,7 @@ def test_cash_carry_loss_exit_is_blocked_by_profit_floor(tmp_path) -> None:
 
     result = executor.evaluate_close([_opportunity(basis="0.1", funding="0")], settings, [_position_row(net="-1.2", basis="0.1", funding="0")])
 
-    assert result is not None
-    assert result.status == "blocked_by_depth"
-    assert "盘口可成交净利" in result.reason
+    assert result is None
     assert executor.spot.orders == []
     assert executor.swap.orders == []
 
@@ -528,5 +578,5 @@ class _RecordingExecutor(CashCarryExecutor):
     def _exchange(self, exchange_name, default_type):
         return self.spot if default_type == "spot" else self.swap
 
-    def _safety_gate(self, settings, opening):
+    def _safety_gate(self, settings, opening, protective=False):
         return []

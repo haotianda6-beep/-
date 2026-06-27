@@ -12,7 +12,19 @@ class DepthGuardResult:
     estimated_net_profit: Decimal = Decimal("0")
 
 
-def forward_open_depth_guard(spot, swap, spot_symbol: str, swap_symbol: str, quote_notional: Decimal, min_basis_pct: Decimal) -> DepthGuardResult:
+def forward_open_depth_guard(
+    spot,
+    swap,
+    spot_symbol: str,
+    swap_symbol: str,
+    quote_notional: Decimal,
+    min_basis_pct: Decimal,
+    *,
+    min_net_profit: Decimal = Decimal("0"),
+    open_close_fee: Decimal = Decimal("0"),
+    funding_income: Decimal = Decimal("0"),
+    close_basis_pct: Decimal = Decimal("0"),
+) -> DepthGuardResult:
     try:
         spot_book = spot.fetch_order_book(spot_symbol, limit=20)
         spot_qty, spot_avg = _buy_vwap_from_quote(spot_book.get("asks") or [], quote_notional, Decimal("1"))
@@ -28,7 +40,18 @@ def forward_open_depth_guard(spot, swap, spot_symbol: str, swap_symbol: str, quo
         basis = (perp_avg - spot_avg) / spot_avg * Decimal("100") if spot_avg > 0 else Decimal("0")
         if basis < min_basis_pct:
             return DepthGuardResult(False, f"深度均价开仓基差 {basis:.4f}% 低于 {min_basis_pct}% ", spot_avg, perp_avg, basis)
-        return DepthGuardResult(True, "ok", spot_avg, perp_avg, basis)
+        tradable_basis = max(Decimal("0"), basis - close_basis_pct)
+        estimated_net = quote_notional * tradable_basis / Decimal("100") + funding_income - open_close_fee
+        if estimated_net < min_net_profit:
+            return DepthGuardResult(
+                False,
+                f"深度均价净利 {estimated_net:.4f} USDT 低于稳定开仓安全垫 {min_net_profit:.4f} USDT",
+                spot_avg,
+                perp_avg,
+                basis,
+                estimated_net,
+            )
+        return DepthGuardResult(True, "ok", spot_avg, perp_avg, basis, estimated_net)
     except Exception as exc:  # noqa: BLE001
         return DepthGuardResult(False, f"开仓深度校验失败 {str(exc)[:160]}")
 

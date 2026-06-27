@@ -112,7 +112,17 @@ def test_cash_carry_fast_refresh_uses_ws_prices() -> None:
 
     assert refreshed.opportunities
     assert refreshed.opportunities[0].basis_pct == Decimal("1.5000")
-    assert refreshed.opportunities[0].estimated_net_profit == Decimal("1.2200")
+    assert refreshed.opportunities[0].estimated_net_profit == Decimal("1.0200")
+
+
+def test_cash_carry_blocks_low_stable_net_profit() -> None:
+    scanner = CashCarryScanner()
+    settings = BotSettings(order_notional_usdt=Decimal("300"))
+
+    item = scanner._build_opportunity("ABCUSDT", _data("100.95", "0.0002"), settings)
+
+    assert item is not None
+    assert "稳定开仓安全垫" in " / ".join(item.blocked_reasons)
 
 
 def test_cash_carry_fast_refresh_drops_blacklisted_symbol() -> None:

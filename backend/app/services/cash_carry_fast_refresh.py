@@ -4,6 +4,7 @@ from decimal import Decimal
 from app.core.market_math import q
 from app.core.models import BotSettings, CashCarryOpportunity, ExchangeName
 from app.core.pnl import calculate_spread_pct
+from app.services.cash_carry_quality import convergence_basis_profit, entry_quality_reasons, estimated_entry_net_profit
 from app.services.live_market_types import CashCarryScan
 from app.services.live_read import decimal_from
 from app.services.market_format import quote_volume
@@ -61,10 +62,10 @@ class CashCarryFastRefresher:
         funding_rate = item.funding_rate_pct / Decimal("100")
         spot_volume = quote_volume(spot_ticker) or item.spot_volume_24h_usdt
         perp_volume = quote_volume(swap_ticker) or item.perp_volume_24h_usdt
-        basis_profit = settings.order_notional_usdt * basis_pct / Decimal("100")
+        basis_profit = convergence_basis_profit(settings, basis_pct)
         funding_income = settings.order_notional_usdt * funding_rate
-        net = basis_profit + funding_income - item.estimated_open_close_fee
-        reasons = self._forward_reasons(item.blocked_reasons, basis_pct, funding_rate, spot_volume, perp_volume, settings)
+        net = estimated_entry_net_profit(settings, basis_pct, funding_rate, item.estimated_open_close_fee)
+        reasons = self._forward_reasons(item.blocked_reasons, basis_pct, funding_rate, spot_volume, perp_volume, net, settings)
         return item.model_copy(update={
             "spot_price": q(spot_price),
             "perp_price": q(perp_price),
@@ -96,9 +97,10 @@ class CashCarryFastRefresher:
         funding_rate: Decimal,
         spot_volume: Decimal,
         perp_volume: Decimal,
+        estimated_net_profit: Decimal,
         settings: BotSettings,
     ) -> list[str]:
-        reasons = self._preserved(current, ("合约溢价未达", "资金费率低于", "资金费率不是正数", "现货/合约最低24h成交量低于"))
+        reasons = self._preserved(current, ("合约溢价未达", "资金费率低于", "资金费率不是正数", "现货/合约最低24h成交量低于", "回归到平仓线后的净利预估"))
         if basis_pct < settings.cash_carry_min_basis_pct:
             reasons.append(f"合约溢价未达 {settings.cash_carry_min_basis_pct}%")
         if funding_rate <= 0:
@@ -107,6 +109,7 @@ class CashCarryFastRefresher:
             reasons.append(f"资金费率低于 {settings.cash_carry_min_funding_rate_pct}%")
         if min(spot_volume, perp_volume) < settings.cash_carry_min_volume_usdt:
             reasons.append(f"现货/合约最低24h成交量低于 {settings.cash_carry_min_volume_usdt}U")
+        reasons.extend(entry_quality_reasons(estimated_net_profit, settings))
         return self._dedupe(reasons)
 
     def _preserved(self, current: list[str], dynamic_prefixes: tuple[str, ...]) -> list[str]:

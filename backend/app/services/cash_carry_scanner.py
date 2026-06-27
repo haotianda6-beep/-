@@ -9,6 +9,7 @@ from app.core.models import BotSettings, CashCarryOpportunity, DataSource, Excha
 from app.core.pnl import calculate_spread_pct
 from app.services.asset_identity import MarketAsset, asset_from_market, local_identity_reasons
 from app.services.cash_carry_depth_estimator import estimate_max_safe_notional
+from app.services.cash_carry_quality import entry_quality_reasons, estimated_entry_net_profit, convergence_basis_profit
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES
 from app.services.exchange_factory import build_ccxt_exchange
 from app.services.live_market_types import CashCarryScan, SPOT_EXCHANGE_IDS, SWAP_EXCHANGE_IDS
@@ -252,9 +253,11 @@ class CashCarryScanner:
         spot_fee = data.spot_markets[symbol].taker_fee or FEE_RATES[data.exchange]
         swap_fee = data.swap_markets[symbol].taker_fee or FEE_RATES[data.exchange]
         fees = settings.order_notional_usdt * (spot_fee + swap_fee) * Decimal("2")
-        basis_profit = settings.order_notional_usdt * basis_pct / Decimal("100")
+        basis_profit = convergence_basis_profit(settings, basis_pct)
         funding_income = settings.order_notional_usdt * funding_rate
+        estimated_net_profit = estimated_entry_net_profit(settings, basis_pct, funding_rate, fees)
         reasons = self._blocked_reasons(basis_pct, funding_rate, spot_volume, perp_volume, settings)
+        reasons.extend(entry_quality_reasons(estimated_net_profit, settings))
         reasons.extend(local_identity_reasons(data.exchange.value, data.swap_markets[symbol].asset, data.spot_markets[symbol].asset))
         if self._pre_market_spot_transfer_closed(data.swap_markets[symbol], data.spot_markets[symbol]):
             reasons.append("预上市合约且现货充提均关闭，禁止自动开仓")
@@ -271,7 +274,7 @@ class CashCarryScanner:
             estimated_basis_profit=q(basis_profit),
             estimated_funding_income=q(funding_income),
             estimated_open_close_fee=q(fees),
-            estimated_net_profit=q(basis_profit + funding_income - fees),
+            estimated_net_profit=q(estimated_net_profit),
             notional_usdt=q(settings.order_notional_usdt, "0.01"),
             margin_required_usdt=q(settings.order_notional_usdt / settings.default_leverage if settings.default_leverage > 0 else settings.order_notional_usdt, "0.01"),
             leverage=settings.default_leverage,
