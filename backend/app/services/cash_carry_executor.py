@@ -104,6 +104,8 @@ class CashCarryExecutor:
             decision = cash_carry_close_decision(live.current_net_profit, live.basis_pct, live.estimated_funding_rate_pct, settings, has_live_net=True)
             if not decision.should_close:
                 decision = self._turnover_close_decision(record, live, settings) or decision
+            if not decision.should_close:
+                decision = self._dead_position_release_decision(record, live, rows, settings) or decision
             if not decision.should_close or not self._live_close_safe(live):
                 continue
             steps = self._close_plan(record, live.basis_pct, decision.reason, live.spot_quantity)
@@ -653,6 +655,8 @@ class CashCarryExecutor:
         base_floor = close_execution_buffer(settings)
         if "固定U止盈" in reason and settings.take_profit_usdt > 0:
             return settings.take_profit_usdt + base_floor
+        if "V2死仓释放" in reason:
+            return -self._dead_release_loss_cap(settings)
         return base_floor
 
     def _turnover_close_decision(
@@ -668,6 +672,58 @@ class CashCarryExecutor:
         if age_seconds < 30 * 60:
             return None
         return CashCarryCloseDecision(True, f"V2周转止盈达到 {live.current_net_profit} USDT，释放交易所仓位")
+
+    def _dead_position_release_decision(
+        self,
+        record: CashCarryPosition,
+        live: CashCarryPositionRow,
+        rows: list[CashCarryOpportunity],
+        settings: BotSettings,
+    ) -> CashCarryCloseDecision | None:
+        if live.current_net_profit >= 0:
+            return None
+        age_seconds = (datetime.now(timezone.utc) - self._aware_opened_at(record)).total_seconds()
+        if age_seconds < 24 * 60 * 60:
+            return None
+        loss = abs(live.current_net_profit)
+        if loss > self._dead_release_loss_cap(settings):
+            return None
+        if live.estimated_funding_rate_pct > settings.cash_carry_min_funding_rate_pct:
+            return None
+        replacement = self._replacement_opportunity(record, rows, settings, loss)
+        if replacement is None:
+            return None
+        return CashCarryCloseDecision(
+            True,
+            f"V2死仓释放 {live.current_net_profit} USDT；同所替代机会 {replacement.symbol} 预估净利 {replacement.estimated_net_profit} USDT",
+        )
+
+    def _replacement_opportunity(
+        self,
+        record: CashCarryPosition,
+        rows: list[CashCarryOpportunity],
+        settings: BotSettings,
+        current_loss: Decimal,
+    ) -> CashCarryOpportunity | None:
+        required_net = current_loss + close_execution_buffer(settings)
+        choices = []
+        for item in rows:
+            if ExchangeName(item.exchange) != record.exchange or item.symbol == record.symbol:
+                continue
+            reasons = [reason for reason in item.blocked_reasons if not self._is_open_scope_reason(reason)]
+            if reasons or item.estimated_net_profit < required_net:
+                continue
+            choices.append(item)
+        return max(choices, key=lambda item: item.estimated_net_profit) if choices else None
+
+    def _is_open_scope_reason(self, reason: str) -> bool:
+        return "一所一币规则" in reason or "已有正向期现持仓" in reason
+
+    def _dead_release_loss_cap(self, settings: BotSettings) -> Decimal:
+        return min(settings.take_profit_usdt, max(Decimal("1"), settings.order_notional_usdt * Decimal("0.0075")))
+
+    def _aware_opened_at(self, record: CashCarryPosition) -> datetime:
+        return record.opened_at if record.opened_at.tzinfo else record.opened_at.replace(tzinfo=timezone.utc)
 
     def _close_depth_guard_fields(self, guard, min_net_profit: Decimal) -> dict[str, str]:
         return {

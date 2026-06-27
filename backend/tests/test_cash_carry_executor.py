@@ -302,6 +302,64 @@ def test_cash_carry_convergence_does_not_close_loss_before_stop_loss(tmp_path) -
     assert result is None
 
 
+def test_cash_carry_v2_releases_stale_small_loss_only_when_replacement_exists(tmp_path) -> None:
+    state = _state_with_position(tmp_path)
+    executor = _RecordingExecutor(state)
+    settings = BotSettings(
+        manual_confirm_required=False,
+        cash_carry_auto_close_enabled=True,
+        order_notional_usdt=Decimal("100"),
+        take_profit_usdt=Decimal("3"),
+        cash_carry_close_basis_pct=Decimal("0.2"),
+    )
+    replacement = _opportunity("XYZUSDT", net="2.0", basis="1.2", funding="0.02").model_copy(
+        update={"blocked_reasons": ["同交易所已有正向期现持仓，按一所一币规则禁止开仓"]}
+    )
+
+    result = executor.evaluate_close([replacement], settings, [_position_row(net="-0.8", basis="0.6", funding="0")])
+
+    assert result is not None
+    assert result.status == "close_submitted"
+    assert "V2死仓释放" in result.reason
+    assert "XYZUSDT" in result.reason
+
+
+def test_cash_carry_v2_dead_release_waits_without_replacement(tmp_path) -> None:
+    state = _state_with_position(tmp_path)
+    executor = _RecordingExecutor(state)
+    settings = BotSettings(
+        manual_confirm_required=False,
+        cash_carry_auto_close_enabled=True,
+        order_notional_usdt=Decimal("100"),
+        take_profit_usdt=Decimal("3"),
+        cash_carry_close_basis_pct=Decimal("0.2"),
+    )
+
+    result = executor.evaluate_close([], settings, [_position_row(net="-0.8", basis="0.6", funding="0")])
+
+    assert result is None
+    assert executor.spot.orders == []
+    assert executor.swap.orders == []
+
+
+def test_cash_carry_v2_dead_release_blocks_large_loss(tmp_path) -> None:
+    state = _state_with_position(tmp_path)
+    executor = _RecordingExecutor(state)
+    settings = BotSettings(
+        manual_confirm_required=False,
+        cash_carry_auto_close_enabled=True,
+        order_notional_usdt=Decimal("100"),
+        take_profit_usdt=Decimal("3"),
+        cash_carry_close_basis_pct=Decimal("0.2"),
+    )
+
+    result = executor.evaluate_close([_opportunity("XYZUSDT", net="5.0")], settings, [_position_row(net="-1.2", basis="0.6", funding="0")])
+
+    assert result is None
+    assert executor.spot.orders == []
+    assert executor.swap.orders == []
+
+
 def test_cash_carry_fixed_usdt_stop_loss_can_close_loss(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = CashCarryExecutor(state)

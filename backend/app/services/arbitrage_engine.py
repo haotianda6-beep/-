@@ -250,7 +250,7 @@ class ArbitrageEngine:
                     severity=severity,
                     title="正向期现持仓周转过慢",
                     detail=f"{record.exchange} {record.symbol} 已持仓 {age_hours:.1f} 小时，当前净利 {row.current_net_profit}U，基差 {row.basis_pct}%，资金费率 {row.estimated_funding_rate_pct}%。该仓位占用交易所槽位，影响约10单/日目标。",
-                    action="V2 不会为了频率主动亏损平仓；若净利覆盖执行缓冲会自动周转止盈，否则继续等待回本或人工评估是否接受小亏释放槽位。",
+                    action="V2 不会单纯为了频率亏损平仓；若净利覆盖执行缓冲会自动周转止盈，若同交易所出现足以覆盖当前小亏的新机会，才允许死仓释放后切换机会。",
                     created_at=now,
                 )
             )
