@@ -209,6 +209,38 @@ def test_cash_carry_executor_depth_failure_does_not_block_other_symbol(tmp_path)
     assert "XYZUSDT" in result.steps[2].detail
 
 
+def test_cash_carry_executor_retries_smaller_notional_when_depth_is_thin(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    executor = _RecordingExecutor(state)
+    executor.spot.asks = [[100, 1], [110, 100]]
+    executor.swap.bids = [[101, 10000], [90, 1000000000]]
+    settings = BotSettings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_recovery_probe_notional_usdt=Decimal("100"),
+        manual_confirm_required=False,
+        cash_carry_auto_open_enabled=True,
+        cash_carry_auto_trade_enabled=True,
+        cash_carry_auto_transfer_enabled=False,
+    )
+    item = _opportunity("ABCUSDT", net="2", basis="1", funding="0.01").model_copy(
+        update={
+            "quantity": Decimal("3"),
+            "notional_usdt": Decimal("300"),
+            "estimated_open_close_fee": Decimal("0.6"),
+            "estimated_net_profit": Decimal("2"),
+        }
+    )
+
+    result = executor.evaluate_open([item], settings)
+
+    assert result is not None
+    assert result.status == "open_submitted"
+    assert "深度自适应 100.00U" in result.reason
+    assert "单笔名义 100.00" in result.steps[0].detail
+    assert executor.spot.orders[0]["amount"] == 1.0
+    assert executor.state.load_positions()[0].entry_notional_usdt == Decimal("100.00")
+
+
 def test_cash_carry_executor_uses_bootstrap_basis_floor_before_v3_samples(tmp_path) -> None:
     executor = CashCarryExecutor(tmp_path / "state.json")
     settings = BotSettings(

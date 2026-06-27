@@ -82,7 +82,7 @@ class CashCarryExecutor:
             gate_reasons = self._safety_gate(open_settings, opening=True)
             if gate_reasons:
                 return self.state.remember(ExecutionResult(str(uuid.uuid4()), "blocked_by_safety_gate", " / ".join(gate_reasons), steps))
-            return self._execute_open(item, open_settings, "恢复小额试单")
+            return self._execute_open(item, open_settings, steps, "恢复小额试单")
         item = max(ready, key=lambda row: row.estimated_net_profit)
         steps = self._open_plan(item, settings)
         gate_reasons = self._safety_gate(settings, opening=True)
@@ -157,7 +157,13 @@ class CashCarryExecutor:
                 close_basis_pct=settings.cash_carry_close_basis_pct,
             )
             if not guard.ok:
-                return self.state.remember(ExecutionResult(str(uuid.uuid4()), "blocked_by_depth", guard.reason, steps, position=item))
+                adjusted = self._depth_adjusted_open(item, settings, spot, swap, spot_symbol, swap_symbol)
+                if not adjusted:
+                    return self.state.remember(ExecutionResult(str(uuid.uuid4()), "blocked_by_depth", guard.reason, steps, position=item))
+                item, settings, steps = adjusted
+                base_qty = item.quantity
+                spot_entry_price = item.spot_price
+                mode_label = self._append_mode_label(mode_label, f"深度自适应 {settings.order_notional_usdt}U")
             self._maybe_transfer(spot, item, settings, steps[0])
             self._run(steps[1], lambda: self._set_leverage(swap, swap_symbol, settings.default_leverage, settings.margin_mode), True)
             self._verify_leverage(swap, swap_symbol, settings.default_leverage, "short", settings.margin_mode, steps[1])
@@ -229,6 +235,54 @@ class CashCarryExecutor:
                 detail = f"{self._sanitize(str(exc))}；合约未开成，现货回滚失败 {rollback.get('reason', '未知原因')}，已记录现货孤腿"
                 return self.state.remember(ExecutionResult(str(uuid.uuid4()), "failed", detail, steps))
             return self.state.remember(ExecutionResult(str(uuid.uuid4()), "failed", self._sanitize(str(exc)), steps))
+
+    def _depth_adjusted_open(
+        self,
+        item: CashCarryOpportunity,
+        settings: BotSettings,
+        spot,
+        swap,
+        spot_symbol: str,
+        swap_symbol: str,
+    ) -> tuple[CashCarryOpportunity, BotSettings, list[ExecutionStep]] | None:
+        for notional in self._depth_probe_notionals(settings):
+            open_settings = settings.model_copy(update={"order_notional_usdt": notional})
+            adjusted = self._probe_item(item, open_settings)
+            guard = forward_open_depth_guard(
+                spot,
+                swap,
+                spot_symbol,
+                swap_symbol,
+                open_settings.order_notional_usdt,
+                self._open_min_basis_pct(adjusted, open_settings),
+                min_net_profit=self.history_quality.entry_quality_gate(open_settings).min_net_profit,
+                open_close_fee=adjusted.estimated_open_close_fee,
+                funding_income=adjusted.estimated_funding_income,
+                close_basis_pct=open_settings.cash_carry_close_basis_pct,
+            )
+            if guard.ok:
+                return adjusted, open_settings, self._open_plan(adjusted, open_settings)
+        return None
+
+    def _depth_probe_notionals(self, settings: BotSettings) -> list[Decimal]:
+        if not settings.cash_carry_recovery_probe_enabled:
+            return []
+        order_notional = settings.order_notional_usdt
+        floor = min(order_notional, settings.cash_carry_recovery_probe_notional_usdt)
+        if order_notional <= 0 or floor <= 0 or floor >= order_notional:
+            return []
+        result: list[Decimal] = []
+        for ratio in (Decimal("0.75"), Decimal("0.50"), Decimal("0.333333333333")):
+            notional = q(order_notional * ratio, "0.01")
+            if floor <= notional < order_notional and notional not in result:
+                result.append(notional)
+        floor = q(floor, "0.01")
+        if floor not in result:
+            result.append(floor)
+        return result
+
+    def _append_mode_label(self, current: str, extra: str) -> str:
+        return f"{current}；{extra}" if current else extra
 
     def _execute_close(
         self,
