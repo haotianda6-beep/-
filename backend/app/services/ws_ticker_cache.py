@@ -36,6 +36,22 @@ class WSTickerCache:
         thread = threading.Thread(target=self._run_thread, args=key, daemon=True, name=f"ws-{exchange}-{market_type}")
         thread.start()
 
+    def replace_subscriptions(self, exchange: ExchangeName, market_type: MarketType, subscriptions: dict[str, str]) -> None:
+        key = (exchange, market_type)
+        trimmed = dict(list(subscriptions.items())[: self.max_symbols_per_stream])
+        with self._lock:
+            self._subscriptions[key] = trimmed
+            self._tickers = {
+                ticker_key: item
+                for ticker_key, item in self._tickers.items()
+                if ticker_key[0] != exchange or ticker_key[1] != market_type or ticker_key[2] in trimmed
+            }
+            if key in self._started or not trimmed:
+                return
+            self._started.add(key)
+        thread = threading.Thread(target=self._run_thread, args=key, daemon=True, name=f"ws-{exchange}-{market_type}")
+        thread.start()
+
     def get(self, exchange: ExchangeName, market_type: MarketType, symbol: str, max_age_seconds: float = 10) -> dict[str, Any] | None:
         with self._lock:
             item = self._tickers.get((exchange, market_type, symbol))

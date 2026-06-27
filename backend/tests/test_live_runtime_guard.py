@@ -6,7 +6,8 @@ from app.services.cash_carry_executor import CashCarryExecutor
 from app.services.cash_carry_scope import CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.live_market_types import CashCarryScan
 from app.services.live_read import LiveAccountSnapshot
-from app.services.live_runtime import LiveRuntimeCache, STRATEGY_CASH
+from app.services.live_runtime import LiveRuntimeCache, STRATEGY_CASH, TickerSubscription
+from app.services.ws_ticker_cache import WSTickerCache
 
 
 def test_runtime_open_guard_blocks_until_account_is_clean(tmp_path) -> None:
@@ -162,6 +163,39 @@ def test_runtime_default_ws_capacity_covers_internal_candidate_pool(tmp_path) ->
     assert runtime.ticker_cache.max_symbols_per_stream == CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 
 
+def test_runtime_replaces_cash_carry_ws_watchlist(tmp_path) -> None:
+    cache = _TickerCache()
+    runtime = _runtime(tmp_path, ticker_cache=cache)
+
+    runtime._subscribe_cash_carry([
+        TickerSubscription(ExchangeName.GATE, "AAAUSDT", "AAA/USDT", "AAA/USDT:USDT"),
+        TickerSubscription(ExchangeName.GATE, "BBBUSDT", "BBB/USDT", "BBB/USDT:USDT"),
+    ])
+    runtime._subscribe_cash_carry([
+        TickerSubscription(ExchangeName.GATE, "CCCUSDT", "CCC/USDT", "CCC/USDT:USDT"),
+    ])
+
+    assert cache.subscriptions[(ExchangeName.GATE, "spot")] == {"CCCUSDT": "CCC/USDT"}
+    assert cache.subscriptions[(ExchangeName.GATE, "swap")] == {"CCCUSDT": "CCC/USDT:USDT"}
+    assert cache.subscriptions[(ExchangeName.BITGET, "spot")] == {}
+    assert cache.subscriptions[(ExchangeName.BITGET, "swap")] == {}
+
+
+def test_ws_ticker_cache_replace_subscriptions_prunes_stale_symbols(monkeypatch) -> None:
+    cache = WSTickerCache(max_symbols_per_stream=2)
+    monkeypatch.setattr(cache, "_run_thread", lambda *_args: None)
+
+    cache.replace_subscriptions(ExchangeName.GATE, "spot", {"AAAUSDT": "AAA/USDT", "BBBUSDT": "BBB/USDT", "CCCUSDT": "CCC/USDT"})
+    cache._tickers[(ExchangeName.GATE, "spot", "AAAUSDT")] = (datetime.now(timezone.utc), {"last": 1})
+    cache._tickers[(ExchangeName.GATE, "spot", "OLDUSDT")] = (datetime.now(timezone.utc), {"last": 2})
+
+    cache.replace_subscriptions(ExchangeName.GATE, "spot", {"BBBUSDT": "BBB/USDT"})
+
+    assert cache._subscriptions[(ExchangeName.GATE, "spot")] == {"BBBUSDT": "BBB/USDT"}
+    assert (ExchangeName.GATE, "spot", "AAAUSDT") not in cache._tickers
+    assert (ExchangeName.GATE, "spot", "OLDUSDT") not in cache._tickers
+
+
 def test_runtime_marks_recent_depth_failed_symbol_as_candidate(tmp_path) -> None:
     state = tmp_path / "cash.json"
     blocked_at = datetime.now(timezone.utc).isoformat()
@@ -193,12 +227,13 @@ def test_mt4_scan_uses_independent_slot(tmp_path) -> None:
     assert result == "mt4-ok"
 
 
-def _runtime(tmp_path, cash_executor=None) -> LiveRuntimeCache:
+def _runtime(tmp_path, cash_executor=None, ticker_cache=None) -> LiveRuntimeCache:
     return LiveRuntimeCache(
         _LiveRead(),
         _Scanner(),
         _Mt4Scanner(),
         cash_carry_executor=cash_executor or CashCarryExecutor(tmp_path / "cash.json"),
+        ticker_cache=ticker_cache,
     )
 
 
@@ -242,3 +277,13 @@ class _Scanner:
 class _Mt4Scanner:
     def scan(self, settings):
         return [], [], []
+
+
+class _TickerCache:
+    max_symbols_per_stream = CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
+
+    def __init__(self) -> None:
+        self.subscriptions = {}
+
+    def replace_subscriptions(self, exchange, market_type, subscriptions):
+        self.subscriptions[(exchange, market_type)] = dict(subscriptions)

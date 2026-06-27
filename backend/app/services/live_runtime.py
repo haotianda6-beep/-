@@ -273,9 +273,13 @@ class LiveRuntimeCache:
         return _cash_carry_full_scan_subprocess(settings)
 
     def _subscribe_cash_carry(self, subscriptions: list[TickerSubscription]) -> None:
+        grouped: dict[tuple[ExchangeName, str], dict[str, str]] = {}
         for item in subscriptions:
-            self.ticker_cache.subscribe(item.exchange, "spot", item.symbol, item.spot_ccxt_symbol)
-            self.ticker_cache.subscribe(item.exchange, "swap", item.symbol, item.swap_ccxt_symbol)
+            grouped.setdefault((item.exchange, "spot"), {})[item.symbol] = item.spot_ccxt_symbol
+            grouped.setdefault((item.exchange, "swap"), {})[item.symbol] = item.swap_ccxt_symbol
+        for exchange in CASH_CARRY_EXCHANGE_SET:
+            self.ticker_cache.replace_subscriptions(exchange, "spot", grouped.get((exchange, "spot"), {}))
+            self.ticker_cache.replace_subscriptions(exchange, "swap", grouped.get((exchange, "swap"), {}))
 
     def _apply_cash_carry_open_scope(self, scan: CashCarryScan) -> CashCarryScan:
         active_keys = self.cash_carry_executor.state.active_keys()
