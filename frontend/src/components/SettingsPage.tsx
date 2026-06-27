@@ -34,6 +34,8 @@ type DecimalKey =
   | "stop_loss_usdt"
   | "max_slippage_pct"
   | "min_funding_net_usdt"
+  | "cash_carry_recovery_exit_max_loss_usdt"
+  | "cash_carry_max_recovery_funding_intervals"
   | "add_notional_usdt"
   | "add_trigger_spread_pct"
   | "single_exchange_max_notional_usdt";
@@ -59,6 +61,8 @@ const cashCarryDecimalFields: Array<{ key: DecimalKey; label: string; suffix: st
   { key: "cash_carry_close_basis_pct", label: "期现收敛平仓基差", suffix: "%" },
   { key: "cash_carry_min_funding_rate_pct", label: "期现最低资金费率", suffix: "%" },
   { key: "cash_carry_min_volume_usdt", label: "期现最低24h成交量", suffix: "USDT" },
+  { key: "cash_carry_recovery_exit_max_loss_usdt", label: "恢复不足释放亏损", suffix: "USDT" },
+  { key: "cash_carry_max_recovery_funding_intervals", label: "最大恢复资金费期数", suffix: "期" },
 ];
 
 const mt4SpreadDecimalFields: Array<{ key: DecimalKey; label: string; suffix: string }> = [

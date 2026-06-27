@@ -311,19 +311,43 @@ def test_cash_carry_v2_turnover_waits_until_profit_covers_execution_buffer(tmp_p
 def test_cash_carry_convergence_waits_when_loss_can_recover_from_funding(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = CashCarryExecutor(state)
-    settings = BotSettings(manual_confirm_required=True, cash_carry_auto_close_enabled=True, stop_loss_usdt=Decimal("5"), cash_carry_close_basis_pct=Decimal("0.2"))
+    settings = BotSettings(
+        manual_confirm_required=True,
+        cash_carry_auto_close_enabled=True,
+        stop_loss_usdt=Decimal("5"),
+        cash_carry_close_basis_pct=Decimal("0.2"),
+        cash_carry_max_recovery_funding_intervals=Decimal("100"),
+    )
 
     result = executor.evaluate_close([_opportunity(basis="0.1")], settings, [_position_row(net="-1.2", basis="0.1", funding="0.02")])
 
     assert result is None
 
 
-def test_cash_carry_convergence_does_not_close_loss_before_stop_loss(tmp_path) -> None:
+def test_cash_carry_convergence_releases_small_loss_without_recovery(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = CashCarryExecutor(state)
     settings = BotSettings(manual_confirm_required=True, cash_carry_auto_close_enabled=True, stop_loss_usdt=Decimal("5"), cash_carry_close_basis_pct=Decimal("0.2"))
 
     result = executor.evaluate_close([_opportunity(basis="0.1", funding="0")], settings, [_position_row(net="-1.2", basis="0.1", funding="0")])
+
+    assert result is not None
+    assert result.status == "blocked_by_safety_gate"
+    assert "V2恢复空间不足" in result.steps[0].detail
+
+
+def test_cash_carry_convergence_keeps_loss_above_recovery_release_cap(tmp_path) -> None:
+    state = _state_with_position(tmp_path)
+    executor = CashCarryExecutor(state)
+    settings = BotSettings(
+        manual_confirm_required=True,
+        cash_carry_auto_close_enabled=True,
+        stop_loss_usdt=Decimal("20"),
+        cash_carry_close_basis_pct=Decimal("0.2"),
+        cash_carry_recovery_exit_max_loss_usdt=Decimal("6"),
+    )
+
+    result = executor.evaluate_close([_opportunity(basis="0.1", funding="0")], settings, [_position_row(net="-6.2", basis="0.1", funding="0")])
 
     assert result is None
 
@@ -511,7 +535,7 @@ def test_cash_carry_close_blocks_when_depth_guard_estimates_loss(tmp_path) -> No
     assert executor.swap.orders == []
 
 
-def test_cash_carry_loss_exit_waits_before_stop_loss(tmp_path) -> None:
+def test_cash_carry_loss_exit_releases_converged_unrecoverable_loss(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = _RecordingExecutor(state)
     executor.spot.bids = [[99.9, 100]]
@@ -520,9 +544,11 @@ def test_cash_carry_loss_exit_waits_before_stop_loss(tmp_path) -> None:
 
     result = executor.evaluate_close([_opportunity(basis="0.1", funding="0")], settings, [_position_row(net="-1.2", basis="0.1", funding="0")])
 
-    assert result is None
-    assert executor.spot.orders == []
-    assert executor.swap.orders == []
+    assert result is not None
+    assert result.status == "close_submitted"
+    assert "V2恢复空间不足" in result.reason
+    assert executor.spot.orders == [{"id": "spot-close", "symbol": "ABC/USDT", "side": "sell", "amount": 1.0}]
+    assert executor.swap.orders == [{"id": "swap-close", "symbol": "ABC/USDT:USDT", "side": "buy", "amount": 10000.0, "params": {"reduceOnly": True}}]
 
 
 def test_gate_transfer_is_skipped_when_spot_and_swap_have_enough_usdt(tmp_path) -> None:

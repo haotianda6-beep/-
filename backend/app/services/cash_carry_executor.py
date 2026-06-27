@@ -107,6 +107,8 @@ class CashCarryExecutor:
                 decision = self._turnover_close_decision(record, live, settings) or decision
             if not decision.should_close:
                 decision = self._dead_position_release_decision(record, live, rows, settings) or decision
+            if not decision.should_close:
+                decision = self._unrecoverable_converged_loss_decision(record, live, settings) or decision
             if not decision.should_close or not self._live_close_safe(live):
                 continue
             steps = self._close_plan(record, live.basis_pct, decision.reason, live.spot_quantity)
@@ -659,6 +661,8 @@ class CashCarryExecutor:
             return settings.take_profit_usdt + base_floor
         if "V2死仓释放" in reason:
             return -self._dead_release_loss_cap(settings)
+        if "V2恢复空间不足" in reason:
+            return -settings.cash_carry_recovery_exit_max_loss_usdt
         return base_floor
 
     def _close_guard_spot_entry(self, record: CashCarryPosition, live: CashCarryPositionRow | None) -> Decimal:
@@ -727,6 +731,44 @@ class CashCarryExecutor:
                 continue
             choices.append(item)
         return max(choices, key=lambda item: item.estimated_net_profit) if choices else None
+
+    def _unrecoverable_converged_loss_decision(
+        self,
+        record: CashCarryPosition,
+        live: CashCarryPositionRow,
+        settings: BotSettings,
+    ) -> CashCarryCloseDecision | None:
+        if live.current_net_profit >= 0:
+            return None
+        if live.basis_pct > settings.cash_carry_close_basis_pct:
+            return None
+        max_loss = settings.cash_carry_recovery_exit_max_loss_usdt
+        max_intervals = settings.cash_carry_max_recovery_funding_intervals
+        if max_loss <= 0 or max_intervals <= 0:
+            return None
+        loss = abs(live.current_net_profit)
+        if loss > max_loss:
+            return None
+        funding_income = self._recovery_funding_income(live, settings)
+        if funding_income <= 0:
+            return CashCarryCloseDecision(True, f"V2恢复空间不足 {live.current_net_profit} USDT；基差已收敛且资金费无法覆盖")
+        needed_intervals = loss / funding_income
+        if needed_intervals <= max_intervals:
+            return None
+        return CashCarryCloseDecision(
+            True,
+            f"V2恢复空间不足 {live.current_net_profit} USDT；按当前资金费约需 {needed_intervals:.1f} 期恢复，超过 {max_intervals} 期",
+        )
+
+    def _recovery_funding_income(self, live: CashCarryPositionRow, settings: BotSettings) -> Decimal:
+        if live.estimated_funding_income > 0:
+            return live.estimated_funding_income
+        if live.estimated_funding_rate_pct <= 0:
+            return Decimal("0")
+        notional = live.perp_base_quantity * live.perp_mark_price
+        if notional <= 0:
+            notional = settings.order_notional_usdt
+        return notional * live.estimated_funding_rate_pct / Decimal("100")
 
     def _is_open_scope_reason(self, reason: str) -> bool:
         return "一所一币规则" in reason or "已有正向期现持仓" in reason or "持仓槽位已满" in reason

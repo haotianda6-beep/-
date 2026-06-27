@@ -205,6 +205,8 @@ class BotSettings(BaseSchema):
     stop_loss_usdt: Decimal = Decimal("12")
     max_slippage_pct: Decimal = Decimal("0.2")
     min_funding_net_usdt: Decimal = Decimal("0.01")
+    cash_carry_recovery_exit_max_loss_usdt: Decimal = Decimal("8")
+    cash_carry_max_recovery_funding_intervals: Decimal = Decimal("12")
     cash_carry_max_positions_per_exchange: int = 3
     max_add_count: int = 2
     add_notional_usdt: Decimal = Decimal("0")
@@ -261,6 +263,8 @@ class BotSettings(BaseSchema):
         "stop_loss_usdt",
         "max_slippage_pct",
         "min_funding_net_usdt",
+        "cash_carry_recovery_exit_max_loss_usdt",
+        "cash_carry_max_recovery_funding_intervals",
         "add_notional_usdt",
         "add_trigger_spread_pct",
         "single_exchange_max_notional_usdt",

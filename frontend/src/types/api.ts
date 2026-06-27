@@ -152,6 +152,8 @@ export type BotSettings = {
   stop_loss_usdt: string;
   max_slippage_pct: string;
   min_funding_net_usdt: string;
+  cash_carry_recovery_exit_max_loss_usdt: string;
+  cash_carry_max_recovery_funding_intervals: string;
   cash_carry_max_positions_per_exchange: number;
   max_add_count: number;
   add_notional_usdt: string;
