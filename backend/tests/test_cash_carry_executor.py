@@ -146,7 +146,7 @@ def test_cash_carry_executor_allows_small_recovery_probe_only_for_global_win_rat
     )
     candidate = _opportunity("ABCUSDT", "3", exchange=ExchangeName.GATE).model_copy(update={
         "notional_usdt": Decimal("300"),
-        "blocked_reasons": ["V2历史胜率保护：净利预估 3.0000U < 动态安全垫 6.0000U"],
+        "blocked_reasons": ["V3历史胜率保护：净利预估 3.0000U < 动态安全垫 6.0000U"],
     })
 
     result = executor.evaluate_open([candidate], settings)
@@ -170,7 +170,7 @@ def test_cash_carry_executor_recovery_probe_does_not_bypass_other_blockers(tmp_p
     candidate = _opportunity("ABCUSDT", "3", exchange=ExchangeName.GATE).model_copy(update={
         "notional_usdt": Decimal("300"),
         "blocked_reasons": [
-            "V2历史胜率保护：净利预估 3.0000U < 动态安全垫 6.0000U",
+            "V3历史胜率保护：净利预估 3.0000U < 动态安全垫 6.0000U",
             "现货/合约最低24h成交量低于 300000U",
         ],
     })
@@ -317,7 +317,7 @@ def test_cash_carry_convergence_closes_when_still_profitable(tmp_path) -> None:
     assert "执行前净利估算" in result.steps[0].detail
 
 
-def test_cash_carry_v2_turnover_closes_profitable_position_before_full_convergence(tmp_path) -> None:
+def test_cash_carry_v3_turnover_closes_profitable_position_before_full_convergence(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = _RecordingExecutor(state)
     settings = BotSettings(
@@ -331,10 +331,10 @@ def test_cash_carry_v2_turnover_closes_profitable_position_before_full_convergen
 
     assert result is not None
     assert result.status == "close_submitted"
-    assert "V2周转止盈达到" in result.reason
+    assert "V3周转止盈达到" in result.reason
 
 
-def test_cash_carry_v2_turnover_waits_until_profit_covers_execution_buffer(tmp_path) -> None:
+def test_cash_carry_v3_turnover_waits_until_profit_covers_execution_buffer(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = _RecordingExecutor(state)
     settings = BotSettings(
@@ -376,7 +376,7 @@ def test_cash_carry_convergence_releases_small_loss_without_recovery(tmp_path) -
 
     assert result is not None
     assert result.status == "blocked_by_safety_gate"
-    assert "V2恢复空间不足" in result.steps[0].detail
+    assert "V3恢复空间不足" in result.steps[0].detail
 
 
 def test_cash_carry_convergence_keeps_loss_above_recovery_release_cap(tmp_path) -> None:
@@ -395,7 +395,7 @@ def test_cash_carry_convergence_keeps_loss_above_recovery_release_cap(tmp_path) 
     assert result is None
 
 
-def test_cash_carry_v2_releases_stale_small_loss_only_when_replacement_exists(tmp_path) -> None:
+def test_cash_carry_v3_releases_stale_small_loss_only_when_replacement_exists(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = _RecordingExecutor(state)
     settings = BotSettings(
@@ -413,11 +413,11 @@ def test_cash_carry_v2_releases_stale_small_loss_only_when_replacement_exists(tm
 
     assert result is not None
     assert result.status == "close_submitted"
-    assert "V2死仓释放" in result.reason
+    assert "V3死仓释放" in result.reason
     assert "XYZUSDT" in result.reason
 
 
-def test_cash_carry_v2_dead_release_waits_without_replacement(tmp_path) -> None:
+def test_cash_carry_v3_dead_release_waits_without_replacement(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = _RecordingExecutor(state)
     settings = BotSettings(
@@ -435,7 +435,7 @@ def test_cash_carry_v2_dead_release_waits_without_replacement(tmp_path) -> None:
     assert executor.swap.orders == []
 
 
-def test_cash_carry_v2_dead_release_blocks_large_loss(tmp_path) -> None:
+def test_cash_carry_v3_dead_release_blocks_large_loss(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = _RecordingExecutor(state)
     settings = BotSettings(
@@ -589,7 +589,7 @@ def test_cash_carry_loss_exit_releases_converged_unrecoverable_loss(tmp_path) ->
 
     assert result is not None
     assert result.status == "close_submitted"
-    assert "V2恢复空间不足" in result.reason
+    assert "V3恢复空间不足" in result.reason
     assert executor.spot.orders == [{"id": "spot-close", "symbol": "ABC/USDT", "side": "sell", "amount": 1.0}]
     assert executor.swap.orders == [{"id": "swap-close", "symbol": "ABC/USDT:USDT", "side": "buy", "amount": 10000.0, "params": {"reduceOnly": True}}]
 

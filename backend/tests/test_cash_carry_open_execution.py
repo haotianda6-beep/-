@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from app.core.models import BotSettings, CashCarryOpportunity, DataSource, ExchangeName
+from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION
 from app.services.cash_carry_executor import CashCarryExecutor
 
 
@@ -16,6 +17,7 @@ def test_cash_carry_open_records_actual_fill_prices(tmp_path) -> None:
     state = executor.state.read()["positions"][0]
     assert state["spot_entry_price"] == "100.25"
     assert state["perp_entry_price"] == "101.75"
+    assert state["strategy_version"] == CASH_CARRY_RULESET_VERSION
 
 
 def _opportunity() -> CashCarryOpportunity:

@@ -14,7 +14,7 @@ from app.services.cash_carry_scope import CASH_CARRY_EXCHANGE_SET, CASH_CARRY_IN
 from app.services.cash_carry_executor import CashCarryExecutor
 from app.services.cash_carry_fast_refresh import CashCarryFastRefresher
 from app.services.cash_carry_positions import CashCarryPositionBuilder
-from app.services.cash_carry_quality import cash_carry_quality_score
+from app.services.cash_carry_quality import cash_carry_candidate_sort_key, cash_carry_quality_score
 from app.services.cash_carry_scanner import CashCarryScanner
 from app.services.cash_carry_signal import CashCarrySignalTracker
 from app.services.live_market_types import CashCarryScan
@@ -328,8 +328,14 @@ class LiveRuntimeCache:
             issues=issues,
         )
 
-    def _cash_carry_candidate_sort_key(self, item: CashCarryOpportunity) -> tuple[int, Decimal, Decimal]:
-        return (len(item.blocked_reasons), -self._cash_carry_quality_score(item), -item.estimated_net_profit)
+    def _cash_carry_candidate_sort_key(self, item: CashCarryOpportunity) -> tuple[int, int, Decimal, Decimal, Decimal, Decimal]:
+        return cash_carry_candidate_sort_key(
+            self._settings,
+            item.blocked_reasons,
+            item.basis_pct,
+            item.estimated_net_profit,
+            self._cash_carry_quality_score(item),
+        )
 
     def _cash_carry_opportunity_sort_key(self, item: CashCarryOpportunity) -> tuple[Decimal, Decimal]:
         return (-self._cash_carry_quality_score(item), -item.estimated_net_profit)

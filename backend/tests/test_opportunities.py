@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.core.models import BotSettings, CashCarryOpportunity, CashCarryPositionRow, DataSource, ExchangeName, PositionSnapshot
 from app.services.arbitrage_engine import ArbitrageEngine
+from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_state import CashCarryStateStore
 from app.services.market_checks import TransferNetworks, bidirectional_route_check
@@ -100,12 +101,12 @@ def test_cash_carry_liquidation_distance_warns_when_too_close(tmp_path) -> None:
     assert event.severity == "critical"
 
 
-def test_cash_carry_v2_performance_event_reports_win_rate(tmp_path) -> None:
+def test_cash_carry_v3_performance_event_reports_win_rate(tmp_path) -> None:
     state = tmp_path / "cash_carry_execution_state.json"
     state.write_text(
         '{"positions":['
-        '{"exchange":"BITGET","symbol":"AAAUSDT","status":"closed","closed_at":"2026-06-27T01:00:00+00:00","history":{"actual_net_profit":"1.2"}},'
-        '{"exchange":"BITGET","symbol":"BBBUSDT","status":"closed","closed_at":"2026-06-27T02:00:00+00:00","history":{"actual_net_profit":"-0.4"}}'
+        f'{{"exchange":"BITGET","symbol":"AAAUSDT","status":"closed","strategy_version":"{CASH_CARRY_RULESET_VERSION}","closed_at":"2026-06-27T01:00:00+00:00","history":{{"actual_net_profit":"1.2"}}}},'
+        f'{{"exchange":"BITGET","symbol":"BBBUSDT","status":"closed","strategy_version":"{CASH_CARRY_RULESET_VERSION}","closed_at":"2026-06-27T02:00:00+00:00","history":{{"actual_net_profit":"-0.4"}}}}'
         ']}',
         encoding="utf-8",
     )
@@ -114,9 +115,9 @@ def test_cash_carry_v2_performance_event_reports_win_rate(tmp_path) -> None:
 
     events = engine.get_risk_events(BotSettings(),)
 
-    event = next(item for item in events if item.id == "cash-carry-v2-performance")
-    assert event.title == "正向期现V2统计"
-    assert "历史真实样本 2 单" in event.detail
+    event = next(item for item in events if item.id == "cash-carry-v3-performance")
+    assert event.title == "正向期现V3统计"
+    assert "v3.0 新规则真实样本 2 单" in event.detail
     assert "胜率 50.00%" in event.detail
 
 
@@ -125,7 +126,7 @@ def test_cash_carry_frequency_event_explains_why_no_ready_opportunity(tmp_path) 
     state.write_text(
         '{"positions":['
         + ",".join(
-            f'{{"exchange":"GATE","symbol":"OLD{i}USDT","status":"closed","history":{{"actual_net_profit":"-1"}}}}'
+            f'{{"exchange":"GATE","symbol":"OLD{i}USDT","status":"closed","strategy_version":"{CASH_CARRY_RULESET_VERSION}","history":{{"actual_net_profit":"-1"}}}}'
             for i in range(10)
         )
         + "]}",
@@ -134,7 +135,7 @@ def test_cash_carry_frequency_event_explains_why_no_ready_opportunity(tmp_path) 
     engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
     engine.cash_carry_history_quality = CashCarryHistoryQuality(state)
     candidates = [
-        _candidate("DFDVXUSDT", Decimal("1.9"), ["V2历史胜率保护：净利预估 1.9000U < 动态安全垫 6.0000U"]),
+        _candidate("DFDVXUSDT", Decimal("1.9"), ["V3历史胜率保护：净利预估 1.9000U < 动态安全垫 6.0000U"]),
         _candidate("LOWUSDT", Decimal("-0.2"), ["合约溢价未达 0.8%", "资金费率不是正数，空头不能收资金费"]),
     ]
 
@@ -149,7 +150,7 @@ def test_cash_carry_frequency_event_explains_why_no_ready_opportunity(tmp_path) 
 
 def test_cash_carry_frequency_event_includes_rolling_memory(tmp_path) -> None:
     engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
-    candidates = [_candidate("MEMUSDT", Decimal("5"), ["V2历史胜率保护：净利预估 5.0000U < 动态安全垫 6.0000U"])]
+    candidates = [_candidate("MEMUSDT", Decimal("5"), ["V3历史胜率保护：净利预估 5.0000U < 动态安全垫 6.0000U"])]
 
     events = engine.get_risk_events(BotSettings(order_notional_usdt=Decimal("300")), cash_carry_candidates=candidates)
 

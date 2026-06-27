@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.models import ExchangeName
-from app.services.cash_carry_execution_models import CashCarryPosition
+from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION, CashCarryPosition
 from app.services.execution_models import ExecutionResult
 
 
@@ -152,6 +152,7 @@ class CashCarryStateStore:
                 last_add_basis_pct=Decimal(item["last_add_basis_pct"]) if item.get("last_add_basis_pct") not in (None, "") else None,
                 add_orders=item.get("add_orders") if isinstance(item.get("add_orders"), list) else [],
                 rebalance_orders=item.get("rebalance_orders") if isinstance(item.get("rebalance_orders"), list) else [],
+                strategy_version=str(item.get("strategy_version") or "legacy"),
             )
         except (KeyError, ValueError):
             return None
@@ -166,4 +167,5 @@ class CashCarryStateStore:
             "spot_entry_price": str(item.spot_entry_price),
             "perp_entry_price": str(item.perp_entry_price),
             "last_add_basis_pct": str(item.last_add_basis_pct) if item.last_add_basis_pct is not None else None,
+            "strategy_version": item.strategy_version or CASH_CARRY_RULESET_VERSION,
         }

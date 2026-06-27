@@ -4,6 +4,7 @@ from pathlib import Path
 from app.core.models import BotSettings, ExchangeName
 from app.services.asset_identity import MarketAsset
 from app.services.cash_carry_fast_refresh import CashCarryFastRefresher
+from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_scope import CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.cash_carry_scanner import CashCarryExchangeData, CashCarryScanner, TradeMarket
@@ -73,6 +74,10 @@ def test_cash_carry_scan_only_uses_gate_and_bitget(monkeypatch) -> None:
     scanner.scan(BotSettings())
 
     assert loaded == [ExchangeName.GATE, ExchangeName.BITGET]
+
+
+def test_cash_carry_defaults_to_one_position_per_exchange() -> None:
+    assert BotSettings().cash_carry_max_positions_per_exchange == 1
 
 
 def test_cash_carry_scan_respects_blacklist_inside_allowed_exchanges(monkeypatch) -> None:
@@ -184,7 +189,7 @@ def test_cash_carry_global_history_gate_raises_entry_floor_after_low_win_rate(tm
     state.write_text(
         '{"positions":['
         + ",".join(
-            f'{{"exchange":"GATE","symbol":"OLD{i}USDT","status":"closed","history":{{"actual_net_profit":"-1"}}}}'
+            f'{{"exchange":"GATE","symbol":"OLD{i}USDT","status":"closed","strategy_version":"{CASH_CARRY_RULESET_VERSION}","history":{{"actual_net_profit":"-1"}}}}'
             for i in range(10)
         )
         + "]}",
@@ -199,11 +204,11 @@ def test_cash_carry_global_history_gate_raises_entry_floor_after_low_win_rate(tm
 
     assert item is not None
     reasons = " / ".join(item.blocked_reasons)
-    assert "V2历史胜率保护" in reasons
+    assert "V3历史胜率保护" in reasons
     assert "动态安全垫" in reasons
 
 
-def test_cash_carry_global_history_gate_can_be_disabled(tmp_path) -> None:
+def test_cash_carry_global_history_gate_ignores_legacy_ruleset(tmp_path) -> None:
     state = tmp_path / "cash_carry_execution_state.json"
     state.write_text(
         '{"positions":['
@@ -217,15 +222,37 @@ def test_cash_carry_global_history_gate_can_be_disabled(tmp_path) -> None:
     scanner = CashCarryScanner(CashCarryHistoryQuality(state))
     data = _data("101.5", "0.0002")
     data.exchange = ExchangeName.GATE
+    settings = BotSettings(order_notional_usdt=Decimal("300"))
+
+    item = scanner._build_opportunity("ABCUSDT", data, settings)
+
+    assert item is not None
+    assert "V3历史胜率保护" not in " / ".join(item.blocked_reasons)
+
+
+def test_cash_carry_global_history_gate_can_be_disabled(tmp_path) -> None:
+    state = tmp_path / "cash_carry_execution_state.json"
+    state.write_text(
+        '{"positions":['
+        + ",".join(
+            f'{{"exchange":"GATE","symbol":"OLD{i}USDT","status":"closed","strategy_version":"{CASH_CARRY_RULESET_VERSION}","history":{{"actual_net_profit":"-1"}}}}'
+            for i in range(10)
+        )
+        + "]}",
+        encoding="utf-8",
+    )
+    scanner = CashCarryScanner(CashCarryHistoryQuality(state))
+    data = _data("101.5", "0.0002")
+    data.exchange = ExchangeName.GATE
     settings = BotSettings(order_notional_usdt=Decimal("300"), cash_carry_adaptive_quality_enabled=False)
 
     item = scanner._build_opportunity("ABCUSDT", data, settings)
 
     assert item is not None
-    assert "V2历史胜率保护" not in " / ".join(item.blocked_reasons)
+    assert "V3历史胜率保护" not in " / ".join(item.blocked_reasons)
 
 
-def test_cash_carry_v2_sort_prefers_higher_quality_signal() -> None:
+def test_cash_carry_v3_sort_prefers_higher_quality_signal() -> None:
     scanner = _scanner()
     settings = BotSettings(order_notional_usdt=Decimal("300"))
     low_quality = scanner._build_opportunity("ABCUSDT", _data("101.8", "0.00001"), settings)
@@ -241,7 +268,7 @@ def test_cash_carry_v2_sort_prefers_higher_quality_signal() -> None:
     })
     high_quality = high_quality.model_copy(update={
         "symbol": "HIGHUSDT",
-        "estimated_net_profit": Decimal("2.0"),
+        "estimated_net_profit": Decimal("2.8"),
         "spot_volume_24h_usdt": Decimal("3000000"),
         "perp_volume_24h_usdt": Decimal("3000000"),
     })
@@ -249,6 +276,30 @@ def test_cash_carry_v2_sort_prefers_higher_quality_signal() -> None:
     ranked = sorted([low_quality, high_quality], key=lambda item: scanner._candidate_sort_key(item, settings))
 
     assert ranked[0].symbol == "HIGHUSDT"
+
+
+def test_cash_carry_candidate_sort_demotes_hard_blocked_large_basis() -> None:
+    scanner = _scanner()
+    settings = BotSettings(order_notional_usdt=Decimal("300"))
+    soft = scanner._build_opportunity("ABCUSDT", _data("100.7", "0.0002"), settings)
+    hard = scanner._build_opportunity("ABCUSDT", _data("154", "0.0002"), settings)
+
+    assert soft is not None
+    assert hard is not None
+    soft = soft.model_copy(update={
+        "symbol": "SOFTUSDT",
+        "estimated_net_profit": Decimal("1.8"),
+        "blocked_reasons": ["合约溢价未达 0.8%", "回归到平仓线后的净利预估 1.8000U < 稳定开仓安全垫 2.4000U"],
+    })
+    hard = hard.model_copy(update={
+        "symbol": "HARDUSDT",
+        "estimated_net_profit": Decimal("160"),
+        "blocked_reasons": ["现货/合约最低24h成交量低于 300000U", "开仓基差异常过高 54.0000% > 3.0000%，不追异常盘"],
+    })
+
+    ranked = sorted([hard, soft], key=lambda item: scanner._candidate_sort_key(item, settings))
+
+    assert ranked[0].symbol == "SOFTUSDT"
 
 
 def test_cash_carry_fast_refresh_drops_blacklisted_symbol() -> None:

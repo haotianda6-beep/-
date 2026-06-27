@@ -10,7 +10,7 @@ from app.core.pnl import calculate_spread_pct
 from app.services.asset_identity import MarketAsset, asset_from_market, local_identity_reasons
 from app.services.cash_carry_depth_estimator import estimate_max_safe_notional
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
-from app.services.cash_carry_quality import cash_carry_quality_score, entry_basis_risk_reasons, entry_quality_reasons, estimated_entry_net_profit, convergence_basis_profit
+from app.services.cash_carry_quality import cash_carry_candidate_sort_key, cash_carry_quality_score, entry_basis_risk_reasons, entry_quality_reasons, estimated_entry_net_profit, convergence_basis_profit
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES, CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.exchange_factory import build_ccxt_exchange
 from app.services.live_market_types import CashCarryScan, SPOT_EXCHANGE_IDS, SWAP_EXCHANGE_IDS
@@ -360,8 +360,14 @@ class CashCarryScanner:
             ]
         return item.model_copy(update=updates)
 
-    def _candidate_sort_key(self, item: CashCarryOpportunity, settings: BotSettings) -> tuple[int, Decimal, Decimal]:
-        return (len(item.blocked_reasons), -self._quality_score(item, settings), -item.estimated_net_profit)
+    def _candidate_sort_key(self, item: CashCarryOpportunity, settings: BotSettings) -> tuple[int, int, Decimal, Decimal, Decimal, Decimal]:
+        return cash_carry_candidate_sort_key(
+            settings,
+            item.blocked_reasons,
+            item.basis_pct,
+            item.estimated_net_profit,
+            self._quality_score(item, settings),
+        )
 
     def _opportunity_sort_key(self, item: CashCarryOpportunity, settings: BotSettings) -> tuple[Decimal, Decimal]:
         return (-self._quality_score(item, settings), -item.estimated_net_profit)

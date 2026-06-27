@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.models import BotSettings, ExchangeName
+from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION
 
 
 TARGET_WIN_RATE_PCT = Decimal("70")
@@ -29,6 +30,7 @@ class CashCarrySymbolStats:
 
 @dataclass(frozen=True)
 class CashCarryPerformanceSummary:
+    ruleset_version: str
     total_trades: int
     total_wins: int
     total_net: Decimal
@@ -38,6 +40,7 @@ class CashCarryPerformanceSummary:
     net_24h: Decimal
     win_rate_24h_pct: Decimal
     blocked_symbols: int
+    ignored_legacy_trades: int
 
 
 @dataclass(frozen=True)
@@ -80,7 +83,7 @@ class CashCarryHistoryQuality:
             return []
         reason_text = "；".join(gate.reasons) if gate.reasons else "历史表现未达标"
         return [
-            f"V2历史胜率保护：净利预估 {estimated_net_profit:.4f}U < 动态安全垫 {gate.min_net_profit:.4f}U（{reason_text}）"
+            f"V3历史胜率保护：净利预估 {estimated_net_profit:.4f}U < 动态安全垫 {gate.min_net_profit:.4f}U（{reason_text}）"
         ]
 
     def entry_quality_gate(self, settings: BotSettings, now: datetime | None = None) -> CashCarryEntryQualityGate:
@@ -117,12 +120,14 @@ class CashCarryHistoryQuality:
 
     def performance_summary(self, settings: BotSettings, now: datetime | None = None) -> CashCarryPerformanceSummary:
         current = now or datetime.now(timezone.utc)
-        rows = self._closed_rows()
+        all_rows = self._closed_rows()
+        rows = [row for row in all_rows if row[3] == CASH_CARRY_RULESET_VERSION]
         total = self._summary_values(rows)
         day_rows = [row for row in rows if row[1] and current - row[1] <= timedelta(hours=24)]
         day = self._summary_values(day_rows)
         blocked = sum(1 for key in self._all_stat_keys() if self.blocked_reasons(key[0], key[1], settings))
         return CashCarryPerformanceSummary(
+            ruleset_version=CASH_CARRY_RULESET_VERSION,
             total_trades=total[0],
             total_wins=total[1],
             total_net=total[2],
@@ -132,6 +137,7 @@ class CashCarryHistoryQuality:
             net_24h=day[2],
             win_rate_24h_pct=day[3],
             blocked_symbols=blocked,
+            ignored_legacy_trades=len(all_rows) - len(rows),
         )
 
     def _refresh_if_needed(self) -> None:
@@ -171,7 +177,8 @@ class CashCarryHistoryQuality:
                 continue
             net, forced = parsed
             closed_at = self._closed_at(item)
-            rows.append((item, net, closed_at, forced) if raw else (net, closed_at, forced))
+            version = str(item.get("strategy_version") or "legacy")
+            rows.append((item, net, closed_at, forced) if raw else (net, closed_at, forced, version))
         return rows
 
     def _closed_net(self, item: dict[str, Any]) -> tuple[Decimal, bool] | None:

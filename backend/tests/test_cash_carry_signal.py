@@ -54,12 +54,12 @@ def test_cash_carry_signal_keeps_v2_gate_but_requires_stability_before_probe() -
         cash_carry_signal_min_history_samples=2,
         cash_carry_signal_min_basis_percentile=Decimal("50"),
     )
-    reasons = ["V2历史胜率保护：净利预估 3.0000U < 动态安全垫 6.0000U"]
+    reasons = ["V3历史胜率保护：净利预估 3.0000U < 动态安全垫 6.0000U"]
 
     first = tracker.apply(CashCarryScan(candidates=[_candidate("ABCUSDT", Decimal("1.2"), reasons)]), settings, now=100.0)
     second = tracker.apply(CashCarryScan(candidates=[_candidate("ABCUSDT", Decimal("1.2"), reasons)]), settings, now=111.0)
 
-    assert "V2历史胜率保护" in " / ".join(first.candidates[0].blocked_reasons)
+    assert "V3历史胜率保护" in " / ".join(first.candidates[0].blocked_reasons)
     assert "信号持续不足" in " / ".join(first.candidates[0].blocked_reasons)
     assert second.opportunities == []
     assert second.candidates[0].blocked_reasons == reasons

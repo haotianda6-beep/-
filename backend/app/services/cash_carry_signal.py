@@ -9,7 +9,7 @@ from app.services.live_market_types import CashCarryScan
 
 
 SIGNAL_REASON_PREFIXES = ("信号持续不足", "基差波动过大", "基差分位样本不足", "基差分位不足")
-SIGNAL_ELIGIBLE_PREFIXES = ("V2历史胜率保护",)
+SIGNAL_ELIGIBLE_PREFIXES = ("V2历史胜率保护", "V3历史胜率保护")
 
 
 @dataclass(frozen=True)

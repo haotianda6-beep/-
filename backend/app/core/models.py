@@ -218,7 +218,7 @@ class BotSettings(BaseSchema):
     cash_carry_signal_max_basis_swing_pct: Decimal = Decimal("0.35")
     cash_carry_signal_min_history_samples: int = 30
     cash_carry_signal_min_basis_percentile: Decimal = Decimal("75")
-    cash_carry_max_positions_per_exchange: int = 3
+    cash_carry_max_positions_per_exchange: int = 1
     max_add_count: int = 2
     add_notional_usdt: Decimal = Decimal("0")
     add_trigger_spread_pct: Decimal = Decimal("2.2")

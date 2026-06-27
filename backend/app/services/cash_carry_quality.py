@@ -6,6 +6,20 @@ from app.core.models import BotSettings
 
 CLOSE_EXECUTION_BUFFER_PCT = Decimal("0.2")
 MAX_QUALITY_SCORE = Decimal("100")
+HARD_BLOCKER_PREFIXES = (
+    "资金费率不是正数",
+    "资金费率低于",
+    "现货/合约最低24h成交量低于",
+    "开仓基差异常过高",
+    "历史发生过强平",
+    "历史累计真实净利",
+    "历史胜率",
+    "合约与现货标的未确认一致",
+    "预上市合约且现货充提均关闭",
+    "盘口深度不足",
+    "同交易所正向期现持仓槽位已满",
+    "该交易所该币种已有正向期现持仓",
+)
 
 
 def entry_net_floor(settings: BotSettings) -> Decimal:
@@ -35,6 +49,19 @@ def cash_carry_quality_score(
         + _depth_score(settings, max_safe_notional_usdt)
     )
     return q(min(MAX_QUALITY_SCORE, max(Decimal("0"), score)), "0.01")
+
+
+def cash_carry_candidate_sort_key(
+    settings: BotSettings,
+    blocked_reasons: list[str],
+    basis_pct: Decimal,
+    estimated_net_profit: Decimal,
+    quality_score: Decimal,
+) -> tuple[int, int, Decimal, Decimal, Decimal, Decimal]:
+    hard_blockers = sum(1 for reason in blocked_reasons if reason.startswith(HARD_BLOCKER_PREFIXES))
+    net_gap = max(Decimal("0"), entry_net_floor(settings) - estimated_net_profit)
+    basis_gap = max(Decimal("0"), settings.cash_carry_min_basis_pct - basis_pct)
+    return (hard_blockers, len(blocked_reasons), net_gap, basis_gap, -quality_score, -estimated_net_profit)
 
 
 def convergence_basis_profit(settings: BotSettings, basis_pct: Decimal) -> Decimal:

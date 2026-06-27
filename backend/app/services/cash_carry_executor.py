@@ -488,7 +488,7 @@ class CashCarryExecutor:
         return max(candidates, key=lambda row: row.estimated_net_profit), probe_settings
 
     def _probe_blockers_only(self, reasons: list[str]) -> bool:
-        return bool(reasons) and all(reason.startswith("V2历史胜率保护") for reason in reasons)
+        return bool(reasons) and all(reason.startswith(("V2历史胜率保护", "V3历史胜率保护")) for reason in reasons)
 
     def _probe_net_allows(self, item: CashCarryOpportunity, settings: BotSettings) -> bool:
         if settings.order_notional_usdt <= 0:
@@ -733,9 +733,9 @@ class CashCarryExecutor:
         base_floor = close_execution_buffer(settings)
         if "固定U止盈" in reason and settings.take_profit_usdt > 0:
             return settings.take_profit_usdt + base_floor
-        if "V2死仓释放" in reason:
+        if "V3死仓释放" in reason:
             return -self._dead_release_loss_cap(settings)
-        if "V2恢复空间不足" in reason:
+        if "V3恢复空间不足" in reason:
             return -settings.cash_carry_recovery_exit_max_loss_usdt
         return base_floor
 
@@ -761,7 +761,7 @@ class CashCarryExecutor:
         age_seconds = (datetime.now(timezone.utc) - record.opened_at).total_seconds()
         if age_seconds < 30 * 60:
             return None
-        return CashCarryCloseDecision(True, f"V2周转止盈达到 {live.current_net_profit} USDT，释放交易所仓位")
+        return CashCarryCloseDecision(True, f"V3周转止盈达到 {live.current_net_profit} USDT，释放交易所仓位")
 
     def _dead_position_release_decision(
         self,
@@ -785,7 +785,7 @@ class CashCarryExecutor:
             return None
         return CashCarryCloseDecision(
             True,
-            f"V2死仓释放 {live.current_net_profit} USDT；同所替代机会 {replacement.symbol} 预估净利 {replacement.estimated_net_profit} USDT",
+            f"V3死仓释放 {live.current_net_profit} USDT；同所替代机会 {replacement.symbol} 预估净利 {replacement.estimated_net_profit} USDT",
         )
 
     def _replacement_opportunity(
@@ -825,13 +825,13 @@ class CashCarryExecutor:
             return None
         funding_income = self._recovery_funding_income(live, settings)
         if funding_income <= 0:
-            return CashCarryCloseDecision(True, f"V2恢复空间不足 {live.current_net_profit} USDT；基差已收敛且资金费无法覆盖")
+            return CashCarryCloseDecision(True, f"V3恢复空间不足 {live.current_net_profit} USDT；基差已收敛且资金费无法覆盖")
         needed_intervals = loss / funding_income
         if needed_intervals <= max_intervals:
             return None
         return CashCarryCloseDecision(
             True,
-            f"V2恢复空间不足 {live.current_net_profit} USDT；按当前资金费约需 {needed_intervals:.1f} 期恢复，超过 {max_intervals} 期",
+            f"V3恢复空间不足 {live.current_net_profit} USDT；按当前资金费约需 {needed_intervals:.1f} 期恢复，超过 {max_intervals} 期",
         )
 
     def _recovery_funding_income(self, live: CashCarryPositionRow, settings: BotSettings) -> Decimal:

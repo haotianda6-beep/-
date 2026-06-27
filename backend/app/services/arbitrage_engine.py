@@ -201,7 +201,7 @@ class ArbitrageEngine:
             events.append(RiskEvent(id=f"alpha-alert-issue-{index}", severity="warning", title="币安 Alpha 提醒异常", detail=issue, action="检查币安 Alpha 公共行情接口和服务器网络。", created_at=now))
         for index, issue in enumerate(mt4_spread_issues or []):
             events.append(RiskEvent(id=f"mt4-spread-issue-{index}", severity="warning", title="MT4 价差扫描异常", detail=issue, action="检查 MT4 插件报价推送、品种映射和交易所合约行情接口。", created_at=now))
-        events.append(self._cash_carry_v2_performance_event(settings, now))
+        events.append(self._cash_carry_v3_performance_event(settings, now))
         memory_summary = None
         if cash_carry_candidates:
             self.cash_carry_market_memory.observe(cash_carry_candidates, now)
@@ -228,7 +228,7 @@ class ArbitrageEngine:
             events.append(RiskEvent(id="emergency-close", severity="critical", title="紧急平仓开关已打开", detail="系统应停止新开仓并准备执行保护性平仓。", action="检查持仓并人工确认。", created_at=now))
         return events
 
-    def _cash_carry_v2_performance_event(self, settings: BotSettings, now: datetime) -> RiskEvent:
+    def _cash_carry_v3_performance_event(self, settings: BotSettings, now: datetime) -> RiskEvent:
         summary = self.cash_carry_history_quality.performance_summary(settings, now)
         gate = self.cash_carry_history_quality.entry_quality_gate(settings, now)
         total_rate = f"{summary.total_win_rate_pct:.2f}%"
@@ -237,13 +237,14 @@ class ArbitrageEngine:
         if summary.total_trades >= 5 and summary.total_win_rate_pct < settings.cash_carry_target_win_rate_pct:
             severity = "warning"
         detail = (
-            f"历史真实样本 {summary.total_trades} 单，胜率 {total_rate}，累计真实净利 {summary.total_net:.4f}U；"
+            f"{summary.ruleset_version} 新规则真实样本 {summary.total_trades} 单，胜率 {total_rate}，累计真实净利 {summary.total_net:.4f}U；"
             f"近24小时 {summary.trades_24h} 单，胜率 {day_rate}，净利 {summary.net_24h:.4f}U；"
             f"历史风控已拦截 {summary.blocked_symbols} 个币种；"
+            f"旧规则历史 {summary.ignored_legacy_trades} 单仅用于单币拉黑，不再压低新规则全局频率；"
             f"当前动态开仓净利安全垫 {gate.min_net_profit:.4f}U。"
         )
         action = f"目标是胜率不低于{settings.cash_carry_target_win_rate_pct}%、约{settings.cash_carry_target_daily_trades}单/日；低于目标时系统会自动提高开仓净利门槛，不建议人工放开历史亏损币。"
-        return RiskEvent(id="cash-carry-v2-performance", severity=severity, title="正向期现V2统计", detail=detail, action=action, created_at=now)
+        return RiskEvent(id="cash-carry-v3-performance", severity=severity, title="正向期现V3统计", detail=detail, action=action, created_at=now)
 
     def _cash_carry_turnover_events(self, settings: BotSettings, rows: list[CashCarryPositionRow], now: datetime) -> list[RiskEvent]:
         by_key = {(ExchangeName(row.exchange), row.symbol): row for row in rows}
@@ -267,7 +268,7 @@ class ArbitrageEngine:
                     severity=severity,
                     title="正向期现持仓周转过慢",
                     detail=f"{record.exchange} {record.symbol} 已持仓 {age_hours:.1f} 小时，当前净利 {row.current_net_profit}U，基差 {row.basis_pct}%，资金费率 {row.estimated_funding_rate_pct}%。该仓位占用交易所槽位，影响约10单/日目标。",
-                    action="V2 不会单纯为了频率亏损平仓；若净利覆盖执行缓冲会自动周转止盈，若同交易所出现足以覆盖当前小亏的新机会，才允许死仓释放后切换机会。",
+                    action="V3 不会单纯为了频率亏损平仓；若净利覆盖执行缓冲会自动周转止盈，若同交易所出现足以覆盖当前小亏的新机会，才允许死仓释放后切换机会。",
                     created_at=now,
                 )
             )

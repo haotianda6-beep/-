@@ -10,7 +10,7 @@ def test_cash_carry_market_memory_keeps_best_recent_sample() -> None:
     now = datetime.now(timezone.utc)
 
     memory.observe([_candidate("OLDUSDT", Decimal("1"), Decimal("1"))], now - timedelta(minutes=31))
-    memory.observe([_candidate("GOODUSDT", Decimal("1.8"), Decimal("4.2"), ["V2历史胜率保护：净利不足"])], now - timedelta(minutes=5))
+    memory.observe([_candidate("GOODUSDT", Decimal("1.8"), Decimal("4.2"), ["V3历史胜率保护：净利不足"])], now - timedelta(minutes=5))
     memory.observe([_candidate("LOWUSDT", Decimal("0.4"), Decimal("-1"), ["合约溢价未达 0.8%"])], now)
 
     summary = memory.summary(Decimal("6"), now)
@@ -28,8 +28,8 @@ def test_cash_carry_market_memory_counts_near_floor_samples() -> None:
     now = datetime.now(timezone.utc)
     memory.observe(
         [
-            _candidate("AUSDT", Decimal("2"), Decimal("5"), ["V2历史胜率保护：净利不足"]),
-            _candidate("BUSDT", Decimal("1.5"), Decimal("2"), ["V2历史胜率保护：净利不足"]),
+            _candidate("AUSDT", Decimal("2"), Decimal("5"), ["V3历史胜率保护：净利不足"]),
+            _candidate("BUSDT", Decimal("1.5"), Decimal("2"), ["V3历史胜率保护：净利不足"]),
         ],
         now,
     )
