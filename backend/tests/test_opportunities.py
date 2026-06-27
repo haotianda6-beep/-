@@ -1,9 +1,10 @@
 from decimal import Decimal
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.core.models import BotSettings, CashCarryPositionRow, ExchangeName, PositionSnapshot
 from app.services.arbitrage_engine import ArbitrageEngine
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
+from app.services.cash_carry_state import CashCarryStateStore
 from app.services.market_checks import TransferNetworks, bidirectional_route_check
 from app.services.settings_store import SettingsStore
 
@@ -117,6 +118,31 @@ def test_cash_carry_v2_performance_event_reports_win_rate(tmp_path) -> None:
     assert event.title == "正向期现V2统计"
     assert "历史真实样本 2 单" in event.detail
     assert "胜率 50.00%" in event.detail
+
+
+def test_cash_carry_turnover_event_warns_for_stale_unprofitable_position(tmp_path) -> None:
+    opened_at = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=7)
+    state = tmp_path / "cash_carry_execution_state.json"
+    state.write_text(
+        '{"positions":[{"id":"pos-1","exchange":"GATE","symbol":"AAAUSDT","base_asset":"AAA","quantity":"1","spot_entry_price":"1","perp_entry_price":"1.02","opened_at":"'
+        + opened_at.isoformat()
+        + '","status":"open"}]}',
+        encoding="utf-8",
+    )
+    engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
+    engine.cash_carry_state = CashCarryStateStore(state)
+    row = _cash_position().model_copy(update={
+        "symbol": "AAAUSDT",
+        "current_net_profit": Decimal("-0.4"),
+        "estimated_funding_rate_pct": Decimal("0"),
+        "basis_pct": Decimal("0.6"),
+    })
+
+    events = engine.get_risk_events(BotSettings(order_notional_usdt=Decimal("100")), cash_carry_positions=[row])
+
+    event = next(item for item in events if item.id == "cash-carry-turnover-GATE-AAAUSDT")
+    assert event.title == "正向期现持仓周转过慢"
+    assert "影响约10单/日目标" in event.detail
 
 
 def _cash_position() -> CashCarryPositionRow:

@@ -2,6 +2,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 from app.core.models import (
     BotSettings,
@@ -20,6 +21,8 @@ from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_positions import CashCarryPositionBuilder
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES
 from app.services.cash_carry_scanner import CashCarryScanner
+from app.services.cash_carry_state import CashCarryStateStore
+from app.services.cash_carry_quality import close_execution_buffer
 from app.services.execution_state import recent_execution_results
 from app.services.live_read import LiveReadService
 from app.services.live_runtime import LiveRuntimeCache
@@ -36,6 +39,8 @@ class ArbitrageEngine:
         self.ticker_cache = WSTickerCache()
         self.cash_carry_scanner = CashCarryScanner()
         self.cash_carry_history_quality = CashCarryHistoryQuality()
+        root = Path(__file__).resolve().parents[3]
+        self.cash_carry_state = CashCarryStateStore(root / "config" / "cash_carry_execution_state.json")
         self.cash_carry_positions = CashCarryPositionBuilder(self.ticker_cache)
         self.mt4_quote_store = Mt4QuoteStore()
         self.mt4_spread_scanner = Mt4SpreadScanner(self.mt4_quote_store)
@@ -192,6 +197,7 @@ class ArbitrageEngine:
         for index, issue in enumerate(mt4_spread_issues or []):
             events.append(RiskEvent(id=f"mt4-spread-issue-{index}", severity="warning", title="MT4 价差扫描异常", detail=issue, action="检查 MT4 插件报价推送、品种映射和交易所合约行情接口。", created_at=now))
         events.append(self._cash_carry_v2_performance_event(settings, now))
+        events.extend(self._cash_carry_turnover_events(settings, cash_carry_positions or [], now))
         events.extend(self._liquidation_distance_events(live_positions or [], now))
         events.extend(self._cash_carry_add_config_events(settings, now))
         for result in recent_execution_results():
@@ -221,6 +227,34 @@ class ArbitrageEngine:
         )
         action = "目标是胜率不低于70%、约10单/日；若近24小时单数不足，优先等待当前持仓退出后由V2候选池补新仓，不建议人工放开历史亏损币。"
         return RiskEvent(id="cash-carry-v2-performance", severity=severity, title="正向期现V2统计", detail=detail, action=action, created_at=now)
+
+    def _cash_carry_turnover_events(self, settings: BotSettings, rows: list[CashCarryPositionRow], now: datetime) -> list[RiskEvent]:
+        by_key = {(ExchangeName(row.exchange), row.symbol): row for row in rows}
+        events = []
+        for record in self.cash_carry_state.load_positions():
+            row = by_key.get((record.exchange, record.symbol))
+            if not row or row.status != "matched":
+                continue
+            opened_at = record.opened_at if record.opened_at.tzinfo else record.opened_at.replace(tzinfo=timezone.utc)
+            age_hours = Decimal(str((now - opened_at).total_seconds() / 3600))
+            if age_hours < Decimal("6"):
+                continue
+            if row.current_net_profit >= close_execution_buffer(settings):
+                continue
+            if row.current_net_profit >= 0 and row.estimated_funding_rate_pct > settings.cash_carry_min_funding_rate_pct:
+                continue
+            severity = "warning" if age_hours >= Decimal("24") else "info"
+            events.append(
+                RiskEvent(
+                    id=f"cash-carry-turnover-{record.exchange}-{record.symbol}",
+                    severity=severity,
+                    title="正向期现持仓周转过慢",
+                    detail=f"{record.exchange} {record.symbol} 已持仓 {age_hours:.1f} 小时，当前净利 {row.current_net_profit}U，基差 {row.basis_pct}%，资金费率 {row.estimated_funding_rate_pct}%。该仓位占用交易所槽位，影响约10单/日目标。",
+                    action="V2 不会为了频率主动亏损平仓；若净利覆盖执行缓冲会自动周转止盈，否则继续等待回本或人工评估是否接受小亏释放槽位。",
+                    created_at=now,
+                )
+            )
+        return events
 
     def _liquidation_distance_events(self, positions: list[PositionSnapshot], now: datetime) -> list[RiskEvent]:
         events = []

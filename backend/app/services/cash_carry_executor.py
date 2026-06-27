@@ -8,7 +8,7 @@ from app.core.env import ENV_PATH, env_bool
 from app.core.market_math import FEE_RATES
 from app.core.models import BotSettings, CashCarryOpportunity, CashCarryPositionRow, ExchangeName
 from app.services.cash_carry_add_executor import evaluate_cash_carry_add
-from app.services.cash_carry_close_policy import cash_carry_close_decision
+from app.services.cash_carry_close_policy import CashCarryCloseDecision, cash_carry_close_decision
 from app.services.cash_carry_execution_guard import forward_close_depth_guard, forward_open_depth_guard
 from app.services.cash_carry_execution_models import CashCarryPosition
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
@@ -102,6 +102,8 @@ class CashCarryExecutor:
                 if rebalance:
                     return rebalance
             decision = cash_carry_close_decision(live.current_net_profit, live.basis_pct, live.estimated_funding_rate_pct, settings, has_live_net=True)
+            if not decision.should_close:
+                decision = self._turnover_close_decision(record, live, settings) or decision
             if not decision.should_close or not self._live_close_safe(live):
                 continue
             steps = self._close_plan(record, live.basis_pct, decision.reason, live.spot_quantity)
@@ -652,6 +654,20 @@ class CashCarryExecutor:
         if "固定U止盈" in reason and settings.take_profit_usdt > 0:
             return settings.take_profit_usdt + base_floor
         return base_floor
+
+    def _turnover_close_decision(
+        self,
+        record: CashCarryPosition,
+        live: CashCarryPositionRow,
+        settings: BotSettings,
+    ):
+        floor = close_execution_buffer(settings)
+        if live.current_net_profit < floor:
+            return None
+        age_seconds = (datetime.now(timezone.utc) - record.opened_at).total_seconds()
+        if age_seconds < 30 * 60:
+            return None
+        return CashCarryCloseDecision(True, f"V2周转止盈达到 {live.current_net_profit} USDT，释放交易所仓位")
 
     def _close_depth_guard_fields(self, guard, min_net_profit: Decimal) -> dict[str, str]:
         return {

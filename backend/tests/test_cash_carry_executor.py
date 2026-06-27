@@ -248,6 +248,40 @@ def test_cash_carry_convergence_closes_when_still_profitable(tmp_path) -> None:
     assert "执行前净利估算" in result.steps[0].detail
 
 
+def test_cash_carry_v2_turnover_closes_profitable_position_before_full_convergence(tmp_path) -> None:
+    state = _state_with_position(tmp_path)
+    executor = _RecordingExecutor(state)
+    settings = BotSettings(
+        manual_confirm_required=False,
+        cash_carry_auto_close_enabled=True,
+        take_profit_usdt=Decimal("3"),
+        order_notional_usdt=Decimal("100"),
+    )
+
+    result = executor.evaluate_close([_opportunity(basis="0.9")], settings, [_position_row(net="0.8", basis="0.9")])
+
+    assert result is not None
+    assert result.status == "close_submitted"
+    assert "V2周转止盈达到" in result.reason
+
+
+def test_cash_carry_v2_turnover_waits_until_profit_covers_execution_buffer(tmp_path) -> None:
+    state = _state_with_position(tmp_path)
+    executor = _RecordingExecutor(state)
+    settings = BotSettings(
+        manual_confirm_required=False,
+        cash_carry_auto_close_enabled=True,
+        take_profit_usdt=Decimal("3"),
+        order_notional_usdt=Decimal("100"),
+    )
+
+    result = executor.evaluate_close([_opportunity(basis="0.9")], settings, [_position_row(net="0.4", basis="0.9")])
+
+    assert result is None
+    assert executor.spot.orders == []
+    assert executor.swap.orders == []
+
+
 def test_cash_carry_convergence_waits_when_loss_can_recover_from_funding(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = CashCarryExecutor(state)
