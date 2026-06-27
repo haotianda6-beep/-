@@ -264,6 +264,32 @@ def test_cash_carry_global_history_gate_can_be_disabled(tmp_path) -> None:
     assert "V3历史胜率保护" not in " / ".join(item.blocked_reasons)
 
 
+def test_cash_carry_v3_entry_gate_raises_after_negative_estimate_gap(tmp_path) -> None:
+    state = tmp_path / "cash_carry_execution_state.json"
+    gaps = ["-0.8", "-0.6", "-0.4"]
+    state.write_text(
+        '{"positions":['
+        + ",".join(
+            f'{{"exchange":"GATE","symbol":"V3{i}USDT","status":"closed","strategy_version":"{CASH_CARRY_RULESET_VERSION}","history":{{"actual_net_profit":"0.2","actual_vs_entry_estimate":"{gap}"}}}}'
+            for i, gap in enumerate(gaps)
+        )
+        + "]}",
+        encoding="utf-8",
+    )
+    history = CashCarryHistoryQuality(state)
+    settings = BotSettings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_v3_min_profit_pct=Decimal("0.2"),
+        max_slippage_pct=Decimal("0.01"),
+    )
+
+    gate = history.entry_quality_gate(settings)
+
+    assert gate.base_min_net_profit == Decimal("1.20")
+    assert gate.min_net_profit == Decimal("1.950")
+    assert "V3真实成交比预估平均低 0.6000U" in " / ".join(gate.reasons)
+
+
 def test_cash_carry_v3_sort_prefers_higher_quality_signal() -> None:
     scanner = _scanner()
     settings = BotSettings(order_notional_usdt=Decimal("300"))

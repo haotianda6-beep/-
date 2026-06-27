@@ -119,7 +119,7 @@ def test_cash_carry_v3_performance_event_reports_win_rate(tmp_path) -> None:
     assert event.title == "正向期现V3统计"
     assert "v3.0 新规则真实样本 2 单" in event.detail
     assert "胜率 50.00%" in event.detail
-    assert "V3成交偏差均值 -0.4000U，负偏差 1 单" in event.detail
+    assert "V3成交偏差样本 2 单，均值 -0.4000U，负偏差 1 单" in event.detail
 
 
 def test_cash_carry_frequency_event_explains_why_no_ready_opportunity(tmp_path) -> None:

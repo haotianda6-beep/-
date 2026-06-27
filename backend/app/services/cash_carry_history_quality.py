@@ -13,6 +13,7 @@ from app.services.cash_carry_quality import entry_net_floor
 TARGET_WIN_RATE_PCT = Decimal("70")
 MIN_TRADES_FOR_WIN_RATE = 2
 MIN_TRADES_FOR_GLOBAL_GATE = 10
+MIN_ESTIMATE_GAP_SAMPLES = 3
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,7 @@ class CashCarryPerformanceSummary:
     win_rate_24h_pct: Decimal
     blocked_symbols: int
     ignored_legacy_trades: int
+    estimate_sample_count: int
     avg_estimate_gap: Decimal
     estimate_miss_count: int
 
@@ -112,6 +114,13 @@ class CashCarryHistoryQuality:
             )
             adjusted += avg_loss_pressure
             reasons.append(f"历史累计净利 {summary.total_net:.4f}U < 0")
+        if summary.estimate_sample_count >= MIN_ESTIMATE_GAP_SAMPLES and summary.avg_estimate_gap < 0:
+            estimate_pressure = min(
+                abs(summary.avg_estimate_gap) * Decimal("1.25"),
+                settings.order_notional_usdt * Decimal("0.50") / Decimal("100"),
+            )
+            adjusted += estimate_pressure
+            reasons.append(f"V3真实成交比预估平均低 {abs(summary.avg_estimate_gap):.4f}U")
         capped = min(adjusted, self._max_reasonable_entry_floor(settings))
         if capped < adjusted:
             reasons.append("已按最大开仓基差限制封顶动态安全垫")
@@ -142,6 +151,7 @@ class CashCarryHistoryQuality:
             win_rate_24h_pct=day[3],
             blocked_symbols=blocked,
             ignored_legacy_trades=len(all_rows) - len(rows),
+            estimate_sample_count=len(gaps),
             avg_estimate_gap=sum(gaps, Decimal("0")) / Decimal(len(gaps)) if gaps else Decimal("0"),
             estimate_miss_count=sum(1 for gap in gaps if gap < 0),
         )
