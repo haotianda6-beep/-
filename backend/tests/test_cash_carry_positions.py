@@ -35,6 +35,18 @@ def test_cash_carry_position_shows_state_only_spot_leg() -> None:
     assert row.quantity_gap == Decimal("1.000000")
 
 
+def test_cash_carry_position_uses_separate_spot_and_swap_fee_rates() -> None:
+    builder = _Builder(_TickerCache({
+        ("spot", "AIAUSDT"): {"bid": "100", "ask": "100"},
+        ("swap", "AIAUSDT"): {"bid": "101", "ask": "101"},
+    }))
+
+    row = builder.build([_position()], [_opportunity()], BotSettings())[0]
+
+    assert row.estimated_open_fee == Decimal("0.1505")
+    assert row.estimated_close_fee == Decimal("0.1505")
+
+
 class _TickerCache:
     def __init__(self, tickers):
         self.tickers = tickers
@@ -61,6 +73,9 @@ class _Builder(CashCarryPositionBuilder):
                 "add_count": 0,
             }
         }
+
+    def _taker_fee(self, exchange, market_type, symbol):
+        return Decimal("0.001") if market_type == "spot" else Decimal("0.0005")
 
 
 def _position() -> PositionSnapshot:

@@ -2,6 +2,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from app.core.models import BotSettings, ExchangeName
+from app.services.account_fee_rates import clear_account_fee_cache
 from app.services.asset_identity import MarketAsset
 from app.services.cash_carry_fast_refresh import CashCarryFastRefresher
 from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION
@@ -176,6 +177,24 @@ def test_cash_carry_v3_entry_floor_caps_legacy_percent_for_frequency() -> None:
     )
 
     assert entry_net_floor(settings) == Decimal("1.20")
+
+
+def test_cash_carry_scanner_overrides_public_fee_with_account_fee() -> None:
+    clear_account_fee_cache()
+    scanner = _scanner()
+    markets = {
+        "ABCUSDT": TradeMarket(
+            "ABCUSDT",
+            "ABC/USDT",
+            Decimal("0.002"),
+            MarketAsset("ABC", "ABC"),
+        )
+    }
+
+    scanner._apply_account_taker_fee_rates(markets, _FeeExchange({"ABC/USDT": {"taker": "0.001"}}), ExchangeName.GATE, "spot", [])
+
+    assert markets["ABCUSDT"].taker_fee == Decimal("0.001")
+    clear_account_fee_cache()
 
 
 def test_cash_carry_blocks_symbol_with_loss_history(tmp_path) -> None:
@@ -425,6 +444,16 @@ class _ticker_cache:
         if market_type == "spot":
             return {"ask": "100", "quoteVolume": "1000000"}
         return {"bid": "101.5", "quoteVolume": "1000000"}
+
+
+class _FeeExchange:
+    has = {"fetchTradingFees": True}
+
+    def __init__(self, fees) -> None:
+        self.fees = fees
+
+    def fetch_trading_fees(self):
+        return self.fees
 
 
 class _BookExchange:

@@ -7,6 +7,7 @@ from typing import Any
 
 from app.core.market_math import FEE_RATES, q
 from app.core.models import BotSettings, CashCarryOpportunity, CashCarryPositionRow, ExchangeName, PositionSnapshot
+from app.services.account_fee_rates import account_taker_fee_map, cached_account_taker_fee
 from app.services.exchange_factory import build_ccxt_exchange
 from app.services.live_market_types import SPOT_EXCHANGE_IDS, SWAP_EXCHANGE_IDS
 from app.services.live_read import decimal_from
@@ -75,7 +76,7 @@ class CashCarryPositionBuilder:
         perp_pnl = self._perp_unrealized(position.side, perp_base, position.entry_price, perp_mark, position.unrealized_pnl)
         funding_rate_pct = price.funding_rate_pct if price else Decimal("0")
         funding_income = self._funding_income(position.side, perp_base, perp_mark, funding_rate_pct)
-        open_fee, close_fee = self._fees(exchange, spot_quantity, spot_entry, spot_price, perp_base, position.entry_price, perp_mark)
+        open_fee, close_fee = self._fees(exchange, f"{base}/USDT", swap_symbol, spot_quantity, spot_entry, spot_price, perp_base, position.entry_price, perp_mark)
         net = spot_pnl + perp_pnl + funding_income - open_fee - close_fee
         return CashCarryPositionRow(
             exchange=exchange,
@@ -124,7 +125,7 @@ class CashCarryPositionBuilder:
         spot_pnl = (spot_price - spot_entry) * spot_quantity
         perp_base = Decimal("0")
         funding_rate_pct = price.funding_rate_pct if price else Decimal("0")
-        open_fee, close_fee = self._fees(exchange, spot_quantity, spot_entry, spot_price, perp_base, perp_entry, perp_mark)
+        open_fee, close_fee = self._fees(exchange, f"{base}/USDT", swap_symbol, spot_quantity, spot_entry, spot_price, perp_base, perp_entry, perp_mark)
         net = spot_pnl - open_fee - close_fee
         return CashCarryPositionRow(
             exchange=exchange,
@@ -278,6 +279,8 @@ class CashCarryPositionBuilder:
     def _fees(
         self,
         exchange: ExchangeName,
+        spot_symbol: str,
+        swap_symbol: str,
         spot_quantity: Decimal,
         spot_entry: Decimal,
         spot_price: Decimal,
@@ -285,10 +288,19 @@ class CashCarryPositionBuilder:
         perp_entry: Decimal,
         perp_mark: Decimal,
     ) -> tuple[Decimal, Decimal]:
-        rate = FEE_RATES[exchange]
-        open_fee = (spot_quantity * spot_entry + perp_base * perp_entry) * rate
-        close_fee = (spot_quantity * spot_price + perp_base * perp_mark) * rate
+        spot_rate = self._taker_fee(exchange, "spot", spot_symbol)
+        swap_rate = self._taker_fee(exchange, "swap", swap_symbol)
+        open_fee = spot_quantity * spot_entry * spot_rate + perp_base * perp_entry * swap_rate
+        close_fee = spot_quantity * spot_price * spot_rate + perp_base * perp_mark * swap_rate
         return open_fee, close_fee
+
+    def _taker_fee(self, exchange: ExchangeName, market_type: str, symbol: str) -> Decimal:
+        cached = cached_account_taker_fee(exchange, market_type, symbol)
+        if cached is not None and cached > 0:
+            return cached
+        exchange_obj = self._exchange(exchange, market_type)
+        fee_map = account_taker_fee_map(exchange, market_type, exchange_obj)
+        return fee_map.get(symbol) or FEE_RATES[exchange]
 
     def _funding_income(self, side: str, perp_base: Decimal, mark_price: Decimal, funding_rate_pct: Decimal) -> Decimal:
         direction = Decimal("1") if side == "short" else Decimal("-1")

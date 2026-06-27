@@ -8,6 +8,7 @@ from app.core.market_math import FEE_RATES, q
 from app.core.models import BotSettings, CashCarryOpportunity, DataSource, ExchangeName
 from app.core.pnl import calculate_spread_pct
 from app.services.asset_identity import MarketAsset, asset_from_market, local_identity_reasons
+from app.services.account_fee_rates import account_taker_fee_map
 from app.services.cash_carry_depth_estimator import estimate_max_safe_notional
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_quality import cash_carry_candidate_sort_key, cash_carry_quality_score, entry_basis_risk_reasons, entry_quality_reasons, estimated_entry_net_profit, convergence_basis_profit
@@ -110,6 +111,8 @@ class CashCarryScanner:
         spots = self._extract_markets(spot_exchange.load_markets(), "spot")
         swaps = self._extract_markets(swap_exchange.load_markets(), "swap")
         self._apply_spot_transfer_statuses(spots, spot_exchange, exchange_name, issues)
+        self._apply_account_taker_fee_rates(spots, spot_exchange, exchange_name, "spot", issues)
+        self._apply_account_taker_fee_rates(swaps, swap_exchange, exchange_name, "swap", issues)
         self._market_cache[exchange_name] = (now, spots, swaps)
         return spots, swaps
 
@@ -131,6 +134,22 @@ class CashCarryScanner:
             pre_market = self._is_pre_market(market) if market_type == "swap" else False
             result[symbol] = TradeMarket(symbol=symbol, ccxt_symbol=market["symbol"], taker_fee=taker, asset=asset_from_market(market), is_pre_market=pre_market)
         return result
+
+    def _apply_account_taker_fee_rates(
+        self,
+        markets: dict[str, TradeMarket],
+        exchange,
+        exchange_name: ExchangeName,
+        market_type: str,
+        issues: list[str],
+    ) -> None:
+        fee_map = account_taker_fee_map(exchange_name, market_type, exchange, issues)
+        if not fee_map:
+            return
+        for symbol, market in list(markets.items()):
+            taker_fee = fee_map.get(market.ccxt_symbol)
+            if taker_fee is not None and taker_fee > 0:
+                markets[symbol] = replace(market, taker_fee=taker_fee)
 
     def _apply_spot_transfer_statuses(
         self,

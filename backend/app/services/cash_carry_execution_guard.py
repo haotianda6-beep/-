@@ -67,6 +67,8 @@ def forward_close_depth_guard(
     perp_entry_price: Decimal,
     fee_rate: Decimal,
     min_net_profit: Decimal,
+    spot_fee_rate: Decimal | None = None,
+    swap_fee_rate: Decimal | None = None,
 ) -> DepthGuardResult:
     try:
         spot_book = spot.fetch_order_book(spot_symbol, limit=20)
@@ -82,8 +84,10 @@ def forward_close_depth_guard(
             return DepthGuardResult(False, "合约卖盘深度不足，无法按持仓数量平空")
         basis = (perp_avg - spot_avg) / spot_avg * Decimal("100") if spot_avg > 0 else Decimal("0")
         gross_pnl = (spot_avg - spot_entry_price) * spot_quantity + (perp_entry_price - perp_avg) * perp_base_quantity
-        open_fee = (spot_quantity * spot_entry_price + perp_base_quantity * perp_entry_price) * fee_rate
-        close_fee = (spot_quantity * spot_avg + perp_base_quantity * perp_avg) * fee_rate
+        spot_rate = spot_fee_rate if spot_fee_rate is not None else fee_rate
+        swap_rate = swap_fee_rate if swap_fee_rate is not None else fee_rate
+        open_fee = spot_quantity * spot_entry_price * spot_rate + perp_base_quantity * perp_entry_price * swap_rate
+        close_fee = spot_quantity * spot_avg * spot_rate + perp_base_quantity * perp_avg * swap_rate
         net_profit = gross_pnl - open_fee - close_fee
         if net_profit < min_net_profit:
             return DepthGuardResult(

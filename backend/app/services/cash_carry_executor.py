@@ -8,6 +8,7 @@ from app.core.env import ENV_PATH, env_bool
 from app.core.market_math import FEE_RATES
 from app.core.market_math import q
 from app.core.models import BotSettings, CashCarryOpportunity, CashCarryPositionRow, ExchangeName
+from app.services.account_fee_rates import account_taker_fee_map, cached_account_taker_fee
 from app.services.cash_carry_add_executor import evaluate_cash_carry_add
 from app.services.cash_carry_close_policy import CashCarryCloseDecision, cash_carry_close_decision
 from app.services.cash_carry_execution_guard import forward_close_depth_guard, forward_open_depth_guard
@@ -255,6 +256,8 @@ class CashCarryExecutor:
                 self._close_guard_perp_entry(record, live),
                 self._fee_rate(record.exchange),
                 guard_floor,
+                spot_fee_rate=self._taker_fee(record.exchange, "spot", spot_symbol),
+                swap_fee_rate=self._taker_fee(record.exchange, "swap", swap_symbol),
             )
             if not guard.ok:
                 return self.state.remember(ExecutionResult(record.id, "blocked_by_depth", guard.reason, steps))
@@ -736,6 +739,15 @@ class CashCarryExecutor:
 
     def _fee_rate(self, exchange: ExchangeName) -> Decimal:
         return FEE_RATES.get(ExchangeName(exchange), Decimal("0.0006"))
+
+    def _taker_fee(self, exchange: ExchangeName, market_type: str, symbol: str) -> Decimal:
+        exchange = ExchangeName(exchange)
+        cached = cached_account_taker_fee(exchange, market_type, symbol)
+        if cached is not None and cached > 0:
+            return cached
+        exchange_obj = self._exchange(exchange, market_type)
+        fee_map = account_taker_fee_map(exchange, market_type, exchange_obj)
+        return fee_map.get(symbol) or self._fee_rate(exchange)
 
     def _close_profit_floor(self, settings: BotSettings | None, reason: str = "") -> Decimal:
         if not settings:
