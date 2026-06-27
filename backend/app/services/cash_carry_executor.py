@@ -12,7 +12,7 @@ from app.services.account_fee_rates import account_taker_fee_map, cached_account
 from app.services.cash_carry_add_executor import evaluate_cash_carry_add
 from app.services.cash_carry_close_policy import CashCarryCloseDecision, cash_carry_close_decision
 from app.services.cash_carry_execution_guard import forward_close_depth_guard, forward_open_depth_guard
-from app.services.cash_carry_execution_models import CashCarryPosition
+from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION, CashCarryPosition
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_reconciler import build_cash_carry_external_perp_close_history, build_cash_carry_history
 from app.services.cash_carry_quality import close_execution_buffer
@@ -996,7 +996,7 @@ class CashCarryExecutor:
         if live.basis_pct > settings.cash_carry_close_basis_pct:
             return None
         max_loss = settings.cash_carry_recovery_exit_max_loss_usdt
-        max_intervals = settings.cash_carry_max_recovery_funding_intervals
+        max_intervals = self._turnover_recovery_interval_limit(settings)
         if max_loss <= 0 or max_intervals <= 0:
             return None
         loss = abs(live.current_net_profit)
@@ -1009,7 +1009,7 @@ class CashCarryExecutor:
         replacement_required_net = loss + close_execution_buffer(settings) + max(Decimal("0"), funding_income)
         replacement = self._replacement_opportunity(record, rows, replacement_required_net)
         if replacement is None:
-            return None
+            return self._legacy_slot_release_decision(record, live, loss, funding_income, needed_intervals, max_intervals, settings)
         if funding_income <= 0:
             return CashCarryCloseDecision(
                 True,
@@ -1018,6 +1018,34 @@ class CashCarryExecutor:
         return CashCarryCloseDecision(
             True,
             f"V3亏损切换 {live.current_net_profit} USDT；按当前资金费约需 {needed_intervals:.1f} 期恢复，超过 {max_intervals} 期；同所替代机会 {replacement.symbol} 预估净利 {replacement.estimated_net_profit} USDT",
+        )
+
+    def _legacy_slot_release_decision(
+        self,
+        record: CashCarryPosition,
+        live: CashCarryPositionRow,
+        loss: Decimal,
+        funding_income: Decimal,
+        needed_intervals: Decimal | None,
+        max_intervals: Decimal,
+        settings: BotSettings,
+    ) -> CashCarryCloseDecision | None:
+        if record.strategy_version == CASH_CARRY_RULESET_VERSION:
+            return None
+        age_seconds = (datetime.now(timezone.utc) - self._aware_opened_at(record)).total_seconds()
+        if age_seconds < 24 * 60 * 60:
+            return None
+        cap = self._dead_release_loss_cap(settings)
+        if loss > cap:
+            return None
+        if funding_income > 0 and needed_intervals is not None:
+            return CashCarryCloseDecision(
+                True,
+                f"旧规则低效仓位释放 {live.current_net_profit} USDT；基差已收敛，按当前资金费约需 {needed_intervals:.1f} 期恢复，超过周转上限 {max_intervals} 期，释放交易所槽位",
+            )
+        return CashCarryCloseDecision(
+            True,
+            f"旧规则低效仓位释放 {live.current_net_profit} USDT；基差已收敛且资金费无法覆盖，释放交易所槽位",
         )
 
     def _recovery_funding_income(self, live: CashCarryPositionRow, settings: BotSettings) -> Decimal:

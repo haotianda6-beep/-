@@ -4,6 +4,7 @@ from decimal import Decimal
 import pytest
 
 from app.core.models import BotSettings, CashCarryOpportunity, CashCarryPositionRow, DataSource, ExchangeName
+from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION
 from app.services.cash_carry_executor import CashCarryExecutor
 from app.services.order_sizing import contract_order_amount
 from app.services.execution_models import ExecutionStep
@@ -715,6 +716,46 @@ def test_cash_carry_loss_exit_waits_without_replacement(tmp_path) -> None:
     assert executor.swap.orders == []
 
 
+def test_cash_carry_legacy_converged_small_loss_releases_slot_without_replacement(tmp_path) -> None:
+    state = _state_with_position(tmp_path, status="open")
+    executor = _RecordingExecutor(state)
+    settings = BotSettings(
+        manual_confirm_required=False,
+        cash_carry_auto_close_enabled=True,
+        cash_carry_close_basis_pct=Decimal("0.2"),
+        order_notional_usdt=Decimal("100"),
+        take_profit_usdt=Decimal("3"),
+        cash_carry_target_daily_trades=10,
+    )
+
+    result = executor.evaluate_close([], settings, [_position_row(net="-0.8", basis="0.1", funding="0.1")])
+
+    assert result is not None
+    assert result.status == "close_submitted"
+    assert "旧规则低效仓位释放" in result.reason
+    assert executor.spot.orders == [{"id": "spot-close", "symbol": "ABC/USDT", "side": "sell", "amount": 1.0}]
+    assert executor.swap.orders == [{"id": "swap-close", "symbol": "ABC/USDT:USDT", "side": "buy", "amount": 10000.0, "params": {"reduceOnly": True}}]
+
+
+def test_cash_carry_v3_converged_small_loss_waits_without_replacement(tmp_path) -> None:
+    state = _state_with_position(tmp_path, status="open", strategy_version=CASH_CARRY_RULESET_VERSION)
+    executor = _RecordingExecutor(state)
+    settings = BotSettings(
+        manual_confirm_required=False,
+        cash_carry_auto_close_enabled=True,
+        cash_carry_close_basis_pct=Decimal("0.2"),
+        order_notional_usdt=Decimal("100"),
+        take_profit_usdt=Decimal("3"),
+        cash_carry_target_daily_trades=10,
+    )
+
+    result = executor.evaluate_close([], settings, [_position_row(net="-0.8", basis="0.1", funding="0.1")])
+
+    assert result is None
+    assert executor.spot.orders == []
+    assert executor.swap.orders == []
+
+
 def test_cash_carry_loss_exit_switches_only_when_replacement_covers_loss(tmp_path) -> None:
     state = _state_with_position(tmp_path)
     executor = _RecordingExecutor(state)
@@ -820,10 +861,11 @@ def _position_row(net: str, basis: str, funding: str = "0.01") -> CashCarryPosit
     )
 
 
-def _state_with_position(tmp_path, status: str = "mismatch"):
+def _state_with_position(tmp_path, status: str = "mismatch", strategy_version: str | None = None):
     state = tmp_path / "state.json"
+    version = f', "strategy_version":"{strategy_version}"' if strategy_version else ""
     state.write_text(
-        f'{{"positions":[{{"id":"pos-1","exchange":"GATE","symbol":"ABCUSDT","base_asset":"ABC","quantity":"1","spot_entry_price":"100","perp_entry_price":"101","spot_order_id":"s1","perp_order_id":"p1","opened_at":"2026-06-09T00:00:00+00:00","status":"{status}"}}]}}',
+        f'{{"positions":[{{"id":"pos-1","exchange":"GATE","symbol":"ABCUSDT","base_asset":"ABC","quantity":"1","spot_entry_price":"100","perp_entry_price":"101","spot_order_id":"s1","perp_order_id":"p1","opened_at":"2026-06-09T00:00:00+00:00","status":"{status}"{version}}}]}}',
         encoding="utf-8",
     )
     return state
