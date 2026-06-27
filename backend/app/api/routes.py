@@ -332,6 +332,7 @@ def _lightweight_snapshot() -> RealtimeSnapshot:
             [],
             cash_positions,
             positions,
+            cash_candidates,
         )
     )
     return RealtimeSnapshot(

@@ -1,7 +1,7 @@
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 
-from app.core.models import BotSettings, CashCarryPositionRow, ExchangeName, PositionSnapshot
+from app.core.models import BotSettings, CashCarryOpportunity, CashCarryPositionRow, DataSource, ExchangeName, PositionSnapshot
 from app.services.arbitrage_engine import ArbitrageEngine
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_state import CashCarryStateStore
@@ -120,6 +120,41 @@ def test_cash_carry_v2_performance_event_reports_win_rate(tmp_path) -> None:
     assert "胜率 50.00%" in event.detail
 
 
+def test_cash_carry_frequency_event_explains_why_no_ready_opportunity(tmp_path) -> None:
+    state = tmp_path / "cash_carry_execution_state.json"
+    state.write_text(
+        '{"positions":['
+        + ",".join(
+            f'{{"exchange":"GATE","symbol":"OLD{i}USDT","status":"closed","history":{{"actual_net_profit":"-1"}}}}'
+            for i in range(10)
+        )
+        + "]}",
+        encoding="utf-8",
+    )
+    engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
+    engine.cash_carry_history_quality = CashCarryHistoryQuality(state)
+    candidates = [
+        _candidate("DFDVXUSDT", Decimal("1.9"), ["V2历史胜率保护：净利预估 1.9000U < 动态安全垫 6.0000U"]),
+        _candidate("LOWUSDT", Decimal("-0.2"), ["合约溢价未达 0.8%", "资金费率不是正数，空头不能收资金费"]),
+    ]
+
+    events = engine.get_risk_events(BotSettings(order_notional_usdt=Decimal("300")), cash_carry_candidates=candidates)
+
+    event = next(item for item in events if item.id == "cash-carry-frequency-diagnostic")
+    assert event.title == "正向期现频率诊断"
+    assert "当前候选 2 个，可开仓 0 个" in event.detail
+    assert "DFDVXUSDT" in event.detail
+    assert "净利不足1个" in event.detail
+
+
+def test_cash_carry_frequency_event_is_hidden_when_ready_opportunity_exists(tmp_path) -> None:
+    engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
+
+    events = engine.get_risk_events(BotSettings(), cash_carry_candidates=[_candidate("READYUSDT", Decimal("3"), [])])
+
+    assert all(item.id != "cash-carry-frequency-diagnostic" for item in events)
+
+
 def test_cash_carry_turnover_event_warns_for_stale_unprofitable_position(tmp_path) -> None:
     opened_at = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=7)
     state = tmp_path / "cash_carry_execution_state.json"
@@ -170,5 +205,30 @@ def _cash_position() -> CashCarryPositionRow:
         current_net_profit=Decimal("1.83"),
         quantity_gap=Decimal("-0.002195"),
         basis_pct=Decimal("0.1"),
+        updated_at=now,
+    )
+
+
+def _candidate(symbol: str, net: Decimal, reasons: list[str]) -> CashCarryOpportunity:
+    now = datetime.now(timezone.utc)
+    return CashCarryOpportunity(
+        exchange=ExchangeName.GATE,
+        symbol=symbol,
+        spot_price=Decimal("100"),
+        perp_price=Decimal("101"),
+        basis_pct=Decimal("1"),
+        funding_rate_pct=Decimal("0.01"),
+        quantity=Decimal("3"),
+        spot_volume_24h_usdt=Decimal("1000000"),
+        perp_volume_24h_usdt=Decimal("1000000"),
+        estimated_basis_profit=Decimal("2.4"),
+        estimated_funding_income=Decimal("0.03"),
+        estimated_open_close_fee=Decimal("0.5"),
+        estimated_net_profit=net,
+        notional_usdt=Decimal("300"),
+        margin_required_usdt=Decimal("100"),
+        leverage=Decimal("3"),
+        blocked_reasons=reasons,
+        data_source=DataSource.LIVE,
         updated_at=now,
     )

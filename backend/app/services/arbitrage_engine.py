@@ -18,6 +18,7 @@ from app.core.models import (
 from app.core.env import ai_status, credential_statuses, env_bool
 from app.services.ai_monitor import DeepSeekMonitor
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
+from app.services.cash_carry_frequency import cash_carry_frequency_event
 from app.services.cash_carry_positions import CashCarryPositionBuilder
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES
 from app.services.cash_carry_scanner import CashCarryScanner
@@ -79,6 +80,7 @@ class ArbitrageEngine:
             live_runtime.mt4_spread_issues if live_runtime else [],
             cash_positions,
             positions,
+            cash_candidates,
         )
         return RealtimeSnapshot(
             balances=balances,
@@ -177,6 +179,7 @@ class ArbitrageEngine:
         mt4_spread_issues: list[str] | None = None,
         cash_carry_positions: list[CashCarryPositionRow] | None = None,
         live_positions: list[PositionSnapshot] | None = None,
+        cash_carry_candidates: list | None = None,
     ) -> list[RiskEvent]:
         now = datetime.now(timezone.utc)
         events = []
@@ -197,6 +200,9 @@ class ArbitrageEngine:
         for index, issue in enumerate(mt4_spread_issues or []):
             events.append(RiskEvent(id=f"mt4-spread-issue-{index}", severity="warning", title="MT4 价差扫描异常", detail=issue, action="检查 MT4 插件报价推送、品种映射和交易所合约行情接口。", created_at=now))
         events.append(self._cash_carry_v2_performance_event(settings, now))
+        frequency_event = cash_carry_frequency_event(settings, cash_carry_candidates or [], self.cash_carry_history_quality, now)
+        if frequency_event:
+            events.append(frequency_event)
         events.extend(self._cash_carry_turnover_events(settings, cash_carry_positions or [], now))
         events.extend(self._liquidation_distance_events(live_positions or [], now))
         events.extend(self._cash_carry_add_config_events(settings, now))
