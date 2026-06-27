@@ -41,9 +41,12 @@ def cash_carry_frequency_event(
     ]
     if nearest:
         gap = max(Decimal("0"), gate.min_net_profit - nearest.estimated_net_profit)
+        required_basis = _required_entry_basis_pct(nearest, settings, gate.min_net_profit)
         detail_parts.append(
             f"离开仓最近的是 {nearest.exchange} {nearest.symbol}：预估净利 {nearest.estimated_net_profit:.4f}U，还差 {gap:.4f}U"
         )
+        if required_basis is not None:
+            detail_parts.append(f"该币按当前本金至少约需基差 {required_basis:.4f}% 才能覆盖安全垫")
     if memory_summary and memory_summary.best:
         best_gap = max(Decimal("0"), gate.min_net_profit - memory_summary.best.estimated_net_profit)
         detail_parts.append(
@@ -82,3 +85,11 @@ def _nearest_to_entry_gate(candidates: list[CashCarryOpportunity]) -> CashCarryO
         if not any(reason.startswith(("开仓基差异常过高", "历史发生过强平", "历史累计真实净利")) for reason in item.blocked_reasons)
     ]
     return max(filtered or candidates, key=lambda item: item.estimated_net_profit, default=None)
+
+
+def _required_entry_basis_pct(item: CashCarryOpportunity, settings: BotSettings, min_net_profit: Decimal) -> Decimal | None:
+    notional = item.notional_usdt or settings.order_notional_usdt
+    if notional <= 0:
+        return None
+    required_tradable_pct = (min_net_profit - item.estimated_funding_income + item.estimated_open_close_fee) / notional * Decimal("100")
+    return max(settings.cash_carry_min_basis_pct, settings.cash_carry_close_basis_pct + required_tradable_pct)

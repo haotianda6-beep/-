@@ -5,7 +5,14 @@ from app.core.market_math import q
 from app.core.models import BotSettings, CashCarryOpportunity, ExchangeName
 from app.core.pnl import calculate_spread_pct
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
-from app.services.cash_carry_quality import convergence_basis_profit, entry_basis_risk_reasons, entry_quality_reasons, estimated_entry_net_profit
+from app.services.cash_carry_quality import (
+    cash_carry_candidate_sort_key,
+    cash_carry_quality_score,
+    convergence_basis_profit,
+    entry_basis_risk_reasons,
+    entry_quality_reasons,
+    estimated_entry_net_profit,
+)
 from app.services.live_market_types import CashCarryScan
 from app.services.live_read import decimal_from
 from app.services.market_format import quote_volume
@@ -24,7 +31,7 @@ class CashCarryFastRefresher:
             return CashCarryScan(issues=scan.issues)
         refreshed = [self._refresh_one(item, settings) for item in items]
         opportunities = [item for item in refreshed if not item.blocked_reasons]
-        candidates = sorted(refreshed, key=lambda item: (len(item.blocked_reasons), -item.estimated_net_profit))[:CASH_CARRY_INTERNAL_CANDIDATE_LIMIT]
+        candidates = sorted(refreshed, key=lambda item: self._candidate_sort_key(item, settings))[:CASH_CARRY_INTERNAL_CANDIDATE_LIMIT]
         return CashCarryScan(
             opportunities=sorted(opportunities, key=lambda item: item.estimated_net_profit, reverse=True),
             candidates=candidates,
@@ -145,6 +152,17 @@ class CashCarryFastRefresher:
             seen.add(reason)
             result.append(reason)
         return result
+
+    def _candidate_sort_key(self, item: CashCarryOpportunity, settings: BotSettings):
+        quality = cash_carry_quality_score(
+            settings,
+            item.basis_pct,
+            item.funding_rate_pct / Decimal("100"),
+            min(item.spot_volume_24h_usdt, item.perp_volume_24h_usdt),
+            item.estimated_net_profit,
+            item.max_safe_notional_usdt,
+        )
+        return cash_carry_candidate_sort_key(settings, item.blocked_reasons, item.basis_pct, item.estimated_net_profit, quality)
 
 
 def _symbol_blacklisted(symbol: str, blacklist: list[str]) -> bool:

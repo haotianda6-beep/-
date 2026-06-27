@@ -302,6 +302,31 @@ def test_cash_carry_candidate_sort_demotes_hard_blocked_large_basis() -> None:
     assert ranked[0].symbol == "SOFTUSDT"
 
 
+def test_cash_carry_fast_refresh_uses_v3_candidate_sort() -> None:
+    scanner = _scanner()
+    settings = BotSettings(order_notional_usdt=Decimal("300"))
+    soft = scanner._build_opportunity("ABCUSDT", _data("100.7", "0.0002"), settings)
+    hard = scanner._build_opportunity("ABCUSDT", _data("154", "0.0002"), settings)
+
+    assert soft is not None
+    assert hard is not None
+    soft = soft.model_copy(update={
+        "symbol": "SOFTUSDT",
+        "estimated_net_profit": Decimal("1.8"),
+        "blocked_reasons": ["合约溢价未达 0.8%", "回归到平仓线后的净利预估 1.8000U < 稳定开仓安全垫 2.4000U"],
+    })
+    hard = hard.model_copy(update={
+        "symbol": "HARDUSDT",
+        "estimated_net_profit": Decimal("160"),
+        "blocked_reasons": ["现货/合约最低24h成交量低于 300000U", "开仓基差异常过高 54.0000% > 3.0000%，不追异常盘"],
+    })
+
+    refresher = _fast_refresher()
+    ranked = sorted([hard, soft], key=lambda item: refresher._candidate_sort_key(item, settings))
+
+    assert ranked[0].symbol == "SOFTUSDT"
+
+
 def test_cash_carry_fast_refresh_drops_blacklisted_symbol() -> None:
     scanner = _scanner()
     item = scanner._build_opportunity("ABCUSDT", _data("101", "0.0002"), BotSettings(order_notional_usdt=Decimal("100")))

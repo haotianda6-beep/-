@@ -146,6 +146,7 @@ def test_cash_carry_frequency_event_explains_why_no_ready_opportunity(tmp_path) 
     assert event.title == "正向期现频率诊断"
     assert "当前候选 2 个，可开仓 0 个" in event.detail
     assert "DFDVXUSDT" in event.detail
+    assert "至少约需基差" in event.detail
     assert "净利不足1个" in event.detail
 
 
