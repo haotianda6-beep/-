@@ -11,8 +11,9 @@ from app.services.cash_carry_add_executor import evaluate_cash_carry_add
 from app.services.cash_carry_close_policy import cash_carry_close_decision
 from app.services.cash_carry_execution_guard import forward_close_depth_guard, forward_open_depth_guard
 from app.services.cash_carry_execution_models import CashCarryPosition
+from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_reconciler import build_cash_carry_external_perp_close_history, build_cash_carry_history
-from app.services.cash_carry_quality import entry_net_floor
+from app.services.cash_carry_quality import close_execution_buffer, entry_net_floor
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGE_SET
 from app.services.cash_carry_state import CashCarryStateStore
 from app.services.cash_carry_transfer import transfer_usdt_to_spot
@@ -28,6 +29,7 @@ class CashCarryExecutor:
         root = Path(__file__).resolve().parents[3]
         self.state_path = state_path or root / "config" / "cash_carry_execution_state.json"
         self.state = CashCarryStateStore(self.state_path)
+        self.history_quality = CashCarryHistoryQuality(self.state_path)
 
     def evaluate(
         self,
@@ -59,6 +61,7 @@ class CashCarryExecutor:
             item for item in rows
             if not item.blocked_reasons
             and ExchangeName(item.exchange) in CASH_CARRY_EXCHANGE_SET
+            and not self.history_quality.blocked_reasons(ExchangeName(item.exchange), item.symbol, settings)
             and (item.exchange, item.symbol) not in blocked_keys
             and ExchangeName(item.exchange) not in self.state.active_exchanges()
             and (allowed_open_exchanges is None or ExchangeName(item.exchange) in allowed_open_exchanges)
@@ -644,10 +647,10 @@ class CashCarryExecutor:
 
     def _close_profit_floor(self, settings: BotSettings | None, reason: str = "") -> Decimal:
         if not settings:
-            return Decimal("0.05")
-        base_floor = max(Decimal("0.05"), settings.order_notional_usdt * settings.max_slippage_pct / Decimal("100"))
+            return Decimal("0.5")
+        base_floor = close_execution_buffer(settings)
         if "固定U止盈" in reason and settings.take_profit_usdt > 0:
-            return max(base_floor, settings.take_profit_usdt)
+            return settings.take_profit_usdt + base_floor
         return base_floor
 
     def _close_depth_guard_fields(self, guard, min_net_profit: Decimal) -> dict[str, str]:

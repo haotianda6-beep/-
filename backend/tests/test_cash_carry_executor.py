@@ -92,6 +92,23 @@ def test_cash_carry_executor_blocks_same_exchange_new_symbol(tmp_path) -> None:
     assert executor.evaluate_open([_opportunity("SKYAIUSDT", "3", exchange=ExchangeName.BITGET)], settings) is None
 
 
+def test_cash_carry_executor_blocks_historical_loser_even_if_candidate_is_ready(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(
+        '{"positions":[{"exchange":"GATE","symbol":"ABCUSDT","status":"closed","history":{"actual_net_profit":"-2.1"}}]}',
+        encoding="utf-8",
+    )
+    executor = CashCarryExecutor(state)
+    settings = BotSettings(
+        order_notional_usdt=Decimal("300"),
+        manual_confirm_required=False,
+        cash_carry_auto_open_enabled=True,
+        cash_carry_auto_trade_enabled=False,
+    )
+
+    assert executor.evaluate_open([_opportunity("ABCUSDT", "3", exchange=ExchangeName.GATE)], settings) is None
+
+
 def test_cash_carry_executor_allows_other_exchange_when_one_exchange_is_active(tmp_path) -> None:
     state = tmp_path / "state.json"
     state.write_text(
@@ -334,7 +351,7 @@ def test_cash_carry_fixed_take_profit_requires_depth_profit_above_target(tmp_pat
     assert result is not None
     assert result.status == "blocked_by_depth"
     assert "盘口可成交净利" in result.reason
-    assert "低于平仓安全垫 3.0000 USDT" in result.reason
+    assert "低于平仓安全垫 3.5000 USDT" in result.reason
     assert executor.spot.orders == []
     assert executor.swap.orders == []
 

@@ -5,11 +5,18 @@ from app.core.models import BotSettings
 
 
 ENTRY_NET_FLOOR_PCT = Decimal("0.5")
+CLOSE_EXECUTION_BUFFER_PCT = Decimal("0.2")
 
 
 def entry_net_floor(settings: BotSettings) -> Decimal:
     pct_floor = settings.order_notional_usdt * ENTRY_NET_FLOOR_PCT / Decimal("100")
     return max(settings.min_funding_net_usdt, pct_floor)
+
+
+def close_execution_buffer(settings: BotSettings) -> Decimal:
+    pct_buffer = settings.order_notional_usdt * CLOSE_EXECUTION_BUFFER_PCT / Decimal("100")
+    slippage_buffer = settings.order_notional_usdt * settings.max_slippage_pct / Decimal("100")
+    return max(Decimal("0.5"), pct_buffer, slippage_buffer)
 
 
 def convergence_basis_profit(settings: BotSettings, basis_pct: Decimal) -> Decimal:

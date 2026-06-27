@@ -3,6 +3,7 @@ from decimal import Decimal
 from app.core.models import BotSettings, ExchangeName
 from app.services.asset_identity import MarketAsset
 from app.services.cash_carry_fast_refresh import CashCarryFastRefresher
+from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_scanner import CashCarryExchangeData, CashCarryScanner, TradeMarket
 from app.services.live_market_types import CashCarryScan
 
@@ -123,6 +124,24 @@ def test_cash_carry_blocks_low_stable_net_profit() -> None:
 
     assert item is not None
     assert "稳定开仓安全垫" in " / ".join(item.blocked_reasons)
+
+
+def test_cash_carry_blocks_symbol_with_loss_history(tmp_path) -> None:
+    state = tmp_path / "cash_carry_execution_state.json"
+    state.write_text(
+        '{"positions":[{"exchange":"GATE","symbol":"ABCUSDT","status":"closed","close_reason":"GATE ABCUSDT 合约腿已被交易所强平","history":{"actual_net_profit":"-2.5","external_close_type":"liquidation"}}]}',
+        encoding="utf-8",
+    )
+    scanner = CashCarryScanner(CashCarryHistoryQuality(state))
+    data = _data("101", "0.0002")
+    data.exchange = ExchangeName.GATE
+
+    item = scanner._build_opportunity("ABCUSDT", data, BotSettings(order_notional_usdt=Decimal("300")))
+
+    assert item is not None
+    reasons = " / ".join(item.blocked_reasons)
+    assert "历史发生过强平" in reasons
+    assert "历史累计真实净利 -2.5000U" in reasons
 
 
 def test_cash_carry_fast_refresh_drops_blacklisted_symbol() -> None:

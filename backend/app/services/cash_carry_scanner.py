@@ -9,6 +9,7 @@ from app.core.models import BotSettings, CashCarryOpportunity, DataSource, Excha
 from app.core.pnl import calculate_spread_pct
 from app.services.asset_identity import MarketAsset, asset_from_market, local_identity_reasons
 from app.services.cash_carry_depth_estimator import estimate_max_safe_notional
+from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_quality import entry_quality_reasons, estimated_entry_net_profit, convergence_basis_profit
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES
 from app.services.exchange_factory import build_ccxt_exchange
@@ -42,9 +43,10 @@ class CashCarryExchangeData:
 
 
 class CashCarryScanner:
-    def __init__(self) -> None:
+    def __init__(self, history_quality: CashCarryHistoryQuality | None = None) -> None:
         self._market_cache: dict[ExchangeName, tuple[datetime, dict[str, TradeMarket], dict[str, TradeMarket]]] = {}
         self._funding_cache: dict[ExchangeName, tuple[datetime, dict[str, Decimal]]] = {}
+        self.history_quality = history_quality or CashCarryHistoryQuality()
 
     def clear_caches(self) -> None:
         self._market_cache = {}
@@ -258,6 +260,7 @@ class CashCarryScanner:
         estimated_net_profit = estimated_entry_net_profit(settings, basis_pct, funding_rate, fees)
         reasons = self._blocked_reasons(basis_pct, funding_rate, spot_volume, perp_volume, settings)
         reasons.extend(entry_quality_reasons(estimated_net_profit, settings))
+        reasons.extend(self.history_quality.blocked_reasons(data.exchange, symbol, settings))
         reasons.extend(local_identity_reasons(data.exchange.value, data.swap_markets[symbol].asset, data.spot_markets[symbol].asset))
         if self._pre_market_spot_transfer_closed(data.swap_markets[symbol], data.spot_markets[symbol]):
             reasons.append("预上市合约且现货充提均关闭，禁止自动开仓")
