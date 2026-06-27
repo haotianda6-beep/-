@@ -52,8 +52,7 @@ class CashCarrySignalTracker:
         if not ready:
             return ["信号持续不足 0.0s/0样本，等待连续满足开仓条件"]
         duration = Decimal(str(ready[-1].at - ready[0].at))
-        min_seconds = settings.cash_carry_signal_min_seconds
-        min_samples = settings.cash_carry_signal_min_samples
+        min_seconds, min_samples = self._effective_requirements(ready, settings)
         if len(ready) < min_samples or duration < min_seconds:
             return [f"信号持续不足 {duration:.1f}s/{len(ready)}样本 < {min_seconds}s/{min_samples}样本"]
         max_swing = settings.cash_carry_signal_max_basis_swing_pct
@@ -67,6 +66,15 @@ class CashCarrySignalTracker:
             return [percentile_reason]
         return []
 
+    def _effective_requirements(self, ready: list[_SignalSample], settings: BotSettings) -> tuple[Decimal, int]:
+        min_seconds = settings.cash_carry_signal_min_seconds
+        min_samples = settings.cash_carry_signal_min_samples
+        if not ready or min_seconds <= Decimal("10") or settings.order_notional_usdt <= 0:
+            return min_seconds, min_samples
+        if not self._has_profit_cushion(ready[-1].estimated_net_profit, settings):
+            return min_seconds, min_samples
+        return max(Decimal("10"), min_seconds / Decimal("2")), max(min_samples, 5)
+
     def _basis_percentile_reason(self, samples: deque[_SignalSample], settings: BotSettings) -> str | None:
         min_samples = settings.cash_carry_signal_min_history_samples
         if min_samples <= 0 or settings.cash_carry_signal_min_basis_percentile <= 0:
@@ -76,9 +84,21 @@ class CashCarrySignalTracker:
         current_basis = samples[-1].basis_pct
         lower_or_equal = sum(1 for item in samples if item.basis_pct <= current_basis)
         percentile = Decimal(lower_or_equal) / Decimal(len(samples)) * Decimal("100")
-        if percentile < settings.cash_carry_signal_min_basis_percentile:
-            return f"基差分位不足 {percentile:.2f}% < {settings.cash_carry_signal_min_basis_percentile}%，等待相对高位基差"
+        required_percentile = self._effective_basis_percentile(samples[-1], settings)
+        if percentile < required_percentile:
+            return f"基差分位不足 {percentile:.2f}% < {required_percentile}%，等待相对高位基差"
         return None
+
+    def _effective_basis_percentile(self, sample: _SignalSample, settings: BotSettings) -> Decimal:
+        configured = settings.cash_carry_signal_min_basis_percentile
+        if configured <= Decimal("70") or not self._has_profit_cushion(sample.estimated_net_profit, settings):
+            return configured
+        return Decimal("70")
+
+    def _has_profit_cushion(self, estimated_net_profit: Decimal, settings: BotSettings) -> bool:
+        if settings.order_notional_usdt <= 0:
+            return False
+        return estimated_net_profit >= settings.order_notional_usdt * Decimal("0.35") / Decimal("100")
 
     def _ready_tail(self, samples: deque[_SignalSample]) -> list[_SignalSample]:
         ready = []

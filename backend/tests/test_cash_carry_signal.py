@@ -82,6 +82,71 @@ def test_cash_carry_signal_blocks_low_basis_percentile() -> None:
     assert "基差分位不足" in " / ".join(result.candidates[0].blocked_reasons)
 
 
+def test_cash_carry_signal_shortens_wait_when_net_cushion_is_high() -> None:
+    tracker = CashCarrySignalTracker()
+    settings = _settings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_signal_min_seconds=Decimal("20"),
+        cash_carry_signal_min_samples=3,
+    )
+
+    for offset in [0, 3, 6, 9, 11]:
+        result = tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal("1.2"), net=Decimal("1.1"))]), settings, now=100.0 + offset)
+
+    assert result.opportunities
+    assert result.opportunities[0].symbol == "ABCUSDT"
+
+
+def test_cash_carry_signal_keeps_full_wait_when_net_cushion_is_thin() -> None:
+    tracker = CashCarrySignalTracker()
+    settings = _settings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_signal_min_seconds=Decimal("20"),
+        cash_carry_signal_min_samples=3,
+    )
+
+    for offset in [0, 3, 6, 9, 11]:
+        result = tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal("1.2"), net=Decimal("0.9"))]), settings, now=100.0 + offset)
+
+    assert result.opportunities == []
+    assert "信号持续不足" in " / ".join(result.candidates[0].blocked_reasons)
+
+
+def test_cash_carry_signal_relaxes_percentile_when_net_cushion_is_high() -> None:
+    tracker = CashCarrySignalTracker()
+    settings = _settings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_signal_min_seconds=Decimal("0"),
+        cash_carry_signal_min_samples=1,
+        cash_carry_signal_max_basis_swing_pct=Decimal("0"),
+        cash_carry_signal_min_history_samples=10,
+        cash_carry_signal_min_basis_percentile=Decimal("75"),
+    )
+
+    for offset, basis in enumerate([Decimal("1"), Decimal("2"), Decimal("3"), Decimal("4"), Decimal("5"), Decimal("6"), Decimal("8"), Decimal("9"), Decimal("10"), Decimal("6")]):
+        result = tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", basis, net=Decimal("1.1"))]), settings, now=100.0 + offset)
+
+    assert result.opportunities
+
+
+def test_cash_carry_signal_keeps_percentile_when_net_cushion_is_thin() -> None:
+    tracker = CashCarrySignalTracker()
+    settings = _settings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_signal_min_seconds=Decimal("0"),
+        cash_carry_signal_min_samples=1,
+        cash_carry_signal_max_basis_swing_pct=Decimal("0"),
+        cash_carry_signal_min_history_samples=10,
+        cash_carry_signal_min_basis_percentile=Decimal("75"),
+    )
+
+    for offset, basis in enumerate([Decimal("1"), Decimal("2"), Decimal("3"), Decimal("4"), Decimal("5"), Decimal("6"), Decimal("8"), Decimal("9"), Decimal("10"), Decimal("6")]):
+        result = tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", basis, net=Decimal("0.9"))]), settings, now=100.0 + offset)
+
+    assert result.opportunities == []
+    assert "基差分位不足 70.00% < 75%" in " / ".join(result.candidates[0].blocked_reasons)
+
+
 def test_cash_carry_signal_allows_high_basis_percentile() -> None:
     tracker = CashCarrySignalTracker()
     settings = _settings(
@@ -107,7 +172,7 @@ def _settings(**overrides) -> BotSettings:
     return BotSettings(**{**defaults, **overrides})
 
 
-def _candidate(symbol: str, basis: Decimal, reasons: list[str] | None = None) -> CashCarryOpportunity:
+def _candidate(symbol: str, basis: Decimal, reasons: list[str] | None = None, net: Decimal = Decimal("3")) -> CashCarryOpportunity:
     return CashCarryOpportunity(
         exchange=ExchangeName.GATE,
         symbol=symbol,
@@ -121,7 +186,7 @@ def _candidate(symbol: str, basis: Decimal, reasons: list[str] | None = None) ->
         estimated_basis_profit=Decimal("3"),
         estimated_funding_income=Decimal("0.03"),
         estimated_open_close_fee=Decimal("0.5"),
-        estimated_net_profit=Decimal("3"),
+        estimated_net_profit=net,
         notional_usdt=Decimal("300"),
         margin_required_usdt=Decimal("100"),
         leverage=Decimal("3"),
