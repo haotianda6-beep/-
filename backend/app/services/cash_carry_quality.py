@@ -76,7 +76,8 @@ def estimated_entry_net_profit(
     funding_rate: Decimal,
     open_close_fee: Decimal,
 ) -> Decimal:
-    return convergence_basis_profit(settings, basis_pct) + settings.order_notional_usdt * funding_rate - open_close_fee
+    _ = funding_rate
+    return convergence_basis_profit(settings, basis_pct) - open_close_fee
 
 
 def entry_quality_reasons(estimated_net_profit: Decimal, settings: BotSettings) -> list[str]:

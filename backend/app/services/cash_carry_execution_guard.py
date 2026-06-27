@@ -25,6 +25,7 @@ def forward_open_depth_guard(
     funding_income: Decimal = Decimal("0"),
     close_basis_pct: Decimal = Decimal("0"),
 ) -> DepthGuardResult:
+    _ = funding_income
     try:
         spot_book = spot.fetch_order_book(spot_symbol, limit=20)
         spot_qty, spot_avg = _buy_vwap_from_quote(spot_book.get("asks") or [], quote_notional, Decimal("1"))
@@ -41,7 +42,7 @@ def forward_open_depth_guard(
         if basis < min_basis_pct:
             return DepthGuardResult(False, f"深度均价开仓基差 {basis:.4f}% 低于 {min_basis_pct}% ", spot_avg, perp_avg, basis)
         tradable_basis = max(Decimal("0"), basis - close_basis_pct)
-        estimated_net = quote_notional * tradable_basis / Decimal("100") + funding_income - open_close_fee
+        estimated_net = quote_notional * tradable_basis / Decimal("100") - open_close_fee
         if estimated_net < min_net_profit:
             return DepthGuardResult(
                 False,
@@ -68,6 +69,7 @@ def forward_perp_entry_guard_after_spot(
     funding_income: Decimal = Decimal("0"),
     close_basis_pct: Decimal = Decimal("0"),
 ) -> DepthGuardResult:
+    _ = funding_income
     try:
         if base_quantity <= 0 or spot_entry_price <= 0:
             return DepthGuardResult(False, "现货真实成交数量或价格无效，取消合约开仓")
@@ -83,7 +85,7 @@ def forward_perp_entry_guard_after_spot(
             return DepthGuardResult(False, f"现货成交后合约可成交基差 {basis:.4f}% 低于 {min_basis_pct}%", spot_entry_price, perp_avg, basis)
         notional = base_quantity * spot_entry_price
         tradable_basis = max(Decimal("0"), basis - close_basis_pct)
-        estimated_net = notional * tradable_basis / Decimal("100") + funding_income - open_close_fee
+        estimated_net = notional * tradable_basis / Decimal("100") - open_close_fee
         if estimated_net < min_net_profit:
             return DepthGuardResult(
                 False,
@@ -111,6 +113,7 @@ def forward_close_depth_guard(
     min_net_profit: Decimal,
     spot_fee_rate: Decimal | None = None,
     swap_fee_rate: Decimal | None = None,
+    realized_funding: Decimal = Decimal("0"),
 ) -> DepthGuardResult:
     try:
         spot_book = spot.fetch_order_book(spot_symbol, limit=20)
@@ -130,7 +133,7 @@ def forward_close_depth_guard(
         swap_rate = swap_fee_rate if swap_fee_rate is not None else fee_rate
         open_fee = spot_quantity * spot_entry_price * spot_rate + perp_base_quantity * perp_entry_price * swap_rate
         close_fee = spot_quantity * spot_avg * spot_rate + perp_base_quantity * perp_avg * swap_rate
-        net_profit = gross_pnl - open_fee - close_fee
+        net_profit = gross_pnl + realized_funding - open_fee - close_fee
         if net_profit < min_net_profit:
             return DepthGuardResult(
                 False,

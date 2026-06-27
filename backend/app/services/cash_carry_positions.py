@@ -21,12 +21,14 @@ class CashCarryPositionBuilder:
         self._contract_size_cache: dict[tuple[ExchangeName, str], tuple[float, Decimal]] = {}
         self._exit_price_cache: dict[tuple[ExchangeName, str, str], tuple[float, Decimal]] = {}
         self._funding_rate_cache: dict[tuple[ExchangeName, str], tuple[float, Decimal]] = {}
+        self._realized_funding_cache: dict[tuple[ExchangeName, str, str], tuple[float, Decimal]] = {}
 
     def clear_caches(self) -> None:
         self._spot_balance_cache = {}
         self._contract_size_cache = {}
         self._exit_price_cache = {}
         self._funding_rate_cache = {}
+        self._realized_funding_cache = {}
 
     def build(self, positions: list[PositionSnapshot], prices: list[CashCarryOpportunity], settings: BotSettings) -> list[CashCarryPositionRow]:
         rows = []
@@ -78,8 +80,9 @@ class CashCarryPositionBuilder:
         perp_pnl = self._perp_unrealized(position.side, perp_base, position.entry_price, perp_mark, position.unrealized_pnl)
         funding_rate_pct = self._funding_rate_pct(exchange, swap_symbol, price)
         funding_income = self._funding_income(position.side, perp_base, perp_mark, funding_rate_pct)
+        realized_funding = self._realized_funding_net(exchange, swap_symbol, state)
         open_fee, close_fee = self._fees(exchange, f"{base}/USDT", swap_symbol, spot_quantity, spot_entry, spot_price, perp_base, position.entry_price, perp_mark)
-        net = spot_pnl + perp_pnl + funding_income - open_fee - close_fee
+        net = spot_pnl + perp_pnl + realized_funding - open_fee - close_fee
         return CashCarryPositionRow(
             exchange=exchange,
             symbol=position.symbol,
@@ -257,6 +260,47 @@ class CashCarryPositionBuilder:
     def _normalize_funding_rate(self, raw: dict | None) -> Decimal:
         rate = decimal_from((raw or {}).get("fundingRate") or (raw or {}).get("nextFundingRate") or (raw or {}).get("lastFundingRate"))
         return rate * Decimal("100") if rate else Decimal("0")
+
+    def _realized_funding_net(self, exchange: ExchangeName, swap_symbol: str, state: dict[str, Any] | None) -> Decimal:
+        opened_at = self._opened_at(state)
+        if not opened_at:
+            return Decimal("0")
+        key = (exchange, swap_symbol, opened_at.isoformat())
+        cached = self._realized_funding_cache.get(key)
+        if cached and time.monotonic() - cached[0] < 60:
+            return cached[1]
+        value = self._fetch_realized_funding_net(exchange, swap_symbol, opened_at)
+        self._realized_funding_cache[key] = (time.monotonic(), value)
+        return value
+
+    def _opened_at(self, state: dict[str, Any] | None) -> datetime | None:
+        raw = (state or {}).get("opened_at")
+        if not raw:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+    def _fetch_realized_funding_net(self, exchange: ExchangeName, swap_symbol: str, opened_at: datetime) -> Decimal:
+        swap = self._exchange(exchange, "swap")
+        if not getattr(swap, "has", {}).get("fetchFundingHistory"):
+            return Decimal("0")
+        try:
+            since = int(opened_at.timestamp() * 1000)
+            now = datetime.now(timezone.utc)
+            total = Decimal("0")
+            for item in swap.fetch_funding_history(swap_symbol, since=since, limit=100):
+                timestamp = item.get("timestamp")
+                if timestamp:
+                    at = datetime.fromtimestamp(int(timestamp) / 1000, tz=timezone.utc)
+                    if at < opened_at or at > now:
+                        continue
+                total += decimal_from(item.get("amount"))
+            return total
+        except Exception:
+            return Decimal("0")
 
     def _status(self, spot_quantity: Decimal, perp_base: Decimal) -> str:
         if spot_quantity <= 0 and perp_base > 0:

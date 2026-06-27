@@ -371,6 +371,7 @@ class CashCarryExecutor:
                 guard_floor,
                 spot_fee_rate=self._taker_fee(record.exchange, "spot", spot_symbol),
                 swap_fee_rate=self._taker_fee(record.exchange, "swap", swap_symbol),
+                realized_funding=self._realized_funding_net(swap, swap_symbol, record.opened_at),
             )
             if not guard.ok:
                 return self.state.remember(ExecutionResult(record.id, "blocked_by_depth", guard.reason, steps))
@@ -913,7 +914,7 @@ class CashCarryExecutor:
             + base_qty * perp_entry_price * swap_fee
         ) * Decimal("2")
         tradable_basis = max(Decimal("0"), basis_pct - settings.cash_carry_close_basis_pct)
-        estimated_net = notional * tradable_basis / Decimal("100") + funding_income - open_close_fee
+        estimated_net = notional * tradable_basis / Decimal("100") - open_close_fee
         return {
             "basis_pct": q(basis_pct),
             "estimated_net_profit": q(estimated_net),
@@ -921,6 +922,24 @@ class CashCarryExecutor:
             "estimated_open_close_fee": q(open_close_fee),
             "notional_usdt": q(notional, "0.01"),
         }
+
+    def _realized_funding_net(self, swap, swap_symbol: str, opened_at: datetime) -> Decimal:
+        if not getattr(swap, "has", {}).get("fetchFundingHistory"):
+            return Decimal("0")
+        try:
+            since = int(self._aware_datetime(opened_at).timestamp() * 1000)
+            now = datetime.now(timezone.utc)
+            total = Decimal("0")
+            for item in swap.fetch_funding_history(swap_symbol, since=since, limit=100):
+                timestamp = item.get("timestamp")
+                if timestamp:
+                    at = datetime.fromtimestamp(int(timestamp) / 1000, tz=timezone.utc)
+                    if at < self._aware_datetime(opened_at) or at > now:
+                        continue
+                total += decimal_from(item.get("amount"))
+            return total
+        except Exception:
+            return Decimal("0")
 
     def _post_spot_open_guard(
         self,
@@ -1188,6 +1207,9 @@ class CashCarryExecutor:
 
     def _aware_opened_at(self, record: CashCarryPosition) -> datetime:
         return record.opened_at if record.opened_at.tzinfo else record.opened_at.replace(tzinfo=timezone.utc)
+
+    def _aware_datetime(self, value: datetime) -> datetime:
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
     def _close_depth_guard_fields(self, guard, min_net_profit: Decimal) -> dict[str, str]:
         return {

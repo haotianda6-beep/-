@@ -32,8 +32,27 @@ def test_forward_open_depth_guard_blocks_when_stable_net_is_too_low() -> None:
     )
 
     assert not result.ok
-    assert result.estimated_net_profit == Decimal("0.310")
+    assert result.estimated_net_profit == Decimal("0.30")
     assert "稳定开仓安全垫" in result.reason
+
+
+def test_forward_close_depth_guard_counts_realized_funding_only_when_provided() -> None:
+    result = forward_close_depth_guard(
+        _DepthExchange(asks=[[100, 10]], bids=[[100, 10]]),
+        _DepthExchange(asks=[[101, 10]], bids=[[101, 10]]),
+        "AIA/USDT",
+        "AIA/USDT:USDT",
+        Decimal("1"),
+        Decimal("1"),
+        Decimal("100"),
+        Decimal("101"),
+        Decimal("0.001"),
+        Decimal("0.2"),
+        realized_funding=Decimal("0.7"),
+    )
+
+    assert result.ok
+    assert result.estimated_net_profit == Decimal("0.298")
 
 
 def test_forward_close_depth_guard_blocks_when_executable_net_would_be_loss() -> None:

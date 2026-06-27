@@ -64,6 +64,7 @@ def _forward_ok(
     swap_fee: Decimal,
     funding_rate: Decimal,
 ) -> bool:
+    _ = funding_rate
     spot_qty, spot_avg = _buy_vwap_from_quote(spot_book.get("asks") or [], notional, Decimal("1"))
     _, swap_avg = _sell_vwap_base(swap_book.get("bids") or [], spot_qty, contract_size)
     if spot_qty <= 0 or spot_avg <= 0 or swap_avg <= 0:
@@ -81,7 +82,7 @@ def _forward_ok(
         return False
     basis_profit = (swap_avg - spot_avg) * spot_qty
     fees = (spot_qty * spot_avg * spot_fee + spot_qty * swap_avg * swap_fee) * Decimal("2")
-    net_profit = basis_profit + notional * funding_rate - fees
+    net_profit = basis_profit - fees
     return net_profit >= min_net_profit
 
 

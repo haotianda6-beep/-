@@ -62,6 +62,37 @@ def test_cash_carry_position_fetches_funding_when_position_is_not_in_candidates(
     assert row.estimated_funding_income == Decimal("0.0505")
 
 
+def test_cash_carry_position_current_net_excludes_unsettled_funding_estimate() -> None:
+    builder = _Builder(
+        _TickerCache({
+            ("spot", "AIAUSDT"): {"bid": "100", "ask": "100"},
+            ("swap", "AIAUSDT"): {"bid": "101", "ask": "101"},
+        }),
+        funding_rate_pct=Decimal("10"),
+    )
+
+    row = builder.build([_position()], [], BotSettings())[0]
+
+    assert row.estimated_funding_income == Decimal("10.1000")
+    assert row.current_net_profit == Decimal("-0.3010")
+
+
+def test_cash_carry_position_current_net_includes_realized_funding() -> None:
+    builder = _Builder(
+        _TickerCache({
+            ("spot", "AIAUSDT"): {"bid": "100", "ask": "100"},
+            ("swap", "AIAUSDT"): {"bid": "101", "ask": "101"},
+        }),
+        funding_rate_pct=Decimal("10"),
+        realized_funding=Decimal("0.5"),
+    )
+
+    row = builder.build([_position()], [], BotSettings())[0]
+
+    assert row.estimated_funding_income == Decimal("10.1000")
+    assert row.current_net_profit == Decimal("0.1990")
+
+
 class _TickerCache:
     def __init__(self, tickers):
         self.tickers = tickers
@@ -74,9 +105,10 @@ class _TickerCache:
 
 
 class _Builder(CashCarryPositionBuilder):
-    def __init__(self, ticker_cache, funding_rate_pct=Decimal("0")):
+    def __init__(self, ticker_cache, funding_rate_pct=Decimal("0"), realized_funding=Decimal("0")):
         super().__init__(ticker_cache)
         self.funding_rate_pct = funding_rate_pct
+        self.realized_funding = realized_funding
 
     def _cached_spot_quantity(self, exchange, base):
         return Decimal("1")
@@ -98,6 +130,9 @@ class _Builder(CashCarryPositionBuilder):
 
     def _cached_funding_rate_pct(self, exchange, swap_symbol):
         return self.funding_rate_pct
+
+    def _realized_funding_net(self, exchange, swap_symbol, state):
+        return self.realized_funding
 
 
 def _position() -> PositionSnapshot:

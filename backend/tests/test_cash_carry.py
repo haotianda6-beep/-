@@ -155,7 +155,7 @@ def test_cash_carry_fast_refresh_uses_ws_prices() -> None:
 
     assert refreshed.opportunities
     assert refreshed.opportunities[0].basis_pct == Decimal("1.5000")
-    assert refreshed.opportunities[0].estimated_net_profit == Decimal("1.0200")
+    assert refreshed.opportunities[0].estimated_net_profit == Decimal("1.0000")
 
 
 def test_cash_carry_blocks_low_stable_net_profit() -> None:
@@ -320,7 +320,7 @@ def test_cash_carry_v3_bootstrap_allows_positive_near_miss_before_first_samples(
     item = scanner._build_opportunity("ABCUSDT", _data("100.6612", "0.00005"), settings)
 
     assert item is not None
-    assert item.estimated_net_profit == Decimal("0.9486")
+    assert item.estimated_net_profit == Decimal("0.9336")
     assert item.blocked_reasons == []
 
 
@@ -475,11 +475,11 @@ def test_cash_carry_depth_estimate_uses_bootstrap_basis_floor() -> None:
         cash_carry_bootstrap_min_trades=3,
         cash_carry_bootstrap_min_basis_pct=Decimal("0.6"),
     )
-    item = scanner._build_opportunity("ABCUSDT", _data("100.75", "0.002"), settings)
+    item = scanner._build_opportunity("ABCUSDT", _data("100.98", "0.002"), settings)
     assert item is not None
-    data = _data("100.75", "0.002")
+    data = _data("100.98", "0.002")
     data.spot_exchange = _BookExchange(asks=[[100, 2]], bids=[[99, 2]])
-    data.swap_exchange = _BookExchange(asks=[[101, 2]], bids=[[100.65, 2]])
+    data.swap_exchange = _BookExchange(asks=[[101, 2]], bids=[[100.85, 2]])
 
     checked = scanner._with_depth_estimate(item, data, settings)
 
