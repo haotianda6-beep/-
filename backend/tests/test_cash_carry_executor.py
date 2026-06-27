@@ -7,7 +7,7 @@ from app.core.models import BotSettings, CashCarryOpportunity, CashCarryPosition
 from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION
 from app.services.cash_carry_executor import CashCarryExecutor
 from app.services.order_sizing import contract_order_amount
-from app.services.execution_models import ExecutionStep
+from app.services.execution_models import ExecutionResult, ExecutionStep
 
 
 def test_cash_carry_executor_blocks_until_trade_subswitch_is_enabled(tmp_path) -> None:
@@ -208,6 +208,17 @@ def test_cash_carry_executor_depth_failure_does_not_block_other_symbol(tmp_path)
     assert result is not None
     assert result.status == "blocked_by_safety_gate"
     assert "XYZUSDT" in result.steps[2].detail
+
+
+def test_cash_carry_executor_tracks_multiple_recent_depth_failures(tmp_path) -> None:
+    executor = CashCarryExecutor(tmp_path / "state.json")
+
+    executor.state.remember(ExecutionResult("depth-1", "blocked_by_depth", "ABC 深度不足", position=_opportunity("ABCUSDT", "3", exchange=ExchangeName.GATE)))
+    executor.state.remember(ExecutionResult("depth-2", "blocked_by_depth", "XYZ 深度不足", position=_opportunity("XYZUSDT", "3", exchange=ExchangeName.GATE)))
+
+    reasons = executor.state.recent_depth_blocked_reasons(executor.depth_block_cooldown_seconds)
+    assert (ExchangeName.GATE, "ABCUSDT") in reasons
+    assert (ExchangeName.GATE, "XYZUSDT") in reasons
 
 
 def test_cash_carry_executor_retries_smaller_notional_when_depth_is_thin(tmp_path) -> None:
