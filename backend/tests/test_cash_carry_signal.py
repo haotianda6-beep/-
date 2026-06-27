@@ -1,9 +1,14 @@
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 from app.core.models import BotSettings, CashCarryOpportunity, DataSource, ExchangeName
+from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_signal import CashCarrySignalTracker
 from app.services.live_market_types import CashCarryScan
+
+
+EMPTY_HISTORY = Path(__file__).with_name("missing_cash_carry_history.json")
 
 
 def test_cash_carry_signal_blocks_first_ready_tick_until_persistent() -> None:
@@ -153,6 +158,7 @@ def test_cash_carry_signal_fast_capture_requires_entry_basis() -> None:
     settings = _settings(
         order_notional_usdt=Decimal("300"),
         cash_carry_min_basis_pct=Decimal("0.8"),
+        cash_carry_bootstrap_enabled=False,
         cash_carry_signal_min_seconds=Decimal("20"),
         cash_carry_signal_min_samples=5,
     )
@@ -162,6 +168,30 @@ def test_cash_carry_signal_fast_capture_requires_entry_basis() -> None:
 
     assert result.opportunities == []
     assert "信号持续不足" in " / ".join(result.candidates[0].blocked_reasons)
+
+
+def test_cash_carry_signal_fast_captures_bootstrap_basis_when_net_covers_floor() -> None:
+    tracker = CashCarrySignalTracker(CashCarryHistoryQuality(EMPTY_HISTORY))
+    settings = _settings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_min_basis_pct=Decimal("0.8"),
+        cash_carry_bootstrap_enabled=True,
+        cash_carry_bootstrap_min_basis_pct=Decimal("0.6"),
+        cash_carry_bootstrap_min_trades=3,
+        cash_carry_signal_min_seconds=Decimal("20"),
+        cash_carry_signal_min_samples=5,
+        cash_carry_signal_min_history_samples=30,
+        cash_carry_signal_min_basis_percentile=Decimal("75"),
+    )
+    soft_reason = ["V3冷启动净利预估 0.1000U < 冷启动安全垫 0.9000U"]
+    for offset in range(6):
+        tracker.apply(CashCarryScan(candidates=[_candidate("ABCUSDT", Decimal("0.3"), soft_reason, net=Decimal("0.1"))]), settings, now=100.0 + offset)
+
+    tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal("0.68"), net=Decimal("1.0"))]), settings, now=106.0)
+    result = tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal("0.68"), net=Decimal("1.0"))]), settings, now=108.0)
+
+    assert result.opportunities
+    assert result.opportunities[0].symbol == "ABCUSDT"
 
 
 def test_cash_carry_signal_relaxes_percentile_when_net_cushion_is_high() -> None:

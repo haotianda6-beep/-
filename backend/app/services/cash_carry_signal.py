@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from app.core.models import BotSettings, CashCarryOpportunity, ExchangeName
+from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_scope import CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.live_market_types import CashCarryScan
 
@@ -11,7 +12,8 @@ from app.services.live_market_types import CashCarryScan
 SIGNAL_REASON_PREFIXES = ("信号持续不足", "基差波动过大", "基差分位样本不足", "基差分位不足")
 SIGNAL_ELIGIBLE_PREFIXES = ("V2历史胜率保护", "V3历史胜率保护")
 SIGNAL_GAP_GRACE_SECONDS = Decimal("3")
-FAST_CAPTURE_NET_PCT = Decimal("0.50")
+FAST_CAPTURE_NET_PCT = Decimal("0.30")
+FAST_CAPTURE_FLOOR_EXTRA_NET_PCT = Decimal("0.03")
 FAST_CAPTURE_SECONDS = Decimal("2")
 FAST_CAPTURE_SAMPLES = 2
 FAST_CAPTURE_HISTORY_SAMPLES = 8
@@ -27,8 +29,9 @@ class _SignalSample:
 
 
 class CashCarrySignalTracker:
-    def __init__(self) -> None:
+    def __init__(self, history_quality: CashCarryHistoryQuality | None = None) -> None:
         self._samples: dict[tuple[ExchangeName, str], deque[_SignalSample]] = {}
+        self.history_quality = history_quality or CashCarryHistoryQuality()
 
     def apply(self, scan: CashCarryScan, settings: BotSettings, now: float | None = None) -> CashCarryScan:
         items = self._unique_items(scan)
@@ -126,9 +129,20 @@ class CashCarrySignalTracker:
     def _has_fast_capture_cushion(self, sample: _SignalSample, settings: BotSettings) -> bool:
         if settings.order_notional_usdt <= 0:
             return False
-        if sample.basis_pct < settings.cash_carry_min_basis_pct:
+        if sample.basis_pct < self._effective_fast_capture_basis_floor(settings):
             return False
-        return sample.estimated_net_profit >= settings.order_notional_usdt * FAST_CAPTURE_NET_PCT / Decimal("100")
+        return sample.estimated_net_profit >= self._fast_capture_net_floor(settings)
+
+    def _effective_fast_capture_basis_floor(self, settings: BotSettings) -> Decimal:
+        if settings.cash_carry_bootstrap_enabled and settings.cash_carry_bootstrap_min_trades > 0:
+            return min(settings.cash_carry_min_basis_pct, settings.cash_carry_bootstrap_min_basis_pct)
+        return settings.cash_carry_min_basis_pct
+
+    def _fast_capture_net_floor(self, settings: BotSettings) -> Decimal:
+        quality_floor = self.history_quality.entry_quality_gate(settings).min_net_profit
+        extra = settings.order_notional_usdt * FAST_CAPTURE_FLOOR_EXTRA_NET_PCT / Decimal("100")
+        pct_floor = settings.order_notional_usdt * FAST_CAPTURE_NET_PCT / Decimal("100")
+        return max(quality_floor + extra, pct_floor)
 
     def _ready_tail(self, samples: deque[_SignalSample]) -> list[_SignalSample]:
         if not samples or not samples[-1].eligible:
