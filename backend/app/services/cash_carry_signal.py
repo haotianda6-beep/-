@@ -77,7 +77,7 @@ class CashCarrySignalTracker:
         return max(Decimal("10"), min_seconds / Decimal("2")), max(min_samples, 5)
 
     def _basis_percentile_reason(self, samples: deque[_SignalSample], settings: BotSettings) -> str | None:
-        min_samples = settings.cash_carry_signal_min_history_samples
+        min_samples = self._effective_history_samples(samples[-1], settings) if samples else settings.cash_carry_signal_min_history_samples
         if min_samples <= 0 or settings.cash_carry_signal_min_basis_percentile <= 0:
             return None
         if len(samples) < min_samples:
@@ -89,6 +89,13 @@ class CashCarrySignalTracker:
         if percentile < required_percentile:
             return f"基差分位不足 {percentile:.2f}% < {required_percentile}%，等待相对高位基差"
         return None
+
+    def _effective_history_samples(self, sample: _SignalSample, settings: BotSettings) -> int:
+        configured = settings.cash_carry_signal_min_history_samples
+        if configured <= 0 or not self._has_profit_cushion(sample.estimated_net_profit, settings):
+            return configured
+        relaxed = max(20, int((Decimal(configured) * Decimal("0.67")).to_integral_value()))
+        return min(configured, relaxed)
 
     def _effective_basis_percentile(self, sample: _SignalSample, settings: BotSettings) -> Decimal:
         configured = settings.cash_carry_signal_min_basis_percentile

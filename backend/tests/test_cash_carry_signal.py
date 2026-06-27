@@ -144,6 +144,42 @@ def test_cash_carry_signal_relaxes_percentile_when_net_cushion_is_high() -> None
     assert result.opportunities
 
 
+def test_cash_carry_signal_relaxes_history_samples_when_net_cushion_is_high() -> None:
+    tracker = CashCarrySignalTracker()
+    settings = _settings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_signal_min_seconds=Decimal("0"),
+        cash_carry_signal_min_samples=1,
+        cash_carry_signal_max_basis_swing_pct=Decimal("0"),
+        cash_carry_signal_min_history_samples=30,
+        cash_carry_signal_min_basis_percentile=Decimal("75"),
+    )
+
+    for offset in range(20):
+        result = tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal(offset + 1), net=Decimal("1.1"))]), settings, now=100.0 + offset)
+
+    assert result.opportunities
+    assert result.opportunities[0].symbol == "ABCUSDT"
+
+
+def test_cash_carry_signal_keeps_full_history_samples_when_net_cushion_is_thin() -> None:
+    tracker = CashCarrySignalTracker()
+    settings = _settings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_signal_min_seconds=Decimal("0"),
+        cash_carry_signal_min_samples=1,
+        cash_carry_signal_max_basis_swing_pct=Decimal("0"),
+        cash_carry_signal_min_history_samples=30,
+        cash_carry_signal_min_basis_percentile=Decimal("75"),
+    )
+
+    for offset in range(20):
+        result = tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal(offset + 1), net=Decimal("0.9"))]), settings, now=100.0 + offset)
+
+    assert result.opportunities == []
+    assert "基差分位样本不足 20/30" in " / ".join(result.candidates[0].blocked_reasons)
+
+
 def test_cash_carry_signal_keeps_percentile_when_net_cushion_is_thin() -> None:
     tracker = CashCarrySignalTracker()
     settings = _settings(
