@@ -84,7 +84,7 @@ class CashCarryHistoryQuality:
         now: datetime | None = None,
     ) -> list[str]:
         gate = self.entry_quality_gate(settings, now)
-        if estimated_net_profit >= gate.min_net_profit or gate.min_net_profit <= gate.base_min_net_profit:
+        if self._net_allows(estimated_net_profit, gate.min_net_profit, settings) or gate.min_net_profit <= gate.base_min_net_profit:
             return []
         reason_text = "；".join(gate.reasons) if gate.reasons else "历史表现未达标"
         return [
@@ -98,7 +98,7 @@ class CashCarryHistoryQuality:
         now: datetime | None = None,
     ) -> list[str]:
         gate = self.entry_quality_gate(settings, now)
-        if estimated_net_profit >= gate.min_net_profit:
+        if self._net_allows(estimated_net_profit, gate.min_net_profit, settings):
             return []
         if gate.min_net_profit > gate.base_min_net_profit:
             reason_text = "；".join(gate.reasons) if gate.reasons else "历史表现未达标"
@@ -163,7 +163,7 @@ class CashCarryHistoryQuality:
             return False
         if basis_pct < settings.cash_carry_bootstrap_min_basis_pct:
             return False
-        return estimated_net_profit >= self.entry_quality_gate(settings, now).min_net_profit
+        return self._net_allows(estimated_net_profit, self.entry_quality_gate(settings, now).min_net_profit, settings)
 
     def stats_for(self, exchange: ExchangeName, symbol: str) -> CashCarrySymbolStats:
         self._refresh_if_needed()
@@ -274,6 +274,14 @@ class CashCarryHistoryQuality:
     def _bootstrap_entry_net_floor(self, settings: BotSettings) -> Decimal:
         bootstrap = close_execution_buffer(settings) + settings.order_notional_usdt * settings.cash_carry_bootstrap_min_profit_pct / Decimal("100")
         return min(self._base_entry_net_floor(settings), bootstrap)
+
+    def _net_allows(self, estimated_net_profit: Decimal, min_net_profit: Decimal, settings: BotSettings) -> bool:
+        return estimated_net_profit + self._entry_net_tolerance(settings) >= min_net_profit
+
+    def _entry_net_tolerance(self, settings: BotSettings) -> Decimal:
+        if settings.order_notional_usdt <= 0:
+            return Decimal("0")
+        return min(Decimal("0.01"), settings.order_notional_usdt * Decimal("0.00005"))
 
     def _max_reasonable_entry_floor(self, settings: BotSettings) -> Decimal:
         tradable_basis_pct = max(Decimal("0"), settings.cash_carry_max_entry_basis_pct - settings.cash_carry_close_basis_pct)

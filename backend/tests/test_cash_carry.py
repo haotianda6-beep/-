@@ -324,6 +324,22 @@ def test_cash_carry_v3_bootstrap_allows_positive_near_miss_before_first_samples(
     assert item.blocked_reasons == []
 
 
+def test_cash_carry_v3_bootstrap_tolerates_tiny_net_rounding_gap() -> None:
+    history = CashCarryHistoryQuality(EMPTY_HISTORY)
+    settings = BotSettings(order_notional_usdt=Decimal("300"))
+
+    assert history.bootstrap_basis_allows(Decimal("0.65"), Decimal("0.895"), settings) is True
+    assert history.entry_net_reasons(Decimal("0.895"), settings) == []
+
+
+def test_cash_carry_v3_bootstrap_keeps_material_net_gap_blocked() -> None:
+    history = CashCarryHistoryQuality(EMPTY_HISTORY)
+    settings = BotSettings(order_notional_usdt=Decimal("300"))
+
+    assert history.bootstrap_basis_allows(Decimal("0.65"), Decimal("0.88"), settings) is False
+    assert "V3冷启动净利预估 0.8800U < 冷启动安全垫 0.9000U" in history.entry_net_reasons(Decimal("0.88"), settings)
+
+
 def test_cash_carry_v3_bootstrap_stops_after_minimum_real_samples(tmp_path) -> None:
     state = tmp_path / "cash_carry_execution_state.json"
     state.write_text(
