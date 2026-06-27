@@ -182,6 +182,11 @@ class CashCarryExecutor:
                 spot_order_id=spot_order_id,
                 perp_order_id=perp_order_id,
                 opened_at=datetime.now(timezone.utc),
+                entry_basis_pct=item.basis_pct,
+                entry_estimated_net_profit=item.estimated_net_profit,
+                entry_estimated_funding_income=item.estimated_funding_income,
+                entry_estimated_open_close_fee=item.estimated_open_close_fee,
+                entry_notional_usdt=item.notional_usdt or settings.order_notional_usdt,
             )
             self.state.save_position(position)
             suffix = f"（{mode_label}）" if mode_label else ""
@@ -210,6 +215,11 @@ class CashCarryExecutor:
                     perp_order_id=None,
                     opened_at=datetime.now(timezone.utc),
                     status="spot_only",
+                    entry_basis_pct=item.basis_pct,
+                    entry_estimated_net_profit=item.estimated_net_profit,
+                    entry_estimated_funding_income=item.estimated_funding_income,
+                    entry_estimated_open_close_fee=item.estimated_open_close_fee,
+                    entry_notional_usdt=item.notional_usdt or settings.order_notional_usdt,
                 )
                 self.state.save_position(position)
                 detail = f"{self._sanitize(str(exc))}；合约未开成，现货回滚失败 {rollback.get('reason', '未知原因')}，已记录现货孤腿"

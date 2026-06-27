@@ -241,6 +241,7 @@ class ArbitrageEngine:
             f"近24小时 {summary.trades_24h} 单，胜率 {day_rate}，净利 {summary.net_24h:.4f}U；"
             f"历史风控已拦截 {summary.blocked_symbols} 个币种；"
             f"旧规则历史 {summary.ignored_legacy_trades} 单仅用于单币拉黑，不再压低新规则全局频率；"
+            f"V3成交偏差均值 {summary.avg_estimate_gap:.4f}U，负偏差 {summary.estimate_miss_count} 单；"
             f"当前动态开仓净利安全垫 {gate.min_net_profit:.4f}U。"
         )
         action = f"目标是胜率不低于{settings.cash_carry_target_win_rate_pct}%、约{settings.cash_carry_target_daily_trades}单/日；低于目标时系统会自动提高开仓净利门槛，不建议人工放开历史亏损币。"

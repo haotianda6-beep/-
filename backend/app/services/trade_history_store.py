@@ -133,6 +133,12 @@ class TradeHistoryStore:
         history: dict[str, Any],
     ) -> str:
         pieces = []
+        estimate = self._decimal(history.get("entry_estimated_net_profit"))
+        gap = self._decimal(history.get("actual_vs_entry_estimate"))
+        if estimate > 0:
+            if gap == 0 and "actual_vs_entry_estimate" not in history:
+                gap = net - estimate
+            pieces.append(f"开仓预估净利 {estimate} USDT，真实偏差 {gap} USDT")
         if self._is_liquidation(history):
             pieces.append("合约腿发生交易所强平，是主要风险来源")
         if self._has_quantity_mismatch(history):

@@ -19,6 +19,7 @@ def test_build_external_perp_close_history_marks_liquidation() -> None:
         spot_order_id="spot-open",
         perp_order_id="perp-open",
         opened_at=opened_at,
+        entry_estimated_net_profit=Decimal("2.5"),
     )
     history = build_cash_carry_external_perp_close_history(
         _FakeSpot(),
@@ -33,6 +34,8 @@ def test_build_external_perp_close_history_marks_liquidation() -> None:
     assert history["short_close_price"] == "2.5"
     assert history["short_pnl"] == "-5.0"
     assert history["actual_net_profit"] == "-5.3"
+    assert history["entry_estimated_net_profit"] == "2.5"
+    assert history["actual_vs_entry_estimate"] == "-7.8"
     assert history["reconcile_status"] == "verified"
 
 
@@ -50,6 +53,7 @@ def test_build_cash_carry_history_includes_add_orders_in_open_cost() -> None:
         perp_order_id="perp-open",
         opened_at=opened_at,
         add_orders=[{"spot_order_id": "spot-add", "perp_order_id": "perp-add"}],
+        entry_estimated_net_profit=Decimal("8"),
     )
 
     history = build_cash_carry_history(
@@ -69,6 +73,7 @@ def test_build_cash_carry_history_includes_add_orders_in_open_cost() -> None:
     assert history["long_pnl"] == "6.0"
     assert history["short_pnl"] == "5.00"
     assert history["actual_net_profit"] == "11.00"
+    assert history["actual_vs_entry_estimate"] == "3.00"
 
 
 def test_gate_liq_text_is_treated_as_liquidation() -> None:

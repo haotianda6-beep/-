@@ -105,8 +105,8 @@ def test_cash_carry_v3_performance_event_reports_win_rate(tmp_path) -> None:
     state = tmp_path / "cash_carry_execution_state.json"
     state.write_text(
         '{"positions":['
-        f'{{"exchange":"BITGET","symbol":"AAAUSDT","status":"closed","strategy_version":"{CASH_CARRY_RULESET_VERSION}","closed_at":"2026-06-27T01:00:00+00:00","history":{{"actual_net_profit":"1.2"}}}},'
-        f'{{"exchange":"BITGET","symbol":"BBBUSDT","status":"closed","strategy_version":"{CASH_CARRY_RULESET_VERSION}","closed_at":"2026-06-27T02:00:00+00:00","history":{{"actual_net_profit":"-0.4"}}}}'
+        f'{{"exchange":"BITGET","symbol":"AAAUSDT","status":"closed","strategy_version":"{CASH_CARRY_RULESET_VERSION}","closed_at":"2026-06-27T01:00:00+00:00","history":{{"actual_net_profit":"1.2","actual_vs_entry_estimate":"0.2"}}}},'
+        f'{{"exchange":"BITGET","symbol":"BBBUSDT","status":"closed","strategy_version":"{CASH_CARRY_RULESET_VERSION}","closed_at":"2026-06-27T02:00:00+00:00","history":{{"actual_net_profit":"-0.4","actual_vs_entry_estimate":"-1.0"}}}}'
         ']}',
         encoding="utf-8",
     )
@@ -119,6 +119,7 @@ def test_cash_carry_v3_performance_event_reports_win_rate(tmp_path) -> None:
     assert event.title == "正向期现V3统计"
     assert "v3.0 新规则真实样本 2 单" in event.detail
     assert "胜率 50.00%" in event.detail
+    assert "V3成交偏差均值 -0.4000U，负偏差 1 单" in event.detail
 
 
 def test_cash_carry_frequency_event_explains_why_no_ready_opportunity(tmp_path) -> None:

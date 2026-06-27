@@ -153,6 +153,11 @@ class CashCarryStateStore:
                 add_orders=item.get("add_orders") if isinstance(item.get("add_orders"), list) else [],
                 rebalance_orders=item.get("rebalance_orders") if isinstance(item.get("rebalance_orders"), list) else [],
                 strategy_version=str(item.get("strategy_version") or "legacy"),
+                entry_basis_pct=Decimal(str(item.get("entry_basis_pct") or "0")),
+                entry_estimated_net_profit=Decimal(str(item.get("entry_estimated_net_profit") or "0")),
+                entry_estimated_funding_income=Decimal(str(item.get("entry_estimated_funding_income") or "0")),
+                entry_estimated_open_close_fee=Decimal(str(item.get("entry_estimated_open_close_fee") or "0")),
+                entry_notional_usdt=Decimal(str(item.get("entry_notional_usdt") or "0")),
             )
         except (KeyError, ValueError):
             return None
@@ -168,4 +173,9 @@ class CashCarryStateStore:
             "perp_entry_price": str(item.perp_entry_price),
             "last_add_basis_pct": str(item.last_add_basis_pct) if item.last_add_basis_pct is not None else None,
             "strategy_version": item.strategy_version or CASH_CARRY_RULESET_VERSION,
+            "entry_basis_pct": str(item.entry_basis_pct),
+            "entry_estimated_net_profit": str(item.entry_estimated_net_profit),
+            "entry_estimated_funding_income": str(item.entry_estimated_funding_income),
+            "entry_estimated_open_close_fee": str(item.entry_estimated_open_close_fee),
+            "entry_notional_usdt": str(item.entry_notional_usdt),
         }

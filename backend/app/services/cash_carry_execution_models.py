@@ -27,3 +27,8 @@ class CashCarryPosition:
     add_orders: list[dict[str, Any]] = field(default_factory=list)
     rebalance_orders: list[dict[str, Any]] = field(default_factory=list)
     strategy_version: str = CASH_CARRY_RULESET_VERSION
+    entry_basis_pct: Decimal = Decimal("0")
+    entry_estimated_net_profit: Decimal = Decimal("0")
+    entry_estimated_funding_income: Decimal = Decimal("0")
+    entry_estimated_open_close_fee: Decimal = Decimal("0")
+    entry_notional_usdt: Decimal = Decimal("0")

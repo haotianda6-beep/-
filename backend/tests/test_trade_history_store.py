@@ -33,6 +33,8 @@ def test_trade_history_store_reads_verified_cash_carry_history(tmp_path) -> None
                             "short_pnl": "3",
                             "funding_net": "0.1",
                             "actual_net_profit": "3.9",
+                            "entry_estimated_net_profit": "3.0",
+                            "actual_vs_entry_estimate": "0.9",
                             "long_order_ids": ["spot-open", "spot-close"],
                             "short_order_ids": ["swap-open", "swap-close"],
                             "reconcile_status": "verified",
@@ -51,6 +53,7 @@ def test_trade_history_store_reads_verified_cash_carry_history(tmp_path) -> None
     assert rows[0].strategy_type == "cash_carry"
     assert rows[0].actual_net_profit == Decimal("3.9")
     assert rows[0].reconcile_status == "verified"
+    assert "开仓预估净利 3.0 USDT，真实偏差 0.9 USDT" in (rows[0].close_reason or "")
 
 
 def test_trade_history_store_keeps_unreconciled_cash_carry_closed_rows(tmp_path) -> None:

@@ -41,6 +41,8 @@ class CashCarryPerformanceSummary:
     win_rate_24h_pct: Decimal
     blocked_symbols: int
     ignored_legacy_trades: int
+    avg_estimate_gap: Decimal
+    estimate_miss_count: int
 
 
 @dataclass(frozen=True)
@@ -125,6 +127,7 @@ class CashCarryHistoryQuality:
         total = self._summary_values(rows)
         day_rows = [row for row in rows if row[1] and current - row[1] <= timedelta(hours=24)]
         day = self._summary_values(day_rows)
+        gaps = [row[4] for row in rows if row[4] is not None]
         blocked = sum(1 for key in self._all_stat_keys() if self.blocked_reasons(key[0], key[1], settings))
         return CashCarryPerformanceSummary(
             ruleset_version=CASH_CARRY_RULESET_VERSION,
@@ -138,6 +141,8 @@ class CashCarryHistoryQuality:
             win_rate_24h_pct=day[3],
             blocked_symbols=blocked,
             ignored_legacy_trades=len(all_rows) - len(rows),
+            avg_estimate_gap=sum(gaps, Decimal("0")) / Decimal(len(gaps)) if gaps else Decimal("0"),
+            estimate_miss_count=sum(1 for gap in gaps if gap < 0),
         )
 
     def _refresh_if_needed(self) -> None:
@@ -178,7 +183,8 @@ class CashCarryHistoryQuality:
             net, forced = parsed
             closed_at = self._closed_at(item)
             version = str(item.get("strategy_version") or "legacy")
-            rows.append((item, net, closed_at, forced) if raw else (net, closed_at, forced, version))
+            gap = self._estimate_gap(item)
+            rows.append((item, net, closed_at, forced) if raw else (net, closed_at, forced, version, gap))
         return rows
 
     def _closed_net(self, item: dict[str, Any]) -> tuple[Decimal, bool] | None:
@@ -232,6 +238,17 @@ class CashCarryHistoryQuality:
         except ValueError:
             return None
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+    def _estimate_gap(self, item: dict[str, Any]) -> Decimal | None:
+        history = item.get("history") if isinstance(item.get("history"), dict) else {}
+        gap = self._decimal(history.get("actual_vs_entry_estimate"))
+        if gap is not None:
+            return gap
+        estimated = self._decimal(history.get("entry_estimated_net_profit") or item.get("entry_estimated_net_profit"))
+        parsed = self._closed_net(item)
+        if estimated is None or parsed is None or estimated <= 0:
+            return None
+        return parsed[0] - estimated
 
     def _decimal(self, value: Any) -> Decimal | None:
         if value in (None, ""):

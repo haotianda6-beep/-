@@ -69,7 +69,25 @@ def _build(spot, swap, record, spot_symbol, swap_symbol, close_spot_order_id, cl
     long_pnl = (spot_close["avg"] - spot_open["avg"]) * spot_close["qty"]
     short_pnl = (perp_open["avg"] - perp_close["avg"]) * perp_close["qty"]
     total = long_pnl + short_pnl
-    return {"opened_at": record.opened_at.isoformat(), "quantity": str(min(spot_close["qty"], perp_close["qty"])), "long_open_price": str(spot_open["avg"]), "long_close_price": str(spot_close["avg"]), "short_open_price": str(perp_open["avg"]), "short_close_price": str(perp_close["avg"]), "actual_fee": str(fee), "total_pnl": str(total), "long_pnl": str(long_pnl), "short_pnl": str(short_pnl), "funding_net": str(funding), "actual_net_profit": str(total + funding - fee), "long_order_ids": [*spot_open_ids, close_spot_order_id], "short_order_ids": [*perp_open_ids, close_perp_order_id], "reconcile_status": "verified"}
+    actual_net = total + funding - fee
+    return {
+        **_entry_estimate_fields(record, actual_net),
+        "opened_at": record.opened_at.isoformat(),
+        "quantity": str(min(spot_close["qty"], perp_close["qty"])),
+        "long_open_price": str(spot_open["avg"]),
+        "long_close_price": str(spot_close["avg"]),
+        "short_open_price": str(perp_open["avg"]),
+        "short_close_price": str(perp_close["avg"]),
+        "actual_fee": str(fee),
+        "total_pnl": str(total),
+        "long_pnl": str(long_pnl),
+        "short_pnl": str(short_pnl),
+        "funding_net": str(funding),
+        "actual_net_profit": str(actual_net),
+        "long_order_ids": [*spot_open_ids, close_spot_order_id],
+        "short_order_ids": [*perp_open_ids, close_perp_order_id],
+        "reconcile_status": "verified",
+    }
 
 
 def _build_external_perp_close(spot, swap, record, spot_symbol, swap_symbol) -> dict[str, Any]:
@@ -97,7 +115,9 @@ def _build_external_perp_close(spot, swap, record, spot_symbol, swap_symbol) -> 
     short_pnl = (perp_open["avg"] - perp_close["avg"]) * perp_close["qty"]
     close_order_ids = _ordered_ids(close_trades)
     close_type = "liquidation" if _forced_close(close_trades) else "external_close"
+    actual_net = short_pnl + funding - fee
     return {
+        **_entry_estimate_fields(record, actual_net),
         "opened_at": record.opened_at.isoformat(),
         "closed_at": closed_at.isoformat(),
         "quantity": str(quantity),
@@ -110,12 +130,25 @@ def _build_external_perp_close(spot, swap, record, spot_symbol, swap_symbol) -> 
         "long_pnl": "0",
         "short_pnl": str(short_pnl),
         "funding_net": str(funding),
-        "actual_net_profit": str(short_pnl + funding - fee),
+        "actual_net_profit": str(actual_net),
         "long_order_ids": spot_open_ids,
         "short_order_ids": [*perp_open_ids, *close_order_ids],
         "close_perp_order_id": close_order_ids[-1] if close_order_ids else None,
         "reconcile_status": "verified",
         "external_close_type": close_type,
+    }
+
+
+def _entry_estimate_fields(record: CashCarryPosition, actual_net: Decimal) -> dict[str, str]:
+    estimated_net = record.entry_estimated_net_profit
+    return {
+        "strategy_version": record.strategy_version,
+        "entry_basis_pct": str(record.entry_basis_pct),
+        "entry_estimated_net_profit": str(estimated_net),
+        "entry_estimated_funding_income": str(record.entry_estimated_funding_income),
+        "entry_estimated_open_close_fee": str(record.entry_estimated_open_close_fee),
+        "entry_notional_usdt": str(record.entry_notional_usdt),
+        "actual_vs_entry_estimate": str(actual_net - estimated_net),
     }
 
 
