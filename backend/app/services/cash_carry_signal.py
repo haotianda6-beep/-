@@ -10,6 +10,7 @@ from app.services.live_market_types import CashCarryScan
 
 SIGNAL_REASON_PREFIXES = ("信号持续不足", "基差波动过大", "基差分位样本不足", "基差分位不足")
 SIGNAL_ELIGIBLE_PREFIXES = ("V2历史胜率保护", "V3历史胜率保护")
+SIGNAL_GAP_GRACE_SECONDS = Decimal("3")
 
 
 @dataclass(frozen=True)
@@ -101,11 +102,27 @@ class CashCarrySignalTracker:
         return estimated_net_profit >= settings.order_notional_usdt * Decimal("0.35") / Decimal("100")
 
     def _ready_tail(self, samples: deque[_SignalSample]) -> list[_SignalSample]:
-        ready = []
-        for item in reversed(samples):
-            if not item.eligible:
+        if not samples or not samples[-1].eligible:
+            return []
+        items = list(samples)
+        ready: list[_SignalSample] = []
+        gap_budget = SIGNAL_GAP_GRACE_SECONDS
+        index = len(items) - 1
+        while index >= 0:
+            item = items[index]
+            if item.eligible:
+                ready.append(item)
+                index -= 1
+                continue
+            gap_end = Decimal(str(ready[-1].at if ready else item.at))
+            gap_start = Decimal(str(item.at))
+            while index >= 0 and not items[index].eligible:
+                gap_start = Decimal(str(items[index].at))
+                index -= 1
+            gap_duration = gap_end - gap_start
+            if gap_duration < 0 or gap_duration > gap_budget:
                 break
-            ready.append(item)
+            gap_budget -= gap_duration
         return list(reversed(ready))
 
     def _prune(self, samples: deque[_SignalSample], now: float, settings: BotSettings) -> None:

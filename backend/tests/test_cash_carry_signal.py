@@ -46,6 +46,21 @@ def test_cash_carry_signal_resets_when_base_quality_fails() -> None:
     assert "信号持续不足" in " / ".join(result.candidates[0].blocked_reasons)
 
 
+def test_cash_carry_signal_tolerates_short_quality_gap() -> None:
+    tracker = CashCarrySignalTracker()
+    settings = _settings(cash_carry_signal_min_seconds=Decimal("10"), cash_carry_signal_min_samples=3)
+
+    tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal("1.2"))]), settings, now=100.0)
+    tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal("1.2"))]), settings, now=103.0)
+    tracker.apply(CashCarryScan(candidates=[_candidate("ABCUSDT", Decimal("1.2"), ["资金费率不是正数，空头不能收资金费"])]), settings, now=104.0)
+    tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal("1.2"))]), settings, now=105.0)
+    tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal("1.2"))]), settings, now=108.0)
+    result = tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal("1.2"))]), settings, now=111.0)
+
+    assert result.opportunities
+    assert result.opportunities[0].symbol == "ABCUSDT"
+
+
 def test_cash_carry_signal_keeps_v2_gate_but_requires_stability_before_probe() -> None:
     tracker = CashCarrySignalTracker()
     settings = _settings(
