@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from app.core.models import BotSettings, CashCarryOpportunity, RiskEvent
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
-from app.services.cash_carry_market_memory import CashCarryMarketMemorySummary
+from app.services.cash_carry_market_memory import CashCarryMarketMemorySummary, CashCarryShadowSummary
 
 
 BLOCKER_PREFIXES = {
@@ -41,6 +41,7 @@ def cash_carry_frequency_event(
     history_quality: CashCarryHistoryQuality,
     now: datetime,
     memory_summary: CashCarryMarketMemorySummary | None = None,
+    shadow_summary: CashCarryShadowSummary | None = None,
 ) -> RiskEvent | None:
     if not settings.cash_carry_enabled or not candidates:
         return None
@@ -69,6 +70,10 @@ def cash_carry_frequency_event(
             f"近{memory_summary.window_minutes}分钟观察 {memory_summary.observations} 次/{memory_summary.symbols} 币，最高为 {memory_summary.best.exchange} {memory_summary.best.symbol}：基差 {memory_summary.best.basis_pct:.4f}%，净利 {memory_summary.best.estimated_net_profit:.4f}U，距门槛 {best_gap:.4f}U"
         )
         detail_parts.append(f"近门槛样本 {memory_summary.near_count} 次，基础质量样本 {memory_summary.base_quality_count} 次")
+    if shadow_summary and (shadow_summary.closed_count or shadow_summary.open_count):
+        detail_parts.append(
+            f"近{shadow_summary.window_hours}小时影子样本：已平 {shadow_summary.closed_count} 单，未平 {shadow_summary.open_count} 单，胜率 {shadow_summary.win_rate_pct:.2f}%，估算净利 {shadow_summary.total_estimated_net:.4f}U，最差 {shadow_summary.worst_estimated_net:.4f}U"
+        )
     if counts:
         detail_parts.append("主要卡点：" + "，".join(f"{name}{count}个" for name, count in counts.most_common(4)))
     return RiskEvent(

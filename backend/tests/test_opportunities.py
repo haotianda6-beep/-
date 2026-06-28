@@ -186,6 +186,17 @@ def test_cash_carry_frequency_event_includes_rolling_memory(tmp_path) -> None:
     assert "MEMUSDT" in event.detail
 
 
+def test_cash_carry_frequency_event_includes_shadow_samples(tmp_path) -> None:
+    engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
+    candidates = [_candidate("SHADOWUSDT", Decimal("2"), ["信号持续不足"])]
+
+    events = engine.get_risk_events(BotSettings(order_notional_usdt=Decimal("300")), cash_carry_candidates=candidates)
+
+    event = next(item for item in events if item.id == "cash-carry-frequency-diagnostic")
+    assert "影子样本" in event.detail
+    assert "未平 1 单" in event.detail
+
+
 def test_cash_carry_frequency_event_uses_bootstrap_basis_floor(tmp_path) -> None:
     state = tmp_path / "cash_carry_execution_state.json"
     state.write_text('{"positions":[]}', encoding="utf-8")

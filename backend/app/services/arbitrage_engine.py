@@ -203,13 +203,17 @@ class ArbitrageEngine:
             events.append(RiskEvent(id=f"mt4-spread-issue-{index}", severity="warning", title="MT4 价差扫描异常", detail=issue, action="检查 MT4 插件报价推送、品种映射和交易所合约行情接口。", created_at=now))
         events.append(self._cash_carry_v3_performance_event(settings, now))
         memory_summary = None
+        shadow_summary = None
         if cash_carry_candidates:
+            gate = self.cash_carry_history_quality.entry_quality_gate(settings, now)
             self.cash_carry_market_memory.observe(cash_carry_candidates, now)
+            self.cash_carry_market_memory.observe_shadow(cash_carry_candidates, settings, gate.min_net_profit, now)
             memory_summary = self.cash_carry_market_memory.summary(
-                self.cash_carry_history_quality.entry_quality_gate(settings, now).min_net_profit,
+                gate.min_net_profit,
                 now,
             )
-        frequency_event = cash_carry_frequency_event(settings, cash_carry_candidates or [], self.cash_carry_history_quality, now, memory_summary)
+            shadow_summary = self.cash_carry_market_memory.shadow_summary(now)
+        frequency_event = cash_carry_frequency_event(settings, cash_carry_candidates or [], self.cash_carry_history_quality, now, memory_summary, shadow_summary)
         if frequency_event:
             events.append(frequency_event)
         events.extend(self._cash_carry_turnover_events(settings, cash_carry_positions or [], now))

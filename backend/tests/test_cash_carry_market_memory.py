@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from app.core.models import CashCarryOpportunity, DataSource, ExchangeName
+from app.core.models import BotSettings, CashCarryOpportunity, DataSource, ExchangeName
 from app.services.cash_carry_market_memory import CashCarryMarketMemory
 
 
@@ -38,6 +38,38 @@ def test_cash_carry_market_memory_counts_near_floor_samples() -> None:
 
     assert summary.near_count == 1
     assert summary.base_quality_count == 2
+
+
+def test_cash_carry_market_memory_shadow_trade_wins_on_convergence() -> None:
+    memory = CashCarryMarketMemory()
+    now = datetime.now(timezone.utc)
+    settings = BotSettings(order_notional_usdt=Decimal("300"), cash_carry_close_basis_pct=Decimal("0.05"))
+
+    memory.observe_shadow([_candidate("WINUSDT", Decimal("1.00"), Decimal("2.5"), ["信号持续不足"])], settings, Decimal("1"), now)
+    memory.observe_shadow([_candidate("WINUSDT", Decimal("0.03"), Decimal("0"), ["合约溢价未达 0.8%"])], settings, Decimal("1"), now + timedelta(minutes=5))
+
+    summary = memory.shadow_summary(now + timedelta(minutes=5))
+
+    assert summary.open_count == 0
+    assert summary.closed_count == 1
+    assert summary.wins == 1
+    assert summary.total_estimated_net == Decimal("2.4100")
+
+
+def test_cash_carry_market_memory_shadow_trade_records_timeout_loss() -> None:
+    memory = CashCarryMarketMemory()
+    now = datetime.now(timezone.utc)
+    settings = BotSettings(order_notional_usdt=Decimal("300"), cash_carry_close_basis_pct=Decimal("0.05"))
+
+    memory.observe_shadow([_candidate("LOSSUSDT", Decimal("1.00"), Decimal("2.5"), ["信号持续不足"])], settings, Decimal("1"), now)
+    memory.observe_shadow([_candidate("LOSSUSDT", Decimal("1.40"), Decimal("-1"), ["信号持续不足"])], settings, Decimal("1"), now + timedelta(hours=4))
+
+    summary = memory.shadow_summary(now + timedelta(hours=4))
+
+    assert summary.open_count == 0
+    assert summary.closed_count == 1
+    assert summary.wins == 0
+    assert summary.total_estimated_net == Decimal("-1.7000")
 
 
 def _candidate(symbol: str, basis: Decimal, net: Decimal, reasons: list[str] | None = None) -> CashCarryOpportunity:
