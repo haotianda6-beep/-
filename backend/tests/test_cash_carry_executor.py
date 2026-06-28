@@ -224,6 +224,31 @@ def test_cash_carry_executor_tracks_multiple_recent_depth_failures(tmp_path) -> 
     assert records[0]["estimated_net_profit"] == "3"
 
 
+def test_cash_carry_executor_requires_depth_confirmation_after_exchange_depth_failures(tmp_path) -> None:
+    executor = CashCarryExecutor(tmp_path / "state.json")
+    executor.state.remember(ExecutionResult("depth-1", "blocked_by_depth", "ABC 深度不足", position=_opportunity("ABCUSDT", "3", exchange=ExchangeName.GATE)))
+    executor.state.remember(ExecutionResult("depth-2", "blocked_by_depth", "XYZ 深度不足", position=_opportunity("XYZUSDT", "3", exchange=ExchangeName.GATE)))
+    settings = BotSettings(manual_confirm_required=False, cash_carry_auto_open_enabled=True, cash_carry_auto_trade_enabled=False)
+
+    assert executor.state.recent_depth_unconfirmed_exchanges()
+    assert executor.evaluate_open([_opportunity("NEWUSDT", "3", exchange=ExchangeName.GATE)], settings) is None
+
+
+def test_cash_carry_executor_allows_confirmed_depth_after_exchange_depth_failures(tmp_path) -> None:
+    executor = CashCarryExecutor(tmp_path / "state.json")
+    executor.state.remember(ExecutionResult("depth-1", "blocked_by_depth", "ABC 深度不足", position=_opportunity("ABCUSDT", "3", exchange=ExchangeName.GATE)))
+    executor.state.remember(ExecutionResult("depth-2", "blocked_by_depth", "XYZ 深度不足", position=_opportunity("XYZUSDT", "3", exchange=ExchangeName.GATE)))
+    settings = BotSettings(manual_confirm_required=False, cash_carry_auto_open_enabled=True, cash_carry_auto_trade_enabled=False)
+    confirmed = _opportunity("NEWUSDT", "3", exchange=ExchangeName.GATE).model_copy(
+        update={"notional_usdt": Decimal("300"), "max_safe_notional_usdt": Decimal("300")}
+    )
+
+    result = executor.evaluate_open([confirmed], settings)
+
+    assert result is not None
+    assert result.status == "blocked_by_safety_gate"
+
+
 def test_cash_carry_executor_extends_cooldown_for_repeated_depth_failures(tmp_path) -> None:
     state = tmp_path / "state.json"
     now = datetime.now(timezone.utc)

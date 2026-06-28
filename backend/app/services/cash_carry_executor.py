@@ -64,6 +64,7 @@ class CashCarryExecutor:
             self.depth_block_cooldown_seconds,
             current_basis_by_key=self._current_basis_by_key(rows),
         ))
+        depth_unconfirmed_exchanges = set(self.state.recent_depth_unconfirmed_exchanges())
         active_counts = self.state.active_counts_by_exchange()
         ready = [
             item for item in rows
@@ -72,6 +73,7 @@ class CashCarryExecutor:
             and not self.history_quality.blocked_reasons(ExchangeName(item.exchange), item.symbol, settings)
             and (item.exchange, item.symbol) not in blocked_keys
             and (ExchangeName(item.exchange), item.symbol) not in depth_blocked_keys
+            and self._depth_confirmation_allows(item, depth_unconfirmed_exchanges, settings)
             and active_counts.get(ExchangeName(item.exchange), 0) < settings.cash_carry_max_positions_per_exchange
             and (allowed_open_exchanges is None or ExchangeName(item.exchange) in allowed_open_exchanges)
             and self._exposure_allows(item, settings)
@@ -643,6 +645,8 @@ class CashCarryExecutor:
                 continue
             if not self._probe_blockers_only(item.blocked_reasons):
                 continue
+            if not self._depth_confirmation_allows(item, self.state.recent_depth_unconfirmed_exchanges(), probe_settings):
+                continue
             adjusted = self._probe_item(item, probe_settings)
             if not self._probe_net_allows(adjusted, probe_settings):
                 continue
@@ -661,6 +665,18 @@ class CashCarryExecutor:
             return False
         min_net = settings.order_notional_usdt * settings.cash_carry_recovery_probe_min_net_pct / Decimal("100")
         return item.estimated_net_profit >= min_net
+
+    def _depth_confirmation_allows(
+        self,
+        item: CashCarryOpportunity,
+        depth_unconfirmed_exchanges: set[ExchangeName] | dict[ExchangeName, str],
+        settings: BotSettings,
+    ) -> bool:
+        exchange = ExchangeName(item.exchange)
+        if exchange not in depth_unconfirmed_exchanges:
+            return True
+        required = item.notional_usdt if item.notional_usdt > 0 else settings.order_notional_usdt
+        return item.max_safe_notional_usdt is not None and item.max_safe_notional_usdt >= required
 
     def _probe_item(self, item: CashCarryOpportunity, settings: BotSettings) -> CashCarryOpportunity:
         if item.notional_usdt > 0:

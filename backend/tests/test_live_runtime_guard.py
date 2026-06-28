@@ -214,6 +214,50 @@ def test_runtime_marks_recent_depth_failed_symbol_as_candidate(tmp_path) -> None
     assert "最近执行深度失败" in " / ".join(scan.candidates[0].blocked_reasons)
 
 
+def test_runtime_marks_exchange_depth_confirmation_needed_after_multiple_failures(tmp_path) -> None:
+    state = tmp_path / "cash.json"
+    now = datetime.now(timezone.utc).isoformat()
+    state.write_text(
+        (
+            '{"positions":[],"recent_depth_blocks":['
+            f'{{"status":"blocked_by_depth","exchange":"GATE","symbol":"AAAUSDT","reason":"第一次深度失败","at":"{now}"}},'
+            f'{{"status":"blocked_by_depth","exchange":"GATE","symbol":"BBBUSDT","reason":"第二次深度失败","at":"{now}"}}'
+            ']}'
+        ),
+        encoding="utf-8",
+    )
+    runtime = _runtime(tmp_path, cash_executor=CashCarryExecutor(state))
+
+    scan = runtime._apply_cash_carry_open_scope(
+        CashCarryScan(opportunities=[_cash_opportunity(ExchangeName.GATE, "CCCUSDT", "3")])
+    )
+
+    assert scan.opportunities == []
+    assert "等待盘口深度确认" in " / ".join(scan.candidates[0].blocked_reasons)
+
+
+def test_runtime_allows_depth_confirmed_candidate_after_multiple_exchange_failures(tmp_path) -> None:
+    state = tmp_path / "cash.json"
+    now = datetime.now(timezone.utc).isoformat()
+    state.write_text(
+        (
+            '{"positions":[],"recent_depth_blocks":['
+            f'{{"status":"blocked_by_depth","exchange":"GATE","symbol":"AAAUSDT","reason":"第一次深度失败","at":"{now}"}},'
+            f'{{"status":"blocked_by_depth","exchange":"GATE","symbol":"BBBUSDT","reason":"第二次深度失败","at":"{now}"}}'
+            ']}'
+        ),
+        encoding="utf-8",
+    )
+    runtime = _runtime(tmp_path, cash_executor=CashCarryExecutor(state))
+    confirmed = _cash_opportunity(ExchangeName.GATE, "CCCUSDT", "3").model_copy(
+        update={"notional_usdt": Decimal("300"), "max_safe_notional_usdt": Decimal("300")}
+    )
+
+    scan = runtime._apply_cash_carry_open_scope(CashCarryScan(opportunities=[confirmed]))
+
+    assert [(item.exchange, item.symbol) for item in scan.opportunities] == [(ExchangeName.GATE, "CCCUSDT")]
+
+
 def test_mt4_scan_uses_independent_slot(tmp_path) -> None:
     runtime = _runtime(tmp_path)
     assert runtime._full_scan_slots.acquire(blocking=False) is True

@@ -289,7 +289,9 @@ class LiveRuntimeCache:
             self.cash_carry_executor.depth_block_cooldown_seconds,
             current_basis_by_key=self._cash_carry_basis_by_key(items),
         )
+        depth_exchange_reasons = self.cash_carry_executor.state.recent_depth_unconfirmed_exchanges()
         items = [self._with_depth_block_reason(item, depth_reasons) for item in items]
+        items = [self._with_depth_exchange_confirmation_reason(item, depth_exchange_reasons) for item in items]
         if not active_counts:
             return self._rebuild_cash_carry_scan([self._without_open_scope_reason(item) for item in items], scan.issues)
         rows = []
@@ -322,6 +324,21 @@ class LiveRuntimeCache:
             return item
         reasons = [*item.blocked_reasons, reason]
         return item.model_copy(update={"blocked_reasons": self._dedupe_reasons(reasons)})
+
+    def _with_depth_exchange_confirmation_reason(
+        self,
+        item: CashCarryOpportunity,
+        depth_exchange_reasons: dict[ExchangeName, str],
+    ) -> CashCarryOpportunity:
+        reason = depth_exchange_reasons.get(ExchangeName(item.exchange))
+        if not reason or self._has_depth_confirmation(item):
+            return item
+        reasons = [*item.blocked_reasons, reason]
+        return item.model_copy(update={"blocked_reasons": self._dedupe_reasons(reasons)})
+
+    def _has_depth_confirmation(self, item: CashCarryOpportunity) -> bool:
+        required = item.notional_usdt if item.notional_usdt > 0 else self._settings.order_notional_usdt
+        return item.max_safe_notional_usdt is not None and item.max_safe_notional_usdt >= required
 
     def _cash_carry_unique_items(self, scan: CashCarryScan) -> list[CashCarryOpportunity]:
         seen: set[tuple[ExchangeName, str]] = set()

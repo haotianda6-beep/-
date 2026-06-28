@@ -15,6 +15,7 @@ DEPTH_BLOCK_RETENTION_LIMIT = 100
 DEPTH_BLOCK_REPEAT_COOLDOWN_SECONDS = 900
 DEPTH_BLOCK_REPEAT_THRESHOLD = 2
 DEPTH_BLOCK_RECHECK_BASIS_DELTA_PCT = Decimal("0.25")
+DEPTH_BLOCK_EXCHANGE_CONFIRMATION_THRESHOLD = 2
 
 
 class CashCarryStateStore:
@@ -115,6 +116,25 @@ class CashCarryStateStore:
             remaining = max(0, int(effective_cooldown - age))
             reasons[key] = f"最近执行深度失败，约 {remaining}s 后重试：{reason}"
         return reasons
+
+    def recent_depth_unconfirmed_exchanges(
+        self,
+        now: datetime | None = None,
+        window_seconds: int = DEPTH_BLOCK_RETENTION_SECONDS,
+        threshold: int = DEPTH_BLOCK_EXCHANGE_CONFIRMATION_THRESHOLD,
+    ) -> dict[ExchangeName, str]:
+        current = now or datetime.now(timezone.utc)
+        symbols_by_exchange: dict[ExchangeName, set[str]] = {}
+        for key, at, _reason, _basis_pct in self._parsed_depth_block_records(current):
+            if (current - at).total_seconds() > window_seconds:
+                continue
+            exchange, symbol = key
+            symbols_by_exchange.setdefault(exchange, set()).add(symbol)
+        return {
+            exchange: f"{exchange.value} 近期 {len(symbols)} 个币种执行前盘口深度失败，等待盘口深度确认后再开仓"
+            for exchange, symbols in symbols_by_exchange.items()
+            if len(symbols) >= threshold
+        }
 
     def mark_added(
         self,
