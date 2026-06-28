@@ -71,6 +71,9 @@ class CashCarryShadowSummary:
     avg_estimated_net: Decimal = Decimal("0")
     min_winning_entry_basis_pct: Decimal | None = None
     window_hours: int = 24
+    target_entry_basis_pct: Decimal | None = None
+    target_entry_win_rate_pct: Decimal = Decimal("0")
+    target_entry_trade_count: int = 0
 
 
 class CashCarryShadowMemory:
@@ -111,7 +114,12 @@ class CashCarryShadowMemory:
         if changed:
             self._save()
 
-    def summary(self, now: datetime | None = None, exchange: ExchangeName | None = None) -> CashCarryShadowSummary:
+    def summary(
+        self,
+        now: datetime | None = None,
+        exchange: ExchangeName | None = None,
+        target_win_rate_pct: Decimal = Decimal("70"),
+    ) -> CashCarryShadowSummary:
         current = now or datetime.now(timezone.utc)
         if self._prune_shadow(current):
             self._save()
@@ -129,7 +137,20 @@ class CashCarryShadowMemory:
         avg = Decimal("0") if not closed else total / Decimal(len(closed))
         winning_basis = [item.entry_basis_pct for item in closed if item.estimated_net_profit > 0]
         min_winning_basis = min(winning_basis) if winning_basis else None
-        return CashCarryShadowSummary(open_count, len(closed), wins, total, win_rate, worst, avg, min_winning_basis)
+        target_basis, target_basis_win_rate, target_basis_count = _target_entry_policy(closed, target_win_rate_pct)
+        return CashCarryShadowSummary(
+            open_count,
+            len(closed),
+            wins,
+            total,
+            win_rate,
+            worst,
+            avg,
+            min_winning_basis,
+            target_entry_basis_pct=target_basis,
+            target_entry_win_rate_pct=target_basis_win_rate,
+            target_entry_trade_count=target_basis_count,
+        )
 
     def _close_shadow_positions(
         self,
@@ -219,6 +240,22 @@ def _is_exchange_depth_confirmation_reason(reason: str) -> bool:
 def _shadow_probe_net_floor(dynamic_net_floor: Decimal, item: CashCarryOpportunity, settings) -> Decimal:
     notional = item.notional_usdt or settings.order_notional_usdt
     return min(dynamic_net_floor, max(Decimal("0.05"), notional * SHADOW_PROBE_MIN_NET_PCT / Decimal("100")))
+
+
+def _target_entry_policy(closed: list[CashCarryShadowClosedTrade], target_win_rate_pct: Decimal) -> tuple[Decimal | None, Decimal, int]:
+    if not closed:
+        return None, Decimal("0"), 0
+    min_sample_count = min(len(closed), 3)
+    for threshold in sorted({item.entry_basis_pct for item in closed}):
+        rows = [item for item in closed if item.entry_basis_pct >= threshold]
+        if len(rows) < min_sample_count:
+            continue
+        wins = sum(1 for item in rows if item.estimated_net_profit > 0)
+        win_rate = Decimal(wins) / Decimal(len(rows)) * Decimal("100")
+        total_net = sum((item.estimated_net_profit for item in rows), Decimal("0"))
+        if win_rate >= target_win_rate_pct and total_net > 0:
+            return threshold, win_rate, len(rows)
+    return None, Decimal("0"), 0
 
 
 def _read_state(path: Path) -> dict[str, Any]:

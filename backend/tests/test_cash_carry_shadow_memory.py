@@ -70,6 +70,26 @@ def test_cash_carry_shadow_memory_summary_can_filter_exchange(tmp_path) -> None:
     assert bitget.total_estimated_net == Decimal("0.4")
 
 
+def test_cash_carry_shadow_memory_recommends_lowest_basis_that_meets_target_win_rate(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(
+        '{"positions":[],"cash_carry_shadow":{"open":[], "closed":['
+        '{"opened_at":"2026-06-28T00:00:00+00:00","exchange":"GATE","symbol":"L1USDT","entry_basis_pct":"0.40","max_basis_pct":"0.40","closed_at":"2026-06-28T00:10:00+00:00","close_basis_pct":"0.40","estimated_net_profit":"-0.30","execution_buffer_usdt":"0.3","reason":"超时观察"},'
+        '{"opened_at":"2026-06-28T00:00:00+00:00","exchange":"GATE","symbol":"L2USDT","entry_basis_pct":"0.42","max_basis_pct":"0.42","closed_at":"2026-06-28T00:10:00+00:00","close_basis_pct":"0.42","estimated_net_profit":"-0.20","execution_buffer_usdt":"0.3","reason":"超时观察"},'
+        '{"opened_at":"2026-06-28T00:00:00+00:00","exchange":"GATE","symbol":"W1USDT","entry_basis_pct":"0.45","max_basis_pct":"0.45","closed_at":"2026-06-28T00:10:00+00:00","close_basis_pct":"0.10","estimated_net_profit":"0.40","execution_buffer_usdt":"0.3","reason":"基差回归"},'
+        '{"opened_at":"2026-06-28T00:00:00+00:00","exchange":"GATE","symbol":"W2USDT","entry_basis_pct":"0.50","max_basis_pct":"0.50","closed_at":"2026-06-28T00:10:00+00:00","close_basis_pct":"0.10","estimated_net_profit":"0.70","execution_buffer_usdt":"0.3","reason":"基差回归"},'
+        '{"opened_at":"2026-06-28T00:00:00+00:00","exchange":"GATE","symbol":"W3USDT","entry_basis_pct":"0.60","max_basis_pct":"0.60","closed_at":"2026-06-28T00:10:00+00:00","close_basis_pct":"0.10","estimated_net_profit":"1.00","execution_buffer_usdt":"0.3","reason":"基差回归"}'
+        ']}}',
+        encoding="utf-8",
+    )
+
+    summary = CashCarryShadowMemory(state).summary(exchange=ExchangeName.GATE, target_win_rate_pct=Decimal("80"))
+
+    assert summary.target_entry_basis_pct == Decimal("0.45")
+    assert summary.target_entry_win_rate_pct == Decimal("100")
+    assert summary.target_entry_trade_count == 3
+
+
 def test_cash_carry_shadow_memory_keeps_sampling_during_exchange_depth_confirmation(tmp_path) -> None:
     state = tmp_path / "state.json"
     now = datetime.now(timezone.utc)

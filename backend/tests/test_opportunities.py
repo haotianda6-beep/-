@@ -217,14 +217,15 @@ def test_cash_carry_frequency_event_includes_exchange_shadow_threshold(tmp_path)
     event = next(item for item in events if item.id == "cash-carry-frequency-diagnostic")
     assert "交易所影子门槛" in event.detail
     assert "GATE 已平 1 单" in event.detail
-    assert "距影子赢家最低基差还差 0.5000%" in event.detail
+    assert "目标胜率线 1.5000%/100.00%/1单" in event.detail
+    assert "距目标胜率入场基差还差 0.5000%" in event.detail
 
 
 def test_cash_carry_probe_diagnostic_event_reads_executor_state(tmp_path) -> None:
     state = tmp_path / "cash_carry_execution_state.json"
     store = CashCarryStateStore(state)
     store.remember_probe_diagnostic(
-        "GATE ABCUSDT 未进入小额探索：当前基差 0.5000% < 影子赢家最低入场门槛 0.5700%",
+        "GATE ABCUSDT 未进入小额探索：当前基差 0.5000% < 影子目标胜率入场门槛 0.5700%",
         _candidate("ABCUSDT", Decimal("0.5"), ["信号持续不足"]),
     )
     engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))

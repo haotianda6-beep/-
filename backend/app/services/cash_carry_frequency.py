@@ -79,8 +79,13 @@ def cash_carry_frequency_event(
             if shadow_summary.min_winning_entry_basis_pct is not None
             else ""
         )
+        target_basis_note = (
+            f"，目标胜率入场基差 {shadow_summary.target_entry_basis_pct:.4f}%/{shadow_summary.target_entry_win_rate_pct:.2f}%/{shadow_summary.target_entry_trade_count}单"
+            if shadow_summary.target_entry_basis_pct is not None
+            else ""
+        )
         detail_parts.append(
-            f"近{shadow_summary.window_hours}小时探索影子样本：已平 {shadow_summary.closed_count} 单，未平 {shadow_summary.open_count} 单，胜率 {shadow_summary.win_rate_pct:.2f}%，估算净利 {shadow_summary.total_estimated_net:.4f}U，均值 {shadow_summary.avg_estimated_net:.4f}U，最差 {shadow_summary.worst_estimated_net:.4f}U{basis_note}"
+            f"近{shadow_summary.window_hours}小时探索影子样本：已平 {shadow_summary.closed_count} 单，未平 {shadow_summary.open_count} 单，胜率 {shadow_summary.win_rate_pct:.2f}%，估算净利 {shadow_summary.total_estimated_net:.4f}U，均值 {shadow_summary.avg_estimated_net:.4f}U，最差 {shadow_summary.worst_estimated_net:.4f}U{basis_note}{target_basis_note}"
         )
     exchange_notes = _exchange_shadow_notes(candidates, shadow_summaries_by_exchange)
     if exchange_notes:
@@ -133,12 +138,18 @@ def _exchange_shadow_notes(
         nearest = _nearest_exchange_candidate(candidates, exchange)
         basis_note = ""
         if nearest and summary.min_winning_entry_basis_pct is not None:
-            gap = max(Decimal("0"), summary.min_winning_entry_basis_pct - nearest.basis_pct)
-            basis_note = f"，当前最近 {nearest.symbol} 基差 {nearest.basis_pct:.4f}%，距影子赢家最低基差还差 {gap:.4f}%"
+            target_basis = summary.target_entry_basis_pct or summary.min_winning_entry_basis_pct
+            gap = max(Decimal("0"), target_basis - nearest.basis_pct)
+            basis_note = f"，当前最近 {nearest.symbol} 基差 {nearest.basis_pct:.4f}%，距目标胜率入场基差还差 {gap:.4f}%"
         elif nearest:
             basis_note = f"，当前最近 {nearest.symbol} 基差 {nearest.basis_pct:.4f}%"
+        target_note = (
+            f"，目标胜率线 {summary.target_entry_basis_pct:.4f}%/{summary.target_entry_win_rate_pct:.2f}%/{summary.target_entry_trade_count}单"
+            if summary.target_entry_basis_pct is not None
+            else ""
+        )
         notes.append(
-            f"{exchange.value} 已平 {summary.closed_count} 单，胜率 {summary.win_rate_pct:.2f}%，均值 {summary.avg_estimated_net:.4f}U，最差 {summary.worst_estimated_net:.4f}U{basis_note}"
+            f"{exchange.value} 已平 {summary.closed_count} 单，胜率 {summary.win_rate_pct:.2f}%，均值 {summary.avg_estimated_net:.4f}U，最差 {summary.worst_estimated_net:.4f}U{target_note}{basis_note}"
         )
     return notes
 

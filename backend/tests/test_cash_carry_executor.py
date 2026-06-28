@@ -1037,7 +1037,7 @@ def test_cash_carry_executor_records_probe_diagnostic_when_shadow_basis_is_low(t
     diagnostic = executor.state.read()["last_probe_diagnostic"]
     assert diagnostic["exchange"] == "GATE"
     assert diagnostic["symbol"] == "ABCUSDT"
-    assert "当前基差 0.5000% < 影子赢家最低入场门槛 0.5700%" in diagnostic["reason"]
+    assert "当前基差 0.5000% < 影子目标胜率入场门槛 0.5700%" in diagnostic["reason"]
 
 
 def test_cash_carry_executor_probe_diagnostic_prefers_actionable_soft_blocker(tmp_path) -> None:
@@ -1057,7 +1057,7 @@ def test_cash_carry_executor_probe_diagnostic_prefers_actionable_soft_blocker(tm
     assert result is None
     diagnostic = executor.state.read()["last_probe_diagnostic"]
     assert diagnostic["symbol"] == "ABCUSDT"
-    assert "当前基差 0.5000% < 影子赢家最低入场门槛 0.5700%" in diagnostic["reason"]
+    assert "当前基差 0.5000% < 影子目标胜率入场门槛 0.5700%" in diagnostic["reason"]
 
 
 def _opportunity(symbol: str = "ABCUSDT", net: str = "0.8", basis: str = "1", funding: str = "0.01", exchange: ExchangeName = ExchangeName.GATE) -> CashCarryOpportunity:

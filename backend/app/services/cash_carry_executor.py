@@ -812,18 +812,19 @@ class CashCarryExecutor:
         base_settings: BotSettings,
         probe_settings: BotSettings,
     ) -> str | None:
-        summary = CashCarryShadowMemory(self.state_path).summary(exchange=ExchangeName(original.exchange))
+        target_win = base_settings.cash_carry_target_win_rate_pct or Decimal("70")
+        summary = CashCarryShadowMemory(self.state_path).summary(exchange=ExchangeName(original.exchange), target_win_rate_pct=target_win)
         if summary.closed_count < self.shadow_probe_min_closed:
             return f"影子样本不足 {summary.closed_count}/{self.shadow_probe_min_closed}"
-        target_win = base_settings.cash_carry_target_win_rate_pct or Decimal("70")
         if summary.win_rate_pct < target_win or summary.total_estimated_net <= 0:
             return f"影子胜率或累计净利不足：胜率 {summary.win_rate_pct:.2f}% / 累计 {summary.total_estimated_net:.4f}U"
         if summary.worst_estimated_net < -close_execution_buffer(base_settings):
             return f"影子最差亏损 {summary.worst_estimated_net:.4f}U 超过执行缓冲 {-close_execution_buffer(base_settings):.4f}U"
-        if summary.min_winning_entry_basis_pct is not None:
-            required_basis = max(Decimal("0"), summary.min_winning_entry_basis_pct - self.shadow_probe_basis_buffer_pct)
+        entry_basis = summary.target_entry_basis_pct or summary.min_winning_entry_basis_pct
+        if entry_basis is not None:
+            required_basis = max(Decimal("0"), entry_basis - self.shadow_probe_basis_buffer_pct)
             if original.basis_pct < required_basis:
-                return f"当前基差 {original.basis_pct:.4f}% < 影子赢家最低入场门槛 {required_basis:.4f}%"
+                return f"当前基差 {original.basis_pct:.4f}% < 影子目标胜率入场门槛 {required_basis:.4f}%"
         if probe_settings.order_notional_usdt <= 0 or base_settings.order_notional_usdt <= 0:
             return "小额本金或基础本金无效"
         scale = probe_settings.order_notional_usdt / base_settings.order_notional_usdt
