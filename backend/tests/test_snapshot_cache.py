@@ -3,11 +3,20 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 from app.api import routes
 from app.core.models import BotSettings, CashCarryOpportunity, CashCarryPositionRow, DataSource, ExchangeName, PositionSnapshot
 from app.services.arbitrage_engine import ArbitrageEngine
+from app.services.cash_carry_market_memory import CashCarryMarketMemory
 from app.services.live_market_types import CashCarryScan
 from app.services.settings_store import SettingsStore
+
+
+@pytest.fixture(autouse=True)
+def isolate_route_engine_cash_carry_memory(monkeypatch, tmp_path) -> None:
+    memory = CashCarryMarketMemory(tmp_path / "cash_carry_execution_state.json")
+    monkeypatch.setattr(routes.engine, "cash_carry_market_memory", memory)
 
 
 def test_snapshot_cache_returns_loading_snapshot_without_waiting(monkeypatch) -> None:

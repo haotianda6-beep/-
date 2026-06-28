@@ -61,6 +61,7 @@ class ArbitrageEngine:
             self.cash_carry_scanner,
             self.mt4_spread_scanner,
             ticker_cache=self.ticker_cache,
+            cash_carry_market_memory=self.cash_carry_market_memory,
         )
 
     def snapshot(self) -> RealtimeSnapshot:

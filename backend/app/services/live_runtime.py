@@ -5,6 +5,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from app.core.credential_utils import env_bool
@@ -13,6 +14,7 @@ from app.services.binance_alpha_scanner import AlphaAlertScan, BinanceAlphaScann
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGE_SET, CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.cash_carry_executor import CashCarryExecutor
 from app.services.cash_carry_fast_refresh import CashCarryFastRefresher
+from app.services.cash_carry_market_memory import CashCarryMarketMemory
 from app.services.cash_carry_positions import CashCarryPositionBuilder
 from app.services.cash_carry_quality import cash_carry_candidate_sort_key, cash_carry_quality_score
 from app.services.cash_carry_scanner import CashCarryScanner
@@ -69,6 +71,7 @@ class LiveRuntimeCache:
         mt4_spread_scanner: Mt4SpreadScanner,
         cash_carry_executor: CashCarryExecutor | None = None,
         ticker_cache: WSTickerCache | None = None,
+        cash_carry_market_memory: CashCarryMarketMemory | None = None,
     ) -> None:
         self.live_read = live_read
         self.cash_carry_scanner = cash_carry_scanner
@@ -77,6 +80,7 @@ class LiveRuntimeCache:
         self.ticker_cache = ticker_cache or WSTickerCache(max_symbols_per_stream=CASH_CARRY_INTERNAL_CANDIDATE_LIMIT)
         self.cash_carry_refresher = CashCarryFastRefresher(self.ticker_cache)
         self.cash_carry_signal_tracker = CashCarrySignalTracker()
+        self.cash_carry_market_memory = cash_carry_market_memory
         self.cash_position_builder = CashCarryPositionBuilder(self.ticker_cache)
         self.alpha_scanner = BinanceAlphaScanner()
         self._account = LiveAccountSnapshot(issues=["账户数据后台加载中"])
@@ -158,6 +162,7 @@ class LiveRuntimeCache:
                 result = self.cash_carry_refresher.refresh(current, self._settings)
             result = self.cash_carry_signal_tracker.apply(result, self._settings)
             result = self._apply_cash_carry_open_scope(result)
+            self._observe_cash_carry_market(result)
             self._execute_cash_carry(result)
             with self._lock:
                 self._cash_carry = result
@@ -419,6 +424,20 @@ class LiveRuntimeCache:
                 )
         except Exception as exc:  # noqa: BLE001 - exchange execution failures must not stop scanning.
             logger.warning("cash carry execution failed: %s", str(exc)[:220])
+
+    def _observe_cash_carry_market(self, result: CashCarryScan) -> None:
+        if self.cash_carry_market_memory is None:
+            return
+        rows = self._cash_carry_unique_items(result)
+        if not rows:
+            return
+        now = datetime.now(timezone.utc)
+        try:
+            gate = self.cash_carry_executor.history_quality.entry_quality_gate(self._settings, now)
+            self.cash_carry_market_memory.observe(rows, now)
+            self.cash_carry_market_memory.observe_shadow(rows, self._settings, gate.min_net_profit, now)
+        except Exception as exc:  # noqa: BLE001 - memory collection must not stop live scanning.
+            logger.warning("cash carry market memory failed: %s", str(exc)[:220])
 
     def _cash_position_rows(self, rows):
         with self._lock:

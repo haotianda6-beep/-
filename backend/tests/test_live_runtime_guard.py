@@ -157,6 +157,19 @@ def test_runtime_rebuild_keeps_internal_candidate_pool(tmp_path) -> None:
     assert len(scan.candidates) == CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 
 
+def test_runtime_records_cash_carry_market_memory_without_frontend_request(tmp_path) -> None:
+    memory = _MarketMemory()
+    runtime = _runtime(tmp_path, market_memory=memory)
+    runtime._settings = BotSettings(order_notional_usdt=Decimal("300"))
+    scan = CashCarryScan(candidates=[_cash_opportunity(ExchangeName.GATE, "ABCUSDT", "1.2")])
+
+    runtime._observe_cash_carry_market(scan)
+
+    assert len(memory.observed) == 1
+    assert len(memory.shadow_observed) == 1
+    assert memory.shadow_observed[0][2] > 0
+
+
 def test_runtime_default_ws_capacity_covers_internal_candidate_pool(tmp_path) -> None:
     runtime = _runtime(tmp_path)
 
@@ -283,13 +296,14 @@ def test_cash_carry_full_scan_interval_keeps_rate_limit_floor(monkeypatch) -> No
     assert _cash_carry_full_scan_interval() == 60.0
 
 
-def _runtime(tmp_path, cash_executor=None, ticker_cache=None) -> LiveRuntimeCache:
+def _runtime(tmp_path, cash_executor=None, ticker_cache=None, market_memory=None) -> LiveRuntimeCache:
     return LiveRuntimeCache(
         _LiveRead(),
         _Scanner(),
         _Mt4Scanner(),
         cash_carry_executor=cash_executor or CashCarryExecutor(tmp_path / "cash.json"),
         ticker_cache=ticker_cache,
+        cash_carry_market_memory=market_memory,
     )
 
 
@@ -343,3 +357,15 @@ class _TickerCache:
 
     def replace_subscriptions(self, exchange, market_type, subscriptions):
         self.subscriptions[(exchange, market_type)] = dict(subscriptions)
+
+
+class _MarketMemory:
+    def __init__(self) -> None:
+        self.observed = []
+        self.shadow_observed = []
+
+    def observe(self, rows, now=None):
+        self.observed.append((rows, now))
+
+    def observe_shadow(self, rows, settings, dynamic_net_floor, now=None):
+        self.shadow_observed.append((rows, settings, dynamic_net_floor, now))
