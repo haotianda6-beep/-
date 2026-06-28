@@ -1052,6 +1052,18 @@ def test_shadow_probe_uses_probe_notional_for_exchange_depth_confirmation(tmp_pa
     assert mode == "影子样本小额探索"
 
 
+def test_shadow_probe_open_guard_uses_small_positive_net_floor(tmp_path) -> None:
+    executor = CashCarryExecutor(tmp_path / "state.json")
+    settings = BotSettings(order_notional_usdt=Decimal("100"))
+    item = _opportunity(net="0.2", basis="0.45")
+
+    normal_floor = executor._open_entry_min_net_profit(item, settings)
+    probe_floor = executor._open_entry_min_net_profit(item, settings, "影子样本小额探索")
+
+    assert normal_floor == Decimal("0.60")
+    assert probe_floor == Decimal("0.10")
+
+
 def test_cash_carry_executor_records_probe_diagnostic_when_shadow_basis_is_low(tmp_path) -> None:
     state = tmp_path / "state.json"
     state.write_text(_shadow_state(5, ExchangeName.GATE), encoding="utf-8")
@@ -1153,7 +1165,7 @@ def test_cash_carry_executor_shadow_probe_adds_recent_depth_haircut(tmp_path) ->
     assert "频率校准已放宽" not in diagnostic["reason"]
 
 
-def test_cash_carry_executor_uses_exchange_depth_haircut_as_soft_warning(tmp_path) -> None:
+def test_cash_carry_executor_ignores_other_symbol_depth_haircut_for_shadow_probe_basis(tmp_path) -> None:
     state = tmp_path / "state.json"
     state.write_text(_shadow_state_with_depth_haircut(5, ExchangeName.GATE, symbol="OTHERUSDT"), encoding="utf-8")
     executor = CashCarryExecutor(state)
@@ -1164,7 +1176,7 @@ def test_cash_carry_executor_uses_exchange_depth_haircut_as_soft_warning(tmp_pat
         order_notional_usdt=Decimal("300"),
         cash_carry_recovery_probe_notional_usdt=Decimal("100"),
     )
-    item = _opportunity(net="2.0", basis="0.58").model_copy(
+    item = _opportunity(net="2.0", basis="0.43").model_copy(
         update={"blocked_reasons": ["合约溢价未达 0.8%", "V3冷启动净利预估 2.0000U < 冷启动安全垫 3.0000U"]}
     )
 

@@ -35,7 +35,6 @@ class CashCarryExecutor:
     frequency_probe_min_shadow_win_margin_pct = Decimal("20")
     frequency_probe_max_basis_relax_pct = Decimal("0.15")
     frequency_probe_min_basis_over_close_pct = Decimal("0.15")
-    frequency_probe_exchange_depth_haircut_ratio = Decimal("0.50")
     def __init__(self, state_path: Path | None = None) -> None:
         root = Path(__file__).resolve().parents[3]
         self.state_path = state_path or root / "config" / "cash_carry_execution_state.json"
@@ -171,6 +170,7 @@ class CashCarryExecutor:
         perp_order_id = None
         spot_entry_price = item.spot_price
         try:
+            min_net_profit = self._open_entry_min_net_profit(item, settings, mode_label)
             guard = forward_open_depth_guard(
                 spot,
                 swap,
@@ -178,7 +178,7 @@ class CashCarryExecutor:
                 swap_symbol,
                 settings.order_notional_usdt,
                 self._open_min_basis_pct(item, settings),
-                min_net_profit=self.history_quality.entry_quality_gate(settings, exchange=ExchangeName(item.exchange)).min_net_profit,
+                min_net_profit=min_net_profit,
                 open_close_fee=item.estimated_open_close_fee,
                 funding_income=item.estimated_funding_income,
                 close_basis_pct=settings.cash_carry_close_basis_pct,
@@ -191,6 +191,7 @@ class CashCarryExecutor:
                 base_qty = item.quantity
                 spot_entry_price = item.spot_price
                 mode_label = self._append_mode_label(mode_label, f"深度自适应 {settings.order_notional_usdt}U")
+                min_net_profit = self._open_entry_min_net_profit(item, settings, mode_label)
             self._maybe_transfer(spot, item, settings, steps[0])
             self._run(steps[1], lambda: self._set_leverage(swap, swap_symbol, settings.default_leverage, settings.margin_mode), True)
             self._verify_leverage(swap, swap_symbol, settings.default_leverage, "short", settings.margin_mode, steps[1])
@@ -199,7 +200,7 @@ class CashCarryExecutor:
             base_qty = filled_base_quantity(spot, spot_symbol, spot_order, item.quantity)
             spot_entry_price = order_average_price(spot_order, item.spot_price)
             spot_order_id = self._order_id(spot_order)
-            post_spot_guard = self._post_spot_open_guard(item, settings, swap, swap_symbol, base_qty, spot_entry_price)
+            post_spot_guard = self._post_spot_open_guard(item, settings, swap, swap_symbol, base_qty, spot_entry_price, min_net_profit)
             if not post_spot_guard.ok:
                 steps[3].status = "failed"
                 steps[3].detail = post_spot_guard.reason
@@ -833,12 +834,7 @@ class CashCarryExecutor:
                 symbol=original.symbol,
                 exchange_fallback=False,
             )
-            exchange_depth_haircut = (
-                self.state.recent_depth_basis_haircut_pct(exchange) * self.frequency_probe_exchange_depth_haircut_ratio
-                if symbol_depth_haircut <= 0
-                else Decimal("0")
-            )
-            depth_haircut = symbol_depth_haircut if symbol_depth_haircut > 0 else exchange_depth_haircut
+            depth_haircut = symbol_depth_haircut
             frequency_relax = (
                 Decimal("0")
                 if estimate_gap_buffer > 0 or symbol_depth_haircut > 0
@@ -1202,22 +1198,37 @@ class CashCarryExecutor:
         swap_symbol: str,
         base_qty: Decimal,
         spot_entry_price: Decimal,
+        min_net_profit: Decimal | None = None,
     ):
         notional = base_qty * spot_entry_price
         reference = item.notional_usdt or settings.order_notional_usdt
         factor = notional / reference if reference > 0 and notional > 0 else Decimal("1")
-        gate = self.history_quality.entry_quality_gate(settings, exchange=ExchangeName(item.exchange))
+        base_min_net = (
+            min_net_profit
+            if min_net_profit is not None
+            else self.history_quality.entry_quality_gate(settings, exchange=ExchangeName(item.exchange)).min_net_profit
+        )
         return forward_perp_entry_guard_after_spot(
             swap,
             swap_symbol,
             base_qty,
             spot_entry_price,
             self._open_min_basis_pct(item, settings),
-            min_net_profit=gate.min_net_profit * factor,
+            min_net_profit=base_min_net * factor,
             open_close_fee=item.estimated_open_close_fee * factor,
             funding_income=item.estimated_funding_income * factor,
             close_basis_pct=settings.cash_carry_close_basis_pct,
         )
+
+    def _open_entry_min_net_profit(self, item: CashCarryOpportunity, settings: BotSettings, mode_label: str = "") -> Decimal:
+        quality_floor = self.history_quality.entry_quality_gate(settings, exchange=ExchangeName(item.exchange)).min_net_profit
+        if "影子样本小额探索" not in mode_label:
+            return quality_floor
+        probe_floor = max(
+            Decimal("0.05"),
+            settings.order_notional_usdt * self.shadow_probe_min_net_pct / Decimal("100"),
+        )
+        return min(quality_floor, probe_floor)
 
     def _safe_taker_fee(self, exchange: ExchangeName, market_type: str, symbol: str) -> Decimal:
         try:
