@@ -143,12 +143,16 @@ class CashCarryStateStore:
     def recent_depth_basis_haircut_pct(
         self,
         exchange: ExchangeName,
+        symbol: str | None = None,
         now: datetime | None = None,
         window_seconds: int = DEPTH_BLOCK_RETENTION_SECONDS,
+        exchange_fallback: bool = True,
     ) -> Decimal:
         current = now or datetime.now(timezone.utc)
         exchange_name = ExchangeName(exchange)
         haircuts: list[Decimal] = []
+        symbol_haircuts: list[Decimal] = []
+        normalized_symbol = str(symbol).upper() if symbol is not None else None
         for key, at, reason, ticker_basis in self._parsed_depth_block_records(current):
             if key[0] != exchange_name or ticker_basis is None:
                 continue
@@ -160,6 +164,12 @@ class CashCarryStateStore:
             haircut = ticker_basis - depth_basis
             if haircut > 0:
                 haircuts.append(haircut)
+                if normalized_symbol is not None and key[1].upper() == normalized_symbol:
+                    symbol_haircuts.append(haircut)
+        if normalized_symbol is not None and symbol_haircuts:
+            return min(symbol_haircuts)
+        if normalized_symbol is not None and not exchange_fallback:
+            return Decimal("0")
         return min(haircuts) if haircuts else Decimal("0")
 
     def mark_added(

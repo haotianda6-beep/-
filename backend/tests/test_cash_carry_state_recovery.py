@@ -51,8 +51,17 @@ def test_cash_carry_state_extracts_recent_depth_basis_haircut(tmp_path) -> None:
     )
     now = datetime(2026, 6, 28, 0, 1, tzinfo=timezone.utc)
 
-    assert CashCarryStateStore(state).recent_depth_basis_haircut_pct(ExchangeName.GATE, now) == Decimal("0.3000")
-    assert CashCarryStateStore(state).recent_depth_basis_haircut_pct(ExchangeName.BITGET, now) == Decimal("0.1000")
+    store = CashCarryStateStore(state)
+    assert store.recent_depth_basis_haircut_pct(ExchangeName.GATE, now=now) == Decimal("0.3000")
+    assert store.recent_depth_basis_haircut_pct(ExchangeName.BITGET, now=now) == Decimal("0.1000")
+    assert store.recent_depth_basis_haircut_pct(ExchangeName.GATE, symbol="ABCUSDT", now=now) == Decimal("0.3000")
+    assert store.recent_depth_basis_haircut_pct(ExchangeName.GATE, symbol="OTHERUSDT", now=now) == Decimal("0.3000")
+    assert store.recent_depth_basis_haircut_pct(
+        ExchangeName.GATE,
+        symbol="OTHERUSDT",
+        now=now,
+        exchange_fallback=False,
+    ) == Decimal("0")
 
 
 def _opportunity() -> CashCarryOpportunity:

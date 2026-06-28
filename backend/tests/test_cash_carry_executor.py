@@ -1103,7 +1103,7 @@ def test_cash_carry_executor_allows_frequency_calibration_probe_when_shadow_win_
 
 def test_cash_carry_executor_shadow_probe_adds_recent_depth_haircut(tmp_path) -> None:
     state = tmp_path / "state.json"
-    state.write_text(_shadow_state_with_depth_haircut(5, ExchangeName.GATE), encoding="utf-8")
+    state.write_text(_shadow_state_with_depth_haircut(5, ExchangeName.GATE, symbol="ABCUSDT"), encoding="utf-8")
     executor = CashCarryExecutor(state)
     settings = BotSettings(
         cash_carry_auto_open_enabled=True,
@@ -1121,6 +1121,28 @@ def test_cash_carry_executor_shadow_probe_adds_recent_depth_haircut(tmp_path) ->
     assert "影子目标胜率入场门槛 0.8700%" in diagnostic["reason"]
     assert "盘口深度折损缓冲 0.3000%" in diagnostic["reason"]
     assert "频率校准已放宽" not in diagnostic["reason"]
+
+
+def test_cash_carry_executor_uses_exchange_depth_haircut_as_soft_warning(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(_shadow_state_with_depth_haircut(5, ExchangeName.GATE, symbol="OTHERUSDT"), encoding="utf-8")
+    executor = CashCarryExecutor(state)
+    settings = BotSettings(
+        manual_confirm_required=False,
+        cash_carry_auto_open_enabled=True,
+        cash_carry_auto_trade_enabled=False,
+        order_notional_usdt=Decimal("300"),
+        cash_carry_recovery_probe_notional_usdt=Decimal("100"),
+    )
+    item = _opportunity(net="2.0", basis="0.58").model_copy(
+        update={"blocked_reasons": ["合约溢价未达 0.8%", "V3冷启动净利预估 2.0000U < 冷启动安全垫 3.0000U"]}
+    )
+
+    result = executor.evaluate_open([item], settings)
+
+    assert result is not None
+    assert result.status == "blocked_by_safety_gate"
+    assert "正向期现自动下单未开启" in result.reason
 
 
 def _opportunity(symbol: str = "ABCUSDT", net: str = "0.8", basis: str = "1", funding: str = "0.01", exchange: ExchangeName = ExchangeName.GATE) -> CashCarryOpportunity:
@@ -1210,13 +1232,15 @@ def _shadow_state_with_estimate_gaps(count: int, exchange: ExchangeName) -> str:
     return state.replace('"positions":[]', '"positions":[' + positions + "]")
 
 
-def _shadow_state_with_depth_haircut(count: int, exchange: ExchangeName) -> str:
+def _shadow_state_with_depth_haircut(count: int, exchange: ExchangeName, symbol: str = "DEPTHUSDT") -> str:
     state = _shadow_state(count, exchange)
-    at = datetime.now(timezone.utc).isoformat()
+    at = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
     depth_block = (
         '"recent_depth_blocks":[{"exchange":"'
         + exchange.value
-        + '","symbol":"DEPTHUSDT","reason":"深度均价开仓基差 0.1000% 低于 0.5000% ","basis_pct":"0.4000","at":"'
+        + '","symbol":"'
+        + symbol
+        + '","reason":"深度均价开仓基差 0.1000% 低于 0.5000% ","basis_pct":"0.4000","at":"'
         + at
         + '"}]'
     )

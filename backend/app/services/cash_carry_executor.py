@@ -35,6 +35,7 @@ class CashCarryExecutor:
     frequency_probe_min_shadow_win_margin_pct = Decimal("20")
     frequency_probe_max_basis_relax_pct = Decimal("0.15")
     frequency_probe_min_basis_over_close_pct = Decimal("0.15")
+    frequency_probe_exchange_depth_haircut_ratio = Decimal("0.50")
     def __init__(self, state_path: Path | None = None) -> None:
         root = Path(__file__).resolve().parents[3]
         self.state_path = state_path or root / "config" / "cash_carry_execution_state.json"
@@ -827,8 +828,22 @@ class CashCarryExecutor:
         if entry_basis is not None:
             exchange = ExchangeName(original.exchange)
             estimate_gap_buffer = self.history_quality.estimate_gap_basis_buffer_pct(base_settings, exchange=exchange)
-            depth_haircut = self.state.recent_depth_basis_haircut_pct(exchange)
-            frequency_relax = Decimal("0") if estimate_gap_buffer > 0 or depth_haircut > 0 else self._frequency_probe_basis_relaxation(summary, base_settings, exchange)
+            symbol_depth_haircut = self.state.recent_depth_basis_haircut_pct(
+                exchange,
+                symbol=original.symbol,
+                exchange_fallback=False,
+            )
+            exchange_depth_haircut = (
+                self.state.recent_depth_basis_haircut_pct(exchange) * self.frequency_probe_exchange_depth_haircut_ratio
+                if symbol_depth_haircut <= 0
+                else Decimal("0")
+            )
+            depth_haircut = symbol_depth_haircut if symbol_depth_haircut > 0 else exchange_depth_haircut
+            frequency_relax = (
+                Decimal("0")
+                if estimate_gap_buffer > 0 or symbol_depth_haircut > 0
+                else self._frequency_probe_basis_relaxation(summary, base_settings, exchange)
+            )
             protective_floor = base_settings.cash_carry_close_basis_pct + self.frequency_probe_min_basis_over_close_pct
             required_basis = max(
                 Decimal("0"),
