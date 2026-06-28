@@ -35,6 +35,26 @@ def test_cash_carry_shadow_memory_closes_missing_sample_after_timeout(tmp_path) 
     assert summary.total_estimated_net == Decimal("-0.5")
 
 
+def test_cash_carry_shadow_memory_summary_can_filter_exchange(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(
+        '{"positions":[],"cash_carry_shadow":{"open":[], "closed":['
+        '{"opened_at":"2026-06-28T00:00:00+00:00","exchange":"GATE","symbol":"GUSDT","entry_basis_pct":"0.6","max_basis_pct":"0.7","closed_at":"2026-06-28T00:10:00+00:00","close_basis_pct":"0.1","estimated_net_profit":"1.2","reason":"基差回归"},'
+        '{"opened_at":"2026-06-28T00:00:00+00:00","exchange":"BITGET","symbol":"BUSDT","entry_basis_pct":"0.5","max_basis_pct":"0.6","closed_at":"2026-06-28T00:10:00+00:00","close_basis_pct":"0.2","estimated_net_profit":"0.4","reason":"基差回归"}'
+        ']}}',
+        encoding="utf-8",
+    )
+
+    gate = CashCarryShadowMemory(state).summary(exchange=ExchangeName.GATE)
+    bitget = CashCarryShadowMemory(state).summary(exchange=ExchangeName.BITGET)
+
+    assert gate.closed_count == 1
+    assert gate.total_estimated_net == Decimal("1.2")
+    assert gate.min_winning_entry_basis_pct == Decimal("0.6")
+    assert bitget.closed_count == 1
+    assert bitget.total_estimated_net == Decimal("0.4")
+
+
 def _candidate(symbol: str, basis: Decimal, net: Decimal, reasons: list[str] | None = None) -> CashCarryOpportunity:
     return CashCarryOpportunity(
         exchange=ExchangeName.GATE,

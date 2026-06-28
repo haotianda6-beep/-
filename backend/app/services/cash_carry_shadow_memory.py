@@ -107,11 +107,17 @@ class CashCarryShadowMemory:
         if changed:
             self._save()
 
-    def summary(self, now: datetime | None = None) -> CashCarryShadowSummary:
+    def summary(self, now: datetime | None = None, exchange: ExchangeName | None = None) -> CashCarryShadowSummary:
         current = now or datetime.now(timezone.utc)
         if self._prune_shadow(current):
             self._save()
-        closed = list(self._shadow_closed)
+        selected_exchange = ExchangeName(exchange) if exchange is not None else None
+        open_count = sum(1 for item in self._shadow_open.values() if selected_exchange is None or item.exchange == selected_exchange)
+        closed = [
+            item
+            for item in self._shadow_closed
+            if selected_exchange is None or item.exchange == selected_exchange
+        ]
         wins = sum(1 for item in closed if item.estimated_net_profit > 0)
         total = sum((item.estimated_net_profit for item in closed), Decimal("0"))
         worst = min((item.estimated_net_profit for item in closed), default=Decimal("0"))
@@ -119,7 +125,7 @@ class CashCarryShadowMemory:
         avg = Decimal("0") if not closed else total / Decimal(len(closed))
         winning_basis = [item.entry_basis_pct for item in closed if item.estimated_net_profit > 0]
         min_winning_basis = min(winning_basis) if winning_basis else None
-        return CashCarryShadowSummary(len(self._shadow_open), len(closed), wins, total, win_rate, worst, avg, min_winning_basis)
+        return CashCarryShadowSummary(open_count, len(closed), wins, total, win_rate, worst, avg, min_winning_basis)
 
     def _close_shadow_positions(
         self,

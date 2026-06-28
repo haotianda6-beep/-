@@ -708,7 +708,7 @@ class CashCarryExecutor:
         base_settings: BotSettings,
         probe_settings: BotSettings,
     ) -> bool:
-        summary = CashCarryShadowMemory(self.state_path).summary()
+        summary = CashCarryShadowMemory(self.state_path).summary(exchange=ExchangeName(original.exchange))
         if summary.closed_count < self.shadow_probe_min_closed:
             return False
         target_win = base_settings.cash_carry_target_win_rate_pct or Decimal("70")
