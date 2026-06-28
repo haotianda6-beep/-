@@ -72,6 +72,36 @@ def test_cash_carry_market_memory_shadow_trade_records_timeout_loss() -> None:
     assert summary.total_estimated_net == Decimal("-1.7000")
 
 
+def test_cash_carry_market_memory_shadow_probe_records_low_positive_net() -> None:
+    memory = CashCarryMarketMemory()
+    now = datetime.now(timezone.utc)
+    settings = BotSettings(order_notional_usdt=Decimal("300"))
+
+    memory.observe_shadow(
+        [_candidate("PROBEUSDT", Decimal("0.42"), Decimal("0.20"), ["合约溢价未达 0.8%", "V3冷启动净利预估 0.2000U < 冷启动安全垫 0.9000U"])],
+        settings,
+        Decimal("0.9"),
+        now,
+    )
+
+    assert memory.shadow_summary(now).open_count == 1
+
+
+def test_cash_carry_market_memory_shadow_probe_ignores_hard_blockers() -> None:
+    memory = CashCarryMarketMemory()
+    now = datetime.now(timezone.utc)
+    settings = BotSettings(order_notional_usdt=Decimal("300"))
+
+    memory.observe_shadow(
+        [_candidate("BADUSDT", Decimal("1.2"), Decimal("2"), ["资金费率不是正数，空头不能收资金费"])],
+        settings,
+        Decimal("0.9"),
+        now,
+    )
+
+    assert memory.shadow_summary(now).open_count == 0
+
+
 def _candidate(symbol: str, basis: Decimal, net: Decimal, reasons: list[str] | None = None) -> CashCarryOpportunity:
     return CashCarryOpportunity(
         exchange=ExchangeName.GATE,

@@ -9,6 +9,7 @@ from app.core.models import CashCarryOpportunity, ExchangeName
 WINDOW = timedelta(minutes=30)
 SHADOW_WINDOW = timedelta(hours=24)
 SHADOW_MAX_HOLD = timedelta(hours=4)
+SHADOW_PROBE_MIN_NET_PCT = Decimal("0.05")
 HARD_BLOCKER_PREFIXES = (
     "资金费率不是正数",
     "资金费率低于",
@@ -267,11 +268,32 @@ def _shadow_entry_allows(item: CashCarryOpportunity, dynamic_net_floor: Decimal,
         estimated_net_profit=item.estimated_net_profit,
         blocked_reasons=tuple(item.blocked_reasons),
     )
-    if not _base_quality_allows(sample) or not _not_hard_blocked(sample):
+    if not _shadow_quality_allows(sample) or not _not_hard_blocked(sample):
         return False
-    if item.estimated_net_profit < dynamic_net_floor:
+    if item.estimated_net_profit < _shadow_probe_net_floor(dynamic_net_floor, item, settings):
         return False
     notional = item.notional_usdt or settings.order_notional_usdt
     if item.max_safe_notional_usdt is not None and item.max_safe_notional_usdt < notional:
         return False
     return True
+
+
+def _shadow_quality_allows(item: CashCarryMarketSample) -> bool:
+    allowed_soft = (
+        "合约溢价未达",
+        "回归到平仓线后的净利预估",
+        "V2历史胜率保护",
+        "V3历史胜率保护",
+        "V3冷启动净利预估",
+        "信号持续不足",
+        "基差波动过大",
+        "基差分位样本不足",
+        "基差分位不足",
+    )
+    return all(reason.startswith(allowed_soft) for reason in item.blocked_reasons)
+
+
+def _shadow_probe_net_floor(dynamic_net_floor: Decimal, item: CashCarryOpportunity, settings) -> Decimal:
+    notional = item.notional_usdt or settings.order_notional_usdt
+    probe_floor = max(Decimal("0.05"), notional * SHADOW_PROBE_MIN_NET_PCT / Decimal("100"))
+    return min(dynamic_net_floor, probe_floor)
