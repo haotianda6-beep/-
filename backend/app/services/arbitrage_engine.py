@@ -208,6 +208,7 @@ class ArbitrageEngine:
         events.append(self._cash_carry_v3_performance_event(settings, now))
         memory_summary = None
         shadow_summary = None
+        shadow_summaries_by_exchange = None
         if cash_carry_candidates:
             gate = self.cash_carry_history_quality.entry_quality_gate(settings, now)
             self.cash_carry_market_memory.observe(cash_carry_candidates, now)
@@ -217,7 +218,19 @@ class ArbitrageEngine:
                 now,
             )
             shadow_summary = self.cash_carry_market_memory.shadow_summary(now)
-        frequency_event = cash_carry_frequency_event(settings, cash_carry_candidates or [], self.cash_carry_history_quality, now, memory_summary, shadow_summary)
+            shadow_summaries_by_exchange = {
+                exchange: self.cash_carry_market_memory.shadow_summary(now, exchange)
+                for exchange in CASH_CARRY_EXCHANGES
+            }
+        frequency_event = cash_carry_frequency_event(
+            settings,
+            cash_carry_candidates or [],
+            self.cash_carry_history_quality,
+            now,
+            memory_summary,
+            shadow_summary,
+            shadow_summaries_by_exchange,
+        )
         if frequency_event:
             events.append(frequency_event)
         events.extend(self._cash_carry_turnover_events(settings, cash_carry_positions or [], now))

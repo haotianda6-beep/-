@@ -197,6 +197,29 @@ def test_cash_carry_frequency_event_includes_shadow_samples(tmp_path) -> None:
     assert "未平 1 单" in event.detail
 
 
+def test_cash_carry_frequency_event_includes_exchange_shadow_threshold(tmp_path) -> None:
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    state = tmp_path / "cash_carry_execution_state.json"
+    state.write_text(
+        '{"positions":[],"cash_carry_shadow":{"open":[],"closed":[{'
+        f'"opened_at":"{(now - timedelta(minutes=20)).isoformat()}",'
+        f'"closed_at":"{(now - timedelta(minutes=5)).isoformat()}",'
+        '"exchange":"GATE","symbol":"OLDUSDT","entry_basis_pct":"1.5","close_basis_pct":"0.4",'
+        '"max_basis_pct":"1.5","estimated_net_profit":"0.7","reason":"基差回归","execution_buffer_usdt":"0.3"'
+        '}]}}',
+        encoding="utf-8",
+    )
+    engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
+    candidates = [_candidate("NEARUSDT", Decimal("0.5"), ["信号持续不足"])]
+
+    events = engine.get_risk_events(BotSettings(order_notional_usdt=Decimal("300")), cash_carry_candidates=candidates)
+
+    event = next(item for item in events if item.id == "cash-carry-frequency-diagnostic")
+    assert "交易所影子门槛" in event.detail
+    assert "GATE 已平 1 单" in event.detail
+    assert "距影子赢家最低基差还差 0.5000%" in event.detail
+
+
 def test_cash_carry_frequency_event_uses_bootstrap_basis_floor(tmp_path) -> None:
     state = tmp_path / "cash_carry_execution_state.json"
     state.write_text('{"positions":[]}', encoding="utf-8")

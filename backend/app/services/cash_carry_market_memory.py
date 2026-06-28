@@ -93,8 +93,8 @@ class CashCarryMarketMemory:
     ) -> None:
         self._shadow.observe(candidates, settings, dynamic_net_floor, now)
 
-    def shadow_summary(self, now: datetime | None = None) -> CashCarryShadowSummary:
-        return self._shadow.summary(now)
+    def shadow_summary(self, now: datetime | None = None, exchange: ExchangeName | None = None) -> CashCarryShadowSummary:
+        return self._shadow.summary(now, exchange)
 
     def _prune(self, now: datetime) -> None:
         cutoff = now - WINDOW

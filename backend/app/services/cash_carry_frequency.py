@@ -2,9 +2,10 @@ from collections import Counter
 from datetime import datetime
 from decimal import Decimal
 
-from app.core.models import BotSettings, CashCarryOpportunity, RiskEvent
+from app.core.models import BotSettings, CashCarryOpportunity, ExchangeName, RiskEvent
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_market_memory import CashCarryMarketMemorySummary, CashCarryShadowSummary
+from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES
 
 
 BLOCKER_PREFIXES = {
@@ -42,6 +43,7 @@ def cash_carry_frequency_event(
     now: datetime,
     memory_summary: CashCarryMarketMemorySummary | None = None,
     shadow_summary: CashCarryShadowSummary | None = None,
+    shadow_summaries_by_exchange: dict[ExchangeName, CashCarryShadowSummary] | None = None,
 ) -> RiskEvent | None:
     if not settings.cash_carry_enabled or not candidates:
         return None
@@ -79,6 +81,9 @@ def cash_carry_frequency_event(
         detail_parts.append(
             f"近{shadow_summary.window_hours}小时探索影子样本：已平 {shadow_summary.closed_count} 单，未平 {shadow_summary.open_count} 单，胜率 {shadow_summary.win_rate_pct:.2f}%，估算净利 {shadow_summary.total_estimated_net:.4f}U，均值 {shadow_summary.avg_estimated_net:.4f}U，最差 {shadow_summary.worst_estimated_net:.4f}U{basis_note}"
         )
+    exchange_notes = _exchange_shadow_notes(candidates, shadow_summaries_by_exchange)
+    if exchange_notes:
+        detail_parts.append("交易所影子门槛：" + "；".join(exchange_notes))
     if counts:
         detail_parts.append("主要卡点：" + "，".join(f"{name}{count}个" for name, count in counts.most_common(4)))
     return RiskEvent(
@@ -111,6 +116,39 @@ def _nearest_to_entry_gate(candidates: list[CashCarryOpportunity]) -> CashCarryO
         if not any(reason.startswith(NEAREST_HARD_BLOCKER_PREFIXES) for reason in item.blocked_reasons)
     ]
     return max(filtered, key=lambda item: item.estimated_net_profit, default=None)
+
+
+def _exchange_shadow_notes(
+    candidates: list[CashCarryOpportunity],
+    summaries: dict[ExchangeName, CashCarryShadowSummary] | None,
+) -> list[str]:
+    if not summaries:
+        return []
+    notes: list[str] = []
+    for exchange in CASH_CARRY_EXCHANGES:
+        summary = summaries.get(exchange)
+        if not summary or not (summary.closed_count or summary.open_count):
+            continue
+        nearest = _nearest_exchange_candidate(candidates, exchange)
+        basis_note = ""
+        if nearest and summary.min_winning_entry_basis_pct is not None:
+            gap = max(Decimal("0"), summary.min_winning_entry_basis_pct - nearest.basis_pct)
+            basis_note = f"，当前最近 {nearest.symbol} 基差 {nearest.basis_pct:.4f}%，距影子赢家最低基差还差 {gap:.4f}%"
+        elif nearest:
+            basis_note = f"，当前最近 {nearest.symbol} 基差 {nearest.basis_pct:.4f}%"
+        notes.append(
+            f"{exchange.value} 已平 {summary.closed_count} 单，胜率 {summary.win_rate_pct:.2f}%，均值 {summary.avg_estimated_net:.4f}U，最差 {summary.worst_estimated_net:.4f}U{basis_note}"
+        )
+    return notes
+
+
+def _nearest_exchange_candidate(candidates: list[CashCarryOpportunity], exchange: ExchangeName) -> CashCarryOpportunity | None:
+    pool = [
+        item for item in candidates
+        if ExchangeName(item.exchange) == exchange
+        and not any(reason.startswith(NEAREST_HARD_BLOCKER_PREFIXES) for reason in item.blocked_reasons)
+    ]
+    return max(pool, key=lambda item: item.estimated_net_profit, default=None)
 
 
 def _required_entry_basis_pct(
