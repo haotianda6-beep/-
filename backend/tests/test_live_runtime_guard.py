@@ -6,7 +6,7 @@ from app.services.cash_carry_executor import CashCarryExecutor
 from app.services.cash_carry_scope import CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.live_market_types import CashCarryScan
 from app.services.live_read import LiveAccountSnapshot
-from app.services.live_runtime import LiveRuntimeCache, STRATEGY_CASH, TickerSubscription
+from app.services.live_runtime import LiveRuntimeCache, STRATEGY_CASH, TickerSubscription, _cash_carry_full_scan_interval
 from app.services.ws_ticker_cache import WSTickerCache
 
 
@@ -225,6 +225,18 @@ def test_mt4_scan_uses_independent_slot(tmp_path) -> None:
 
     assert completed is True
     assert result == "mt4-ok"
+
+
+def test_cash_carry_full_scan_interval_defaults_to_one_minute(monkeypatch) -> None:
+    monkeypatch.delenv("MAIN_DASHBOARD_CASH_CARRY_FULL_SCAN_SECONDS", raising=False)
+
+    assert _cash_carry_full_scan_interval() == 60.0
+
+
+def test_cash_carry_full_scan_interval_keeps_rate_limit_floor(monkeypatch) -> None:
+    monkeypatch.setenv("MAIN_DASHBOARD_CASH_CARRY_FULL_SCAN_SECONDS", "15")
+
+    assert _cash_carry_full_scan_interval() == 60.0
 
 
 def _runtime(tmp_path, cash_executor=None, ticker_cache=None) -> LiveRuntimeCache:
