@@ -233,6 +233,9 @@ class ArbitrageEngine:
         )
         if frequency_event:
             events.append(frequency_event)
+        probe_event = self._cash_carry_probe_diagnostic_event(now)
+        if probe_event:
+            events.append(probe_event)
         events.extend(self._cash_carry_turnover_events(settings, cash_carry_positions or [], now))
         events.extend(self._liquidation_distance_events(live_positions or [], now))
         events.extend(self._cash_carry_add_config_events(settings, now))
@@ -267,6 +270,33 @@ class ArbitrageEngine:
         )
         action = f"目标是胜率不低于{settings.cash_carry_target_win_rate_pct}%、约{settings.cash_carry_target_daily_trades}单/日；胜率和净利达标但频率不足时系统会小幅降低净利门槛，表现转坏时会自动收紧。"
         return RiskEvent(id="cash-carry-v3-performance", severity=severity, title="正向期现V3统计", detail=detail, action=action, created_at=now)
+
+    def _cash_carry_probe_diagnostic_event(self, now: datetime) -> RiskEvent | None:
+        payload = self.cash_carry_state.last_probe_diagnostic(now)
+        if not payload:
+            return None
+        detail = str(payload.get("reason") or "暂无小额探索诊断")
+        exchange = payload.get("exchange")
+        symbol = payload.get("symbol")
+        basis = payload.get("basis_pct")
+        net = payload.get("estimated_net_profit")
+        metrics = []
+        if exchange and symbol:
+            metrics.append(f"最近候选 {exchange} {symbol}")
+        if basis not in (None, ""):
+            metrics.append(f"基差 {basis}%")
+        if net not in (None, ""):
+            metrics.append(f"净利 {net}U")
+        if metrics:
+            detail = detail + "；" + "，".join(metrics)
+        return RiskEvent(
+            id="cash-carry-probe-diagnostic",
+            severity="info",
+            title="正向期现小额探索诊断",
+            detail=detail,
+            action="这是执行器本轮未试单的直接原因；优先观察基差、影子样本门槛和盘口深度确认是否恢复。",
+            created_at=now,
+        )
 
     def _cash_carry_turnover_events(self, settings: BotSettings, rows: list[CashCarryPositionRow], now: datetime) -> list[RiskEvent]:
         by_key = {(ExchangeName(row.exchange), row.symbol): row for row in rows}

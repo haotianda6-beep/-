@@ -986,6 +986,24 @@ def test_shadow_probe_requires_same_exchange_shadow_samples(tmp_path) -> None:
     assert result is None
 
 
+def test_cash_carry_executor_records_probe_diagnostic_when_shadow_basis_is_low(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(_shadow_state(5, ExchangeName.GATE), encoding="utf-8")
+    executor = CashCarryExecutor(state)
+    settings = BotSettings(cash_carry_auto_open_enabled=True, order_notional_usdt=Decimal("300"), cash_carry_recovery_probe_notional_usdt=Decimal("100"))
+    item = _opportunity(net="2.0", basis="0.5").model_copy(
+        update={"blocked_reasons": ["合约溢价未达 0.8%", "V3冷启动净利预估 2.0000U < 冷启动安全垫 3.0000U"]}
+    )
+
+    result = executor.evaluate_open([item], settings)
+
+    assert result is None
+    diagnostic = executor.state.read()["last_probe_diagnostic"]
+    assert diagnostic["exchange"] == "GATE"
+    assert diagnostic["symbol"] == "ABCUSDT"
+    assert "当前基差 0.5000% < 影子赢家最低入场门槛 0.5700%" in diagnostic["reason"]
+
+
 def _opportunity(symbol: str = "ABCUSDT", net: str = "0.8", basis: str = "1", funding: str = "0.01", exchange: ExchangeName = ExchangeName.GATE) -> CashCarryOpportunity:
     return CashCarryOpportunity(
         exchange=exchange,

@@ -85,13 +85,17 @@ class CashCarryExecutor:
         if not ready:
             probe = self._probe_open_candidate(rows, settings, blocked_keys | depth_blocked_keys, active_counts, allowed_open_exchanges)
             if not probe:
+                item, reason = self._probe_open_diagnostic(rows, settings, blocked_keys | depth_blocked_keys, active_counts, allowed_open_exchanges)
+                self.state.remember_probe_diagnostic(reason, item)
                 return None
+            self.state.clear_probe_diagnostic()
             item, open_settings, mode_label = probe
             steps = self._open_plan(item, open_settings)
             gate_reasons = self._safety_gate(open_settings, opening=True)
             if gate_reasons:
                 return self.state.remember(ExecutionResult(str(uuid.uuid4()), "blocked_by_safety_gate", " / ".join(gate_reasons), steps))
             return self._execute_open(item, open_settings, steps, mode_label)
+        self.state.clear_probe_diagnostic()
         item = max(ready, key=lambda row: row.estimated_net_profit)
         steps = self._open_plan(item, settings)
         gate_reasons = self._safety_gate(settings, opening=True)
@@ -671,6 +675,80 @@ class CashCarryExecutor:
             return None
         return max(candidates, key=lambda row: row[0].estimated_net_profit)
 
+    def _probe_open_diagnostic(
+        self,
+        rows: list[CashCarryOpportunity],
+        settings: BotSettings,
+        blocked_keys: set[tuple[ExchangeName, str]],
+        active_counts: dict[ExchangeName, int],
+        allowed_open_exchanges: set[ExchangeName] | None,
+    ) -> tuple[CashCarryOpportunity | None, str]:
+        if not rows:
+            return None, "没有正向期现候选，等待扫描数据"
+        if not settings.cash_carry_recovery_probe_enabled or settings.cash_carry_recovery_probe_notional_usdt <= 0:
+            return None, "小额探索开关关闭或小额本金为0"
+        probe_notional = min(settings.cash_carry_recovery_probe_notional_usdt, settings.order_notional_usdt)
+        if probe_notional <= 0:
+            return None, "小额探索本金无效"
+        base_probe_settings = settings.model_copy(update={"order_notional_usdt": probe_notional})
+        depth_unconfirmed = self.state.recent_depth_unconfirmed_exchanges()
+        diagnostics: list[tuple[Decimal, Decimal, CashCarryOpportunity, str]] = []
+        for item in rows:
+            exchange = ExchangeName(item.exchange)
+            reason = self._probe_filter_reason(
+                item,
+                settings,
+                base_probe_settings,
+                blocked_keys,
+                active_counts,
+                allowed_open_exchanges,
+                depth_unconfirmed,
+            )
+            if reason is None:
+                candidate_settings = base_probe_settings
+                adjusted = self._probe_item(item, candidate_settings)
+                if self._probe_blockers_only(item.blocked_reasons):
+                    reason = self._probe_net_reject_reason(adjusted, candidate_settings) or "恢复小额试单条件已满足，等待执行锁"
+                elif self._shadow_probe_blockers_only(item.blocked_reasons):
+                    candidate_settings = self._shadow_probe_settings(item, base_probe_settings)
+                    adjusted = self._probe_item(item, candidate_settings)
+                    reason = self._shadow_probe_reject_reason(item, adjusted, settings, candidate_settings) or "影子样本小额探索条件已满足，等待执行锁"
+                else:
+                    reason = "包含硬风险原因：" + " / ".join(item.blocked_reasons[:3])
+                if reason.startswith(("恢复小额试单条件已满足", "影子样本小额探索条件已满足")) and not self._exposure_allows(adjusted, candidate_settings):
+                    reason = "仓位额度不足或超过单交易所/单币种敞口限制"
+            diagnostics.append((item.estimated_net_profit, item.basis_pct, item, reason))
+        if not diagnostics:
+            return None, "没有 Gate/Bitget 范围内候选"
+        _net, _basis, item, reason = max(diagnostics, key=lambda row: (row[0], row[1]))
+        return item, f"{ExchangeName(item.exchange).value} {item.symbol} 未进入小额探索：{reason}"
+
+    def _probe_filter_reason(
+        self,
+        item: CashCarryOpportunity,
+        settings: BotSettings,
+        probe_settings: BotSettings,
+        blocked_keys: set[tuple[ExchangeName, str]],
+        active_counts: dict[ExchangeName, int],
+        allowed_open_exchanges: set[ExchangeName] | None,
+        depth_unconfirmed_exchanges: dict[ExchangeName, str],
+    ) -> str | None:
+        exchange = ExchangeName(item.exchange)
+        if exchange not in CASH_CARRY_EXCHANGE_SET:
+            return f"{exchange.value} 不在正向期现允许范围"
+        if (exchange, item.symbol) in blocked_keys:
+            return "该币已有持仓、刚关闭或最近执行深度失败仍在冷却"
+        if active_counts.get(exchange, 0) >= settings.cash_carry_max_positions_per_exchange:
+            return f"{exchange.value} 持仓槽位已满 {active_counts.get(exchange, 0)}/{settings.cash_carry_max_positions_per_exchange}"
+        if allowed_open_exchanges is not None and exchange not in allowed_open_exchanges:
+            return f"{exchange.value} 暂不在当前允许开仓交易所集合"
+        history_reasons = self.history_quality.blocked_reasons(exchange, item.symbol, settings)
+        if history_reasons:
+            return "历史风控拦截：" + " / ".join(history_reasons[:2])
+        if not self._depth_confirmation_allows(item, depth_unconfirmed_exchanges, probe_settings):
+            return depth_unconfirmed_exchanges.get(exchange, "交易所近期深度失败，等待深度重新确认")
+        return None
+
     def _probe_blockers_only(self, reasons: list[str]) -> bool:
         return bool(reasons) and all(reason.startswith(("V2历史胜率保护", "V3历史胜率保护")) for reason in reasons)
 
@@ -695,6 +773,14 @@ class CashCarryExecutor:
         min_net = settings.order_notional_usdt * settings.cash_carry_recovery_probe_min_net_pct / Decimal("100")
         return item.estimated_net_profit >= min_net
 
+    def _probe_net_reject_reason(self, item: CashCarryOpportunity, settings: BotSettings) -> str | None:
+        if settings.order_notional_usdt <= 0:
+            return "小额本金无效"
+        min_net = settings.order_notional_usdt * settings.cash_carry_recovery_probe_min_net_pct / Decimal("100")
+        if item.estimated_net_profit < min_net:
+            return f"恢复小额试单净利 {item.estimated_net_profit:.4f}U < 门槛 {min_net:.4f}U"
+        return None
+
     def _shadow_probe_settings(self, item: CashCarryOpportunity, settings: BotSettings) -> BotSettings:
         basis_floor = max(settings.cash_carry_close_basis_pct, item.basis_pct - self.shadow_probe_basis_buffer_pct)
         return settings.model_copy(update={
@@ -709,26 +795,38 @@ class CashCarryExecutor:
         base_settings: BotSettings,
         probe_settings: BotSettings,
     ) -> bool:
+        return self._shadow_probe_reject_reason(original, adjusted, base_settings, probe_settings) is None
+
+    def _shadow_probe_reject_reason(
+        self,
+        original: CashCarryOpportunity,
+        adjusted: CashCarryOpportunity,
+        base_settings: BotSettings,
+        probe_settings: BotSettings,
+    ) -> str | None:
         summary = CashCarryShadowMemory(self.state_path).summary(exchange=ExchangeName(original.exchange))
         if summary.closed_count < self.shadow_probe_min_closed:
-            return False
+            return f"影子样本不足 {summary.closed_count}/{self.shadow_probe_min_closed}"
         target_win = base_settings.cash_carry_target_win_rate_pct or Decimal("70")
         if summary.win_rate_pct < target_win or summary.total_estimated_net <= 0:
-            return False
+            return f"影子胜率或累计净利不足：胜率 {summary.win_rate_pct:.2f}% / 累计 {summary.total_estimated_net:.4f}U"
         if summary.worst_estimated_net < -close_execution_buffer(base_settings):
-            return False
+            return f"影子最差亏损 {summary.worst_estimated_net:.4f}U 超过执行缓冲 {-close_execution_buffer(base_settings):.4f}U"
         if summary.min_winning_entry_basis_pct is not None:
             required_basis = max(Decimal("0"), summary.min_winning_entry_basis_pct - self.shadow_probe_basis_buffer_pct)
             if original.basis_pct < required_basis:
-                return False
+                return f"当前基差 {original.basis_pct:.4f}% < 影子赢家最低入场门槛 {required_basis:.4f}%"
         if probe_settings.order_notional_usdt <= 0 or base_settings.order_notional_usdt <= 0:
-            return False
+            return "小额本金或基础本金无效"
         scale = probe_settings.order_notional_usdt / base_settings.order_notional_usdt
         expected_shadow_net = summary.avg_estimated_net * scale
         min_shadow_net = max(Decimal("0.05"), probe_settings.order_notional_usdt * self.shadow_probe_min_net_pct / Decimal("100"))
         if expected_shadow_net < min_shadow_net:
-            return False
-        return adjusted.estimated_net_profit >= -close_execution_buffer(probe_settings)
+            return f"影子均值按小额折算 {expected_shadow_net:.4f}U < 门槛 {min_shadow_net:.4f}U"
+        min_allowed_net = -close_execution_buffer(probe_settings)
+        if adjusted.estimated_net_profit < min_allowed_net:
+            return f"当前小额净利 {adjusted.estimated_net_profit:.4f}U < 允许下限 {min_allowed_net:.4f}U"
+        return None
 
     def _depth_confirmation_allows(
         self,

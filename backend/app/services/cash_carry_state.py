@@ -16,6 +16,8 @@ DEPTH_BLOCK_REPEAT_COOLDOWN_SECONDS = 900
 DEPTH_BLOCK_REPEAT_THRESHOLD = 2
 DEPTH_BLOCK_RECHECK_BASIS_DELTA_PCT = Decimal("0.25")
 DEPTH_BLOCK_EXCHANGE_CONFIRMATION_THRESHOLD = 2
+PROBE_DIAGNOSTIC_MIN_WRITE_SECONDS = 30
+PROBE_DIAGNOSTIC_TTL_SECONDS = 300
 
 
 class CashCarryStateStore:
@@ -178,6 +180,37 @@ class CashCarryStateStore:
         self.write(state)
         return result
 
+    def remember_probe_diagnostic(self, reason: str, item: Any | None = None, now: datetime | None = None) -> None:
+        current = now or datetime.now(timezone.utc)
+        state = self.read()
+        previous = state.get("last_probe_diagnostic") if isinstance(state.get("last_probe_diagnostic"), dict) else {}
+        previous_at = self._parse_time(previous.get("at")) if previous else None
+        if previous.get("reason") == reason and previous_at and (current - previous_at).total_seconds() < PROBE_DIAGNOSTIC_MIN_WRITE_SECONDS:
+            return
+        payload: dict[str, Any] = {"reason": reason, "at": current.isoformat()}
+        if item is not None:
+            payload.update(self._result_context(ExecutionResult("", "probe_diagnostic", reason, position=item)))
+        state["last_probe_diagnostic"] = payload
+        self.write(state)
+
+    def clear_probe_diagnostic(self) -> None:
+        state = self.read()
+        if "last_probe_diagnostic" not in state:
+            return
+        state.pop("last_probe_diagnostic", None)
+        self.write(state)
+
+    def last_probe_diagnostic(self, now: datetime | None = None, ttl_seconds: int = PROBE_DIAGNOSTIC_TTL_SECONDS) -> dict[str, Any] | None:
+        current = now or datetime.now(timezone.utc)
+        state = self.read()
+        payload = state.get("last_probe_diagnostic")
+        if not isinstance(payload, dict):
+            return None
+        at = self._parse_time(payload.get("at"))
+        if not at or (current - at).total_seconds() > ttl_seconds:
+            return None
+        return payload
+
     def active_keys(self) -> set[tuple[ExchangeName, str]]:
         keys = set()
         for item in self.read().get("positions", []):
@@ -266,6 +299,13 @@ class CashCarryStateStore:
         try:
             return Decimal(str(value))
         except (ArithmeticError, ValueError):
+            return None
+
+    def _parse_time(self, value: Any) -> datetime | None:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
             return None
 
     def _parse_position(self, item: dict[str, Any]) -> CashCarryPosition | None:

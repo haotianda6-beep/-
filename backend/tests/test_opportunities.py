@@ -220,6 +220,24 @@ def test_cash_carry_frequency_event_includes_exchange_shadow_threshold(tmp_path)
     assert "距影子赢家最低基差还差 0.5000%" in event.detail
 
 
+def test_cash_carry_probe_diagnostic_event_reads_executor_state(tmp_path) -> None:
+    state = tmp_path / "cash_carry_execution_state.json"
+    store = CashCarryStateStore(state)
+    store.remember_probe_diagnostic(
+        "GATE ABCUSDT 未进入小额探索：当前基差 0.5000% < 影子赢家最低入场门槛 0.5700%",
+        _candidate("ABCUSDT", Decimal("0.5"), ["信号持续不足"]),
+    )
+    engine = ArbitrageEngine(SettingsStore(tmp_path / "settings.json"))
+    engine.cash_carry_state = store
+
+    events = engine.get_risk_events(BotSettings(), cash_carry_candidates=[])
+
+    event = next(item for item in events if item.id == "cash-carry-probe-diagnostic")
+    assert event.title == "正向期现小额探索诊断"
+    assert "当前基差 0.5000%" in event.detail
+    assert "最近候选 GATE ABCUSDT" in event.detail
+
+
 def test_cash_carry_frequency_event_uses_bootstrap_basis_floor(tmp_path) -> None:
     state = tmp_path / "cash_carry_execution_state.json"
     state.write_text('{"positions":[]}', encoding="utf-8")
