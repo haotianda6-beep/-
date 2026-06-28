@@ -208,7 +208,7 @@ def _shadow_entry_allows(item: CashCarryOpportunity, dynamic_net_floor: Decimal,
 
 
 def _shadow_quality_allows(reasons: list[str]) -> bool:
-    allowed_soft = ("合约溢价未达", "回归到平仓线后的净利预估", "V2历史胜率保护", "V3历史胜率保护", "V3冷启动净利预估", "信号持续不足", "基差波动过大", "基差分位样本不足", "基差分位不足")
+    allowed_soft = ("合约溢价未达", "回归到平仓线后的净利预估", "V2历史胜率保护", "V3历史胜率保护", "V3冷启动净利预估", "V3频率调节净利预估", "信号持续不足", "基差波动过大", "基差分位样本不足", "基差分位不足")
     return all(reason.startswith(allowed_soft) for reason in reasons)
 
 

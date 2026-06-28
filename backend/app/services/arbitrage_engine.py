@@ -252,7 +252,7 @@ class ArbitrageEngine:
             f"V3成交偏差样本 {summary.estimate_sample_count} 单，均值 {summary.avg_estimate_gap:.4f}U，负偏差 {summary.estimate_miss_count} 单；"
             f"当前动态开仓净利安全垫 {gate.min_net_profit:.4f}U。"
         )
-        action = f"目标是胜率不低于{settings.cash_carry_target_win_rate_pct}%、约{settings.cash_carry_target_daily_trades}单/日；低于目标时系统会自动提高开仓净利门槛，不建议人工放开历史亏损币。"
+        action = f"目标是胜率不低于{settings.cash_carry_target_win_rate_pct}%、约{settings.cash_carry_target_daily_trades}单/日；胜率和净利达标但频率不足时系统会小幅降低净利门槛，表现转坏时会自动收紧。"
         return RiskEvent(id="cash-carry-v3-performance", severity=severity, title="正向期现V3统计", detail=detail, action=action, created_at=now)
 
     def _cash_carry_turnover_events(self, settings: BotSettings, rows: list[CashCarryPositionRow], now: datetime) -> list[RiskEvent]:

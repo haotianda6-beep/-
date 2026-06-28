@@ -106,6 +106,11 @@ class CashCarryHistoryQuality:
                 f"V3历史胜率保护：净利预估 {estimated_net_profit:.4f}U < 动态安全垫 {gate.min_net_profit:.4f}U（{reason_text}）"
             ]
         if gate.min_net_profit < gate.base_min_net_profit:
+            reason_text = "；".join(gate.reasons)
+            if "频率低于目标" in reason_text:
+                return [
+                    f"V3频率调节净利预估 {estimated_net_profit:.4f}U < 频率安全垫 {gate.min_net_profit:.4f}U（{reason_text}）"
+                ]
             return [
                 f"V3冷启动净利预估 {estimated_net_profit:.4f}U < 冷启动安全垫 {gate.min_net_profit:.4f}U"
             ]
@@ -142,6 +147,16 @@ class CashCarryHistoryQuality:
             )
             adjusted += estimate_pressure
             reasons.append(f"V3真实成交比预估平均低 {abs(summary.avg_estimate_gap):.4f}U")
+        if self._frequency_relax_allows(summary, settings) and adjusted <= base:
+            relaxed_floor = self._frequency_relaxed_floor(settings)
+            if relaxed_floor < adjusted:
+                target = Decimal(settings.cash_carry_target_daily_trades)
+                shortfall = max(Decimal("0"), target - Decimal(summary.trades_24h)) / target
+                relaxation = (adjusted - relaxed_floor) * shortfall
+                adjusted -= relaxation
+                reasons.append(
+                    f"频率低于目标 {summary.trades_24h}/{settings.cash_carry_target_daily_trades} 且胜率达标，自动降低净利门槛"
+                )
         capped = min(adjusted, self._max_reasonable_entry_floor(settings))
         if capped < adjusted:
             reasons.append("已按最大开仓基差限制封顶动态安全垫")
@@ -282,6 +297,31 @@ class CashCarryHistoryQuality:
         if settings.order_notional_usdt <= 0:
             return Decimal("0")
         return min(Decimal("0.01"), settings.order_notional_usdt * Decimal("0.00005"))
+
+    def _frequency_relax_allows(self, summary: CashCarryPerformanceSummary, settings: BotSettings) -> bool:
+        if settings.cash_carry_target_daily_trades <= 0:
+            return False
+        sample_floor = max(MIN_TRADES_FOR_GLOBAL_GATE // 2, settings.cash_carry_bootstrap_min_trades)
+        if summary.total_trades < sample_floor:
+            return False
+        if summary.trades_24h >= settings.cash_carry_target_daily_trades:
+            return False
+        target_win = settings.cash_carry_target_win_rate_pct or TARGET_WIN_RATE_PCT
+        if target_win > 0 and summary.total_win_rate_pct < target_win:
+            return False
+        if summary.total_net <= 0:
+            return False
+        if summary.trades_24h > 0 and (summary.net_24h <= 0 or summary.win_rate_24h_pct < target_win):
+            return False
+        if summary.estimate_sample_count >= MIN_ESTIMATE_GAP_SAMPLES and summary.avg_estimate_gap < 0:
+            return False
+        return True
+
+    def _frequency_relaxed_floor(self, settings: BotSettings) -> Decimal:
+        return max(
+            settings.min_funding_net_usdt,
+            close_execution_buffer(settings) + settings.order_notional_usdt * Decimal("0.05") / Decimal("100"),
+        )
 
     def _max_reasonable_entry_floor(self, settings: BotSettings) -> Decimal:
         tradable_basis_pct = max(Decimal("0"), settings.cash_carry_max_entry_basis_pct - settings.cash_carry_close_basis_pct)

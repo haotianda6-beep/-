@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -307,6 +308,64 @@ def test_cash_carry_v3_entry_gate_raises_after_negative_estimate_gap(tmp_path) -
     assert gate.base_min_net_profit == Decimal("1.20")
     assert gate.min_net_profit == Decimal("1.950")
     assert "V3真实成交比预估平均低 0.6000U" in " / ".join(gate.reasons)
+
+
+def test_cash_carry_v3_entry_gate_relaxes_when_frequency_low_and_win_rate_good(tmp_path) -> None:
+    now = datetime(2026, 6, 28, tzinfo=timezone.utc)
+    state = tmp_path / "cash_carry_execution_state.json"
+    state.write_text(
+        '{"positions":['
+        + ",".join(
+            f'{{"exchange":"BITGET","symbol":"WIN{i}USDT","status":"closed","closed_at":"{now.isoformat()}","strategy_version":"{CASH_CARRY_RULESET_VERSION}","history":{{"actual_net_profit":"1"}}}}'
+            for i in range(5)
+        )
+        + "]}",
+        encoding="utf-8",
+    )
+    history = CashCarryHistoryQuality(state)
+    settings = BotSettings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_bootstrap_min_trades=3,
+        cash_carry_target_daily_trades=10,
+        cash_carry_v3_min_profit_pct=Decimal("0.2"),
+        max_slippage_pct=Decimal("0.01"),
+    )
+
+    gate = history.entry_quality_gate(settings, now)
+
+    assert gate.base_min_net_profit == Decimal("1.20")
+    assert gate.min_net_profit == Decimal("0.975")
+    assert "频率低于目标 5/10 且胜率达标" in " / ".join(gate.reasons)
+
+
+def test_cash_carry_v3_entry_gate_does_not_relax_after_recent_loss(tmp_path) -> None:
+    now = datetime(2026, 6, 28, tzinfo=timezone.utc)
+    older = now - timedelta(days=2)
+    state = tmp_path / "cash_carry_execution_state.json"
+    rows = [
+        f'{{"exchange":"BITGET","symbol":"WIN{i}USDT","status":"closed","closed_at":"{older.isoformat()}","strategy_version":"{CASH_CARRY_RULESET_VERSION}","history":{{"actual_net_profit":"1"}}}}'
+        for i in range(5)
+    ]
+    rows.append(
+        f'{{"exchange":"BITGET","symbol":"LOSSUSDT","status":"closed","closed_at":"{now.isoformat()}","strategy_version":"{CASH_CARRY_RULESET_VERSION}","history":{{"actual_net_profit":"-0.5"}}}}'
+    )
+    state.write_text('{"positions":[' + ",".join(rows) + "]}",
+        encoding="utf-8",
+    )
+    history = CashCarryHistoryQuality(state)
+    settings = BotSettings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_bootstrap_min_trades=3,
+        cash_carry_target_daily_trades=10,
+        cash_carry_v3_min_profit_pct=Decimal("0.2"),
+        max_slippage_pct=Decimal("0.01"),
+    )
+
+    gate = history.entry_quality_gate(settings, now)
+
+    assert gate.min_net_profit == Decimal("2.10")
+    assert "近24小时净利 -0.5000U < 0" in " / ".join(gate.reasons)
+    assert "频率低于目标" not in " / ".join(gate.reasons)
 
 
 def test_cash_carry_v3_bootstrap_allows_positive_near_miss_before_first_samples() -> None:
