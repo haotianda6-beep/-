@@ -70,6 +70,48 @@ def test_cash_carry_shadow_memory_summary_can_filter_exchange(tmp_path) -> None:
     assert bitget.total_estimated_net == Decimal("0.4")
 
 
+def test_cash_carry_shadow_memory_keeps_sampling_during_exchange_depth_confirmation(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    now = datetime.now(timezone.utc)
+    settings = BotSettings(order_notional_usdt=Decimal("300"))
+
+    memory = CashCarryShadowMemory(state)
+    memory.observe(
+        [
+            _candidate(
+                "DEPTHUSDT",
+                Decimal("0.42"),
+                Decimal("0.20"),
+                [
+                    "GATE 近期 2 个币种执行前盘口深度失败，等待盘口深度确认后再开仓",
+                    "合约溢价未达 0.8%",
+                ],
+            )
+        ],
+        settings,
+        Decimal("0.9"),
+        now,
+    )
+
+    assert CashCarryShadowMemory(state).summary(now).open_count == 1
+
+
+def test_cash_carry_shadow_memory_still_ignores_explicit_depth_shortage(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    now = datetime.now(timezone.utc)
+    settings = BotSettings(order_notional_usdt=Decimal("300"))
+
+    memory = CashCarryShadowMemory(state)
+    memory.observe(
+        [_candidate("THINUSDT", Decimal("1.20"), Decimal("2.0"), ["盘口深度不足，最大安全本金 50U < 单笔 300U"])],
+        settings,
+        Decimal("0.9"),
+        now,
+    )
+
+    assert CashCarryShadowMemory(state).summary(now).open_count == 0
+
+
 def _candidate(symbol: str, basis: Decimal, net: Decimal, reasons: list[str] | None = None) -> CashCarryOpportunity:
     return CashCarryOpportunity(
         exchange=ExchangeName.GATE,

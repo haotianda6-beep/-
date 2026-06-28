@@ -199,7 +199,7 @@ class CashCarryShadowMemory:
 
 
 def _shadow_entry_allows(item: CashCarryOpportunity, dynamic_net_floor: Decimal, settings) -> bool:
-    if not _shadow_quality_allows(item.blocked_reasons) or any(reason.startswith(HARD_BLOCKER_PREFIXES) or "等待盘口深度确认" in reason for reason in item.blocked_reasons):
+    if not _shadow_quality_allows(item.blocked_reasons) or any(reason.startswith(HARD_BLOCKER_PREFIXES) for reason in item.blocked_reasons):
         return False
     if item.estimated_net_profit < _shadow_probe_net_floor(dynamic_net_floor, item, settings):
         return False
@@ -209,7 +209,11 @@ def _shadow_entry_allows(item: CashCarryOpportunity, dynamic_net_floor: Decimal,
 
 def _shadow_quality_allows(reasons: list[str]) -> bool:
     allowed_soft = ("合约溢价未达", "回归到平仓线后的净利预估", "V2历史胜率保护", "V3历史胜率保护", "V3冷启动净利预估", "V3频率调节净利预估", "信号持续不足", "基差波动过大", "基差分位样本不足", "基差分位不足")
-    return all(reason.startswith(allowed_soft) for reason in reasons)
+    return all(reason.startswith(allowed_soft) or _is_exchange_depth_confirmation_reason(reason) for reason in reasons)
+
+
+def _is_exchange_depth_confirmation_reason(reason: str) -> bool:
+    return "执行前盘口深度失败" in reason and "等待盘口深度确认" in reason
 
 
 def _shadow_probe_net_floor(dynamic_net_floor: Decimal, item: CashCarryOpportunity, settings) -> Decimal:
