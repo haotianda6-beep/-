@@ -41,8 +41,11 @@ class ArbitrageEngine:
         self.ticker_cache = WSTickerCache(max_symbols_per_stream=CASH_CARRY_INTERNAL_CANDIDATE_LIMIT)
         self.cash_carry_scanner = CashCarryScanner()
         self.cash_carry_history_quality = CashCarryHistoryQuality()
-        self.cash_carry_market_memory = CashCarryMarketMemory()
         root = Path(__file__).resolve().parents[3]
+        cash_state_path = settings_store.path.parent / "cash_carry_execution_state.json"
+        if not settings_store.path.is_absolute():
+            cash_state_path = root / cash_state_path
+        self.cash_carry_market_memory = CashCarryMarketMemory(cash_state_path)
         self.cash_carry_state = CashCarryStateStore(root / "config" / "cash_carry_execution_state.json")
         self.cash_carry_positions = CashCarryPositionBuilder(self.ticker_cache)
         self.mt4_quote_store = Mt4QuoteStore()
