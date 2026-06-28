@@ -194,6 +194,46 @@ def test_cash_carry_signal_fast_captures_bootstrap_basis_when_net_covers_floor()
     assert result.opportunities[0].symbol == "ABCUSDT"
 
 
+def test_cash_carry_signal_burst_captures_single_thick_tick() -> None:
+    tracker = CashCarrySignalTracker(CashCarryHistoryQuality(EMPTY_HISTORY))
+    settings = _settings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_min_basis_pct=Decimal("0.8"),
+        cash_carry_bootstrap_enabled=False,
+        cash_carry_signal_min_seconds=Decimal("20"),
+        cash_carry_signal_min_samples=5,
+        cash_carry_signal_min_history_samples=30,
+        cash_carry_signal_min_basis_percentile=Decimal("75"),
+    )
+
+    result = tracker.apply(CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal("1.10"), net=Decimal("2.5"))]), settings, now=100.0)
+
+    assert result.opportunities
+    assert result.opportunities[0].symbol == "ABCUSDT"
+
+
+def test_cash_carry_signal_burst_capture_respects_explicit_depth_limit() -> None:
+    tracker = CashCarrySignalTracker(CashCarryHistoryQuality(EMPTY_HISTORY))
+    settings = _settings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_min_basis_pct=Decimal("0.8"),
+        cash_carry_bootstrap_enabled=False,
+        cash_carry_signal_min_seconds=Decimal("20"),
+        cash_carry_signal_min_samples=5,
+        cash_carry_signal_min_history_samples=30,
+        cash_carry_signal_min_basis_percentile=Decimal("75"),
+    )
+
+    result = tracker.apply(
+        CashCarryScan(opportunities=[_candidate("ABCUSDT", Decimal("1.10"), net=Decimal("2.5"), max_safe=Decimal("100"))]),
+        settings,
+        now=100.0,
+    )
+
+    assert result.opportunities == []
+    assert "信号持续不足" in " / ".join(result.candidates[0].blocked_reasons)
+
+
 def test_cash_carry_signal_relaxes_percentile_when_net_cushion_is_high() -> None:
     tracker = CashCarrySignalTracker()
     settings = _settings(
@@ -290,7 +330,13 @@ def _settings(**overrides) -> BotSettings:
     return BotSettings(**{**defaults, **overrides})
 
 
-def _candidate(symbol: str, basis: Decimal, reasons: list[str] | None = None, net: Decimal = Decimal("3")) -> CashCarryOpportunity:
+def _candidate(
+    symbol: str,
+    basis: Decimal,
+    reasons: list[str] | None = None,
+    net: Decimal = Decimal("3"),
+    max_safe: Decimal | None = None,
+) -> CashCarryOpportunity:
     return CashCarryOpportunity(
         exchange=ExchangeName.GATE,
         symbol=symbol,
@@ -305,6 +351,7 @@ def _candidate(symbol: str, basis: Decimal, reasons: list[str] | None = None, ne
         estimated_funding_income=Decimal("0.03"),
         estimated_open_close_fee=Decimal("0.5"),
         estimated_net_profit=net,
+        max_safe_notional_usdt=max_safe,
         notional_usdt=Decimal("300"),
         margin_required_usdt=Decimal("100"),
         leverage=Decimal("3"),

@@ -18,6 +18,10 @@ FAST_CAPTURE_SECONDS = Decimal("2")
 FAST_CAPTURE_SAMPLES = 2
 FAST_CAPTURE_HISTORY_SAMPLES = 8
 FAST_CAPTURE_PERCENTILE = Decimal("60")
+BURST_CAPTURE_MIN_SECONDS = Decimal("20")
+BURST_CAPTURE_NET_MULTIPLIER = Decimal("2")
+BURST_CAPTURE_MIN_NET_PCT = Decimal("0.60")
+BURST_CAPTURE_BASIS_EXTRA_PCT = Decimal("0.10")
 
 
 @dataclass(frozen=True)
@@ -26,6 +30,8 @@ class _SignalSample:
     basis_pct: Decimal
     estimated_net_profit: Decimal
     eligible: bool
+    max_safe_notional_usdt: Decimal | None
+    notional_usdt: Decimal
 
 
 class CashCarrySignalTracker:
@@ -49,7 +55,16 @@ class CashCarrySignalTracker:
         eligibility_reasons = _without_signal_eligible_reasons(base_reasons)
         eligible = not eligibility_reasons
         samples = self._samples.setdefault(key, deque())
-        samples.append(_SignalSample(now, item.basis_pct, item.estimated_net_profit, eligible))
+        samples.append(
+            _SignalSample(
+                now,
+                item.basis_pct,
+                item.estimated_net_profit,
+                eligible,
+                item.max_safe_notional_usdt,
+                item.notional_usdt,
+            )
+        )
         self._prune(samples, now, settings)
         if not eligible:
             return item.model_copy(update={"blocked_reasons": base_reasons})
@@ -60,6 +75,8 @@ class CashCarrySignalTracker:
         ready = self._ready_tail(samples)
         if not ready:
             return ["信号持续不足 0.0s/0样本，等待连续满足开仓条件"]
+        if self._has_burst_capture_cushion(ready[-1], settings):
+            return []
         duration = Decimal(str(ready[-1].at - ready[0].at))
         min_seconds, min_samples = self._effective_requirements(ready, settings)
         if len(ready) < min_samples or duration < min_seconds:
@@ -133,6 +150,18 @@ class CashCarrySignalTracker:
             return False
         return sample.estimated_net_profit >= self._fast_capture_net_floor(settings)
 
+    def _has_burst_capture_cushion(self, sample: _SignalSample, settings: BotSettings) -> bool:
+        if settings.order_notional_usdt <= 0 or settings.cash_carry_signal_min_seconds < BURST_CAPTURE_MIN_SECONDS:
+            return False
+        if sample.basis_pct < self._burst_capture_basis_floor(settings):
+            return False
+        if not self._depth_allows_burst_capture(sample, settings):
+            return False
+        return sample.estimated_net_profit >= self._burst_capture_net_floor(settings)
+
+    def _burst_capture_basis_floor(self, settings: BotSettings) -> Decimal:
+        return self._effective_fast_capture_basis_floor(settings) + BURST_CAPTURE_BASIS_EXTRA_PCT
+
     def _effective_fast_capture_basis_floor(self, settings: BotSettings) -> Decimal:
         if settings.cash_carry_bootstrap_enabled and settings.cash_carry_bootstrap_min_trades > 0:
             return min(settings.cash_carry_min_basis_pct, settings.cash_carry_bootstrap_min_basis_pct)
@@ -143,6 +172,17 @@ class CashCarrySignalTracker:
         extra = settings.order_notional_usdt * FAST_CAPTURE_FLOOR_EXTRA_NET_PCT / Decimal("100")
         pct_floor = settings.order_notional_usdt * FAST_CAPTURE_NET_PCT / Decimal("100")
         return max(quality_floor + extra, pct_floor)
+
+    def _burst_capture_net_floor(self, settings: BotSettings) -> Decimal:
+        quality_floor = self.history_quality.entry_quality_gate(settings).min_net_profit
+        pct_floor = settings.order_notional_usdt * BURST_CAPTURE_MIN_NET_PCT / Decimal("100")
+        return max(quality_floor * BURST_CAPTURE_NET_MULTIPLIER, pct_floor)
+
+    def _depth_allows_burst_capture(self, sample: _SignalSample, settings: BotSettings) -> bool:
+        if sample.max_safe_notional_usdt is None:
+            return True
+        required = sample.notional_usdt if sample.notional_usdt > 0 else settings.order_notional_usdt
+        return sample.max_safe_notional_usdt >= required
 
     def _ready_tail(self, samples: deque[_SignalSample]) -> list[_SignalSample]:
         if not samples or not samples[-1].eligible:
