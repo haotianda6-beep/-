@@ -14,6 +14,7 @@ DEPTH_BLOCK_RETENTION_SECONDS = 3600
 DEPTH_BLOCK_RETENTION_LIMIT = 100
 DEPTH_BLOCK_REPEAT_COOLDOWN_SECONDS = 900
 DEPTH_BLOCK_REPEAT_THRESHOLD = 2
+DEPTH_BLOCK_RECHECK_BASIS_DELTA_PCT = Decimal("0.25")
 
 
 class CashCarryStateStore:
@@ -85,18 +86,30 @@ class CashCarryStateStore:
         repeat_cooldown_seconds: int = DEPTH_BLOCK_REPEAT_COOLDOWN_SECONDS,
         repeat_threshold: int = DEPTH_BLOCK_REPEAT_THRESHOLD,
         repeat_count_window_seconds: int = DEPTH_BLOCK_RETENTION_SECONDS,
+        current_basis_by_key: dict[tuple[ExchangeName, str], Decimal] | None = None,
+        recheck_basis_delta_pct: Decimal = DEPTH_BLOCK_RECHECK_BASIS_DELTA_PCT,
     ) -> dict[tuple[ExchangeName, str], str]:
         current = now or datetime.now(timezone.utc)
         records = self._parsed_depth_block_records(current)
         repeat_window = max(cooldown_seconds, repeat_cooldown_seconds)
         repeat_counts: dict[tuple[ExchangeName, str], int] = {}
-        for key, at, _reason in records:
+        for key, at, _reason, _basis_pct in records:
             if (current - at).total_seconds() <= repeat_count_window_seconds:
                 repeat_counts[key] = repeat_counts.get(key, 0) + 1
         reasons: dict[tuple[ExchangeName, str], str] = {}
-        for key, at, reason in records:
+        basis_map = current_basis_by_key or {}
+        for key, at, reason, failed_basis in records:
             age = (current - at).total_seconds()
             effective_cooldown = repeat_window if repeat_counts.get(key, 0) >= repeat_threshold else cooldown_seconds
+            current_basis = basis_map.get(key)
+            if age > effective_cooldown and failed_basis is not None and current_basis is not None:
+                required = failed_basis + recheck_basis_delta_pct
+                if current_basis < required:
+                    reasons[key] = (
+                        f"最近执行深度失败，需ticker基差高于 {required:.4f}% 后重试；"
+                        f"当前 {current_basis:.4f}%：{reason}"
+                    )
+                    continue
             if age > effective_cooldown:
                 continue
             remaining = max(0, int(effective_cooldown - age))
@@ -178,7 +191,7 @@ class CashCarryStateStore:
             records.append(last_result)
         return records
 
-    def _parsed_depth_block_records(self, current: datetime) -> list[tuple[tuple[ExchangeName, str], datetime, str]]:
+    def _parsed_depth_block_records(self, current: datetime) -> list[tuple[tuple[ExchangeName, str], datetime, str, Decimal | None]]:
         parsed = []
         seen = set()
         for result in self._depth_block_records(self.read()):
@@ -192,11 +205,12 @@ class CashCarryStateStore:
             except (KeyError, ValueError):
                 continue
             reason = str(result.get("reason") or "开仓深度不足")
-            marker = (key, at.isoformat(), reason)
+            basis_pct = self._decimal_or_none(result.get("basis_pct"))
+            marker = (key, at.isoformat(), reason, str(basis_pct))
             if marker in seen:
                 continue
             seen.add(marker)
-            parsed.append((key, at, reason))
+            parsed.append((key, at, reason, basis_pct))
         return parsed
 
     def _remember_depth_block(self, state: dict[str, Any], payload: dict[str, Any]) -> None:
@@ -213,15 +227,26 @@ class CashCarryStateStore:
                 continue
             if (current - at).total_seconds() <= DEPTH_BLOCK_RETENTION_SECONDS:
                 records.append(item)
-        records.append(
-            {
-                "exchange": payload["exchange"],
-                "symbol": payload["symbol"],
-                "reason": payload.get("reason") or "开仓深度不足",
-                "at": payload.get("at") or current.isoformat(),
-            }
-        )
+        record = {
+            "exchange": payload["exchange"],
+            "symbol": payload["symbol"],
+            "reason": payload.get("reason") or "开仓深度不足",
+            "at": payload.get("at") or current.isoformat(),
+        }
+        if payload.get("basis_pct") not in (None, ""):
+            record["basis_pct"] = payload["basis_pct"]
+        if payload.get("estimated_net_profit") not in (None, ""):
+            record["estimated_net_profit"] = payload["estimated_net_profit"]
+        records.append(record)
         state["recent_depth_blocks"] = records[-DEPTH_BLOCK_RETENTION_LIMIT:]
+
+    def _decimal_or_none(self, value: Any) -> Decimal | None:
+        if value in (None, ""):
+            return None
+        try:
+            return Decimal(str(value))
+        except (ArithmeticError, ValueError):
+            return None
 
     def _parse_position(self, item: dict[str, Any]) -> CashCarryPosition | None:
         try:
@@ -261,7 +286,21 @@ class CashCarryStateStore:
             exchange_name = ExchangeName(exchange)
         except (KeyError, TypeError, ValueError):
             return {}
-        return {"exchange": exchange_name.value, "symbol": str(symbol)}
+        context = {"exchange": exchange_name.value, "symbol": str(symbol)}
+        basis = self._field_value(item, "basis_pct")
+        if basis not in (None, ""):
+            context["basis_pct"] = str(basis)
+        net = self._field_value(item, "estimated_net_profit")
+        if net not in (None, ""):
+            context["estimated_net_profit"] = str(net)
+        return context
+
+    def _field_value(self, item: Any, key: str) -> Any:
+        if hasattr(item, key):
+            return getattr(item, key)
+        if isinstance(item, dict):
+            return item.get(key)
+        return None
 
     def _position_dict(self, item: CashCarryPosition) -> dict[str, Any]:
         exchange = item.exchange.value if hasattr(item.exchange, "value") else str(item.exchange)

@@ -219,6 +219,9 @@ def test_cash_carry_executor_tracks_multiple_recent_depth_failures(tmp_path) -> 
     reasons = executor.state.recent_depth_blocked_reasons(executor.depth_block_cooldown_seconds)
     assert (ExchangeName.GATE, "ABCUSDT") in reasons
     assert (ExchangeName.GATE, "XYZUSDT") in reasons
+    records = executor.state.read()["recent_depth_blocks"]
+    assert records[0]["basis_pct"] == "1"
+    assert records[0]["estimated_net_profit"] == "3"
 
 
 def test_cash_carry_executor_extends_cooldown_for_repeated_depth_failures(tmp_path) -> None:
@@ -244,6 +247,29 @@ def test_cash_carry_executor_extends_cooldown_for_repeated_depth_failures(tmp_pa
 
     assert (ExchangeName.GATE, "ABCUSDT") in reasons
     assert "第二次深度失败" in reasons[(ExchangeName.GATE, "ABCUSDT")]
+
+
+def test_cash_carry_executor_requires_basis_improvement_after_depth_failure(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    blocked_at = (now - timedelta(seconds=300)).isoformat()
+    state.write_text(
+        (
+            '{"positions":[],"recent_depth_blocks":['
+            f'{{"status":"blocked_by_depth","exchange":"GATE","symbol":"ABCUSDT","reason":"深度失败","basis_pct":"0.70","at":"{blocked_at}"}}'
+            ']}'
+        ),
+        encoding="utf-8",
+    )
+    executor = CashCarryExecutor(state)
+    settings = BotSettings(manual_confirm_required=False, cash_carry_auto_open_enabled=True, cash_carry_auto_trade_enabled=False)
+
+    blocked = executor.evaluate_open([_opportunity("ABCUSDT", "3", basis="0.80", exchange=ExchangeName.GATE)], settings)
+    improved = executor.evaluate_open([_opportunity("ABCUSDT", "3", basis="1.00", exchange=ExchangeName.GATE)], settings)
+
+    assert blocked is None
+    assert improved is not None
+    assert improved.status == "blocked_by_safety_gate"
 
 
 def test_cash_carry_executor_retries_smaller_notional_when_depth_is_thin(tmp_path) -> None:

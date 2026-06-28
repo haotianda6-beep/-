@@ -60,7 +60,10 @@ class CashCarryExecutor:
         if not allow_open or not settings.cash_carry_auto_open_enabled:
             return None
         blocked_keys = self.state.active_keys() | self.state.recently_closed_keys(self.reopen_cooldown_seconds)
-        depth_blocked_keys = set(self.state.recent_depth_blocked_reasons(self.depth_block_cooldown_seconds))
+        depth_blocked_keys = set(self.state.recent_depth_blocked_reasons(
+            self.depth_block_cooldown_seconds,
+            current_basis_by_key=self._current_basis_by_key(rows),
+        ))
         active_counts = self.state.active_counts_by_exchange()
         ready = [
             item for item in rows
@@ -89,6 +92,12 @@ class CashCarryExecutor:
         if gate_reasons:
             return self.state.remember(ExecutionResult(str(uuid.uuid4()), "blocked_by_safety_gate", " / ".join(gate_reasons), steps))
         return self._execute_open(item, settings, steps)
+
+    def _current_basis_by_key(self, rows: list[CashCarryOpportunity]) -> dict[tuple[ExchangeName, str], Decimal]:
+        return {
+            (ExchangeName(item.exchange), item.symbol): item.basis_pct
+            for item in rows
+        }
 
     def evaluate_close(
         self,
