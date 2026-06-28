@@ -8,6 +8,7 @@ from typing import Any
 from app.core.models import BotSettings, ExchangeName
 from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION
 from app.services.cash_carry_quality import close_execution_buffer, entry_net_floor
+from app.services.cash_carry_scope import CASH_CARRY_EXCHANGE_SET
 
 
 TARGET_WIN_RATE_PCT = Decimal("70")
@@ -82,8 +83,9 @@ class CashCarryHistoryQuality:
         estimated_net_profit: Decimal,
         settings: BotSettings,
         now: datetime | None = None,
+        exchange: ExchangeName | None = None,
     ) -> list[str]:
-        gate = self.entry_quality_gate(settings, now)
+        gate = self.entry_quality_gate(settings, now, exchange)
         if self._net_allows(estimated_net_profit, gate.min_net_profit, settings) or gate.min_net_profit <= gate.base_min_net_profit:
             return []
         reason_text = "；".join(gate.reasons) if gate.reasons else "历史表现未达标"
@@ -96,8 +98,9 @@ class CashCarryHistoryQuality:
         estimated_net_profit: Decimal,
         settings: BotSettings,
         now: datetime | None = None,
+        exchange: ExchangeName | None = None,
     ) -> list[str]:
-        gate = self.entry_quality_gate(settings, now)
+        gate = self.entry_quality_gate(settings, now, exchange)
         if self._net_allows(estimated_net_profit, gate.min_net_profit, settings):
             return []
         if gate.min_net_profit > gate.base_min_net_profit:
@@ -116,12 +119,17 @@ class CashCarryHistoryQuality:
             ]
         return [f"回归到平仓线后的净利预估 {estimated_net_profit:.4f}U < 稳定开仓安全垫 {gate.min_net_profit:.4f}U"]
 
-    def entry_quality_gate(self, settings: BotSettings, now: datetime | None = None) -> CashCarryEntryQualityGate:
+    def entry_quality_gate(
+        self,
+        settings: BotSettings,
+        now: datetime | None = None,
+        exchange: ExchangeName | None = None,
+    ) -> CashCarryEntryQualityGate:
         normal_base = self._base_entry_net_floor(settings)
-        base = self._bootstrap_entry_net_floor(settings) if self.bootstrap_active(settings, now) else normal_base
+        base = self._bootstrap_entry_net_floor(settings) if self.bootstrap_active(settings, now, exchange) else normal_base
         if not settings.cash_carry_adaptive_quality_enabled:
             return CashCarryEntryQualityGate(base, normal_base)
-        summary = self.performance_summary(settings, now)
+        summary = self.performance_summary(settings, now, exchange)
         adjusted = base
         reasons: list[str] = []
         target_win = settings.cash_carry_target_win_rate_pct
@@ -147,25 +155,30 @@ class CashCarryHistoryQuality:
             )
             adjusted += estimate_pressure
             reasons.append(f"V3真实成交比预估平均低 {abs(summary.avg_estimate_gap):.4f}U")
-        if self._frequency_relax_allows(summary, settings) and adjusted <= base:
+        if self._frequency_relax_allows(summary, settings, exchange) and adjusted <= base:
             relaxed_floor = self._frequency_relaxed_floor(settings)
             if relaxed_floor < adjusted:
-                target = Decimal(settings.cash_carry_target_daily_trades)
+                target = self._target_daily_trades(settings, exchange)
                 shortfall = max(Decimal("0"), target - Decimal(summary.trades_24h)) / target
                 relaxation = (adjusted - relaxed_floor) * shortfall
                 adjusted -= relaxation
                 reasons.append(
-                    f"频率低于目标 {summary.trades_24h}/{settings.cash_carry_target_daily_trades} 且胜率达标，自动降低净利门槛"
+                    f"频率低于目标 {summary.trades_24h}/{self._format_trade_target(target)} 且胜率达标，自动降低净利门槛"
                 )
         capped = min(adjusted, self._max_reasonable_entry_floor(settings))
         if capped < adjusted:
             reasons.append("已按最大开仓基差限制封顶动态安全垫")
         return CashCarryEntryQualityGate(capped, normal_base, tuple(reasons))
 
-    def bootstrap_active(self, settings: BotSettings, now: datetime | None = None) -> bool:
+    def bootstrap_active(
+        self,
+        settings: BotSettings,
+        now: datetime | None = None,
+        exchange: ExchangeName | None = None,
+    ) -> bool:
         if not settings.cash_carry_bootstrap_enabled or settings.cash_carry_bootstrap_min_trades <= 0:
             return False
-        return self.performance_summary(settings, now).total_trades < settings.cash_carry_bootstrap_min_trades
+        return self.performance_summary(settings, now, exchange).total_trades < settings.cash_carry_bootstrap_min_trades
 
     def bootstrap_basis_allows(
         self,
@@ -173,20 +186,30 @@ class CashCarryHistoryQuality:
         estimated_net_profit: Decimal,
         settings: BotSettings,
         now: datetime | None = None,
+        exchange: ExchangeName | None = None,
     ) -> bool:
-        if not self.bootstrap_active(settings, now):
+        if not self.bootstrap_active(settings, now, exchange):
             return False
         if basis_pct < settings.cash_carry_bootstrap_min_basis_pct:
             return False
-        return self._net_allows(estimated_net_profit, self.entry_quality_gate(settings, now).min_net_profit, settings)
+        return self._net_allows(estimated_net_profit, self.entry_quality_gate(settings, now, exchange).min_net_profit, settings)
 
     def stats_for(self, exchange: ExchangeName, symbol: str) -> CashCarrySymbolStats:
         self._refresh_if_needed()
         return self._stats.get((ExchangeName(exchange), _normalize_symbol(symbol)), CashCarrySymbolStats())
 
-    def performance_summary(self, settings: BotSettings, now: datetime | None = None) -> CashCarryPerformanceSummary:
+    def performance_summary(
+        self,
+        settings: BotSettings,
+        now: datetime | None = None,
+        exchange: ExchangeName | None = None,
+    ) -> CashCarryPerformanceSummary:
         current = now or datetime.now(timezone.utc)
-        all_rows = self._closed_rows()
+        selected_exchange = ExchangeName(exchange) if exchange is not None else None
+        all_rows = [
+            row for row in self._closed_rows()
+            if selected_exchange is None or row[5] == selected_exchange
+        ]
         rows = [row for row in all_rows if row[3] == CASH_CARRY_RULESET_VERSION]
         total = self._summary_values(rows)
         day_rows = [row for row in rows if row[1] and current - row[1] <= timedelta(hours=24)]
@@ -249,8 +272,14 @@ class CashCarryHistoryQuality:
             closed_at = self._closed_at(item)
             version = str(item.get("strategy_version") or "legacy")
             gap = self._estimate_gap(item)
-            rows.append((item, net, closed_at, forced) if raw else (net, closed_at, forced, version, gap))
+            rows.append((item, net, closed_at, forced) if raw else (net, closed_at, forced, version, gap, self._row_exchange(item)))
         return rows
+
+    def _row_exchange(self, item: dict[str, Any]) -> ExchangeName | None:
+        try:
+            return ExchangeName(item["exchange"])
+        except (KeyError, ValueError):
+            return None
 
     def _closed_net(self, item: dict[str, Any]) -> tuple[Decimal, bool] | None:
         if item.get("status") != "closed":
@@ -298,13 +327,18 @@ class CashCarryHistoryQuality:
             return Decimal("0")
         return min(Decimal("0.01"), settings.order_notional_usdt * Decimal("0.00005"))
 
-    def _frequency_relax_allows(self, summary: CashCarryPerformanceSummary, settings: BotSettings) -> bool:
+    def _frequency_relax_allows(
+        self,
+        summary: CashCarryPerformanceSummary,
+        settings: BotSettings,
+        exchange: ExchangeName | None = None,
+    ) -> bool:
         if settings.cash_carry_target_daily_trades <= 0:
             return False
         sample_floor = max(MIN_TRADES_FOR_GLOBAL_GATE // 2, settings.cash_carry_bootstrap_min_trades)
         if summary.total_trades < sample_floor:
             return False
-        if summary.trades_24h >= settings.cash_carry_target_daily_trades:
+        if Decimal(summary.trades_24h) >= self._target_daily_trades(settings, exchange):
             return False
         target_win = settings.cash_carry_target_win_rate_pct or TARGET_WIN_RATE_PCT
         if target_win > 0 and summary.total_win_rate_pct < target_win:
@@ -316,6 +350,17 @@ class CashCarryHistoryQuality:
         if summary.estimate_sample_count >= MIN_ESTIMATE_GAP_SAMPLES and summary.avg_estimate_gap < 0:
             return False
         return True
+
+    def _target_daily_trades(self, settings: BotSettings, exchange: ExchangeName | None = None) -> Decimal:
+        target = Decimal(settings.cash_carry_target_daily_trades)
+        if exchange is None:
+            return target
+        return max(Decimal("1"), target / Decimal(max(1, len(CASH_CARRY_EXCHANGE_SET))))
+
+    def _format_trade_target(self, target: Decimal) -> str:
+        if target == target.to_integral_value():
+            return str(int(target))
+        return format(target.normalize(), "f")
 
     def _frequency_relaxed_floor(self, settings: BotSettings) -> Decimal:
         return max(

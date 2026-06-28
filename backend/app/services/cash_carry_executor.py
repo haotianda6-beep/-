@@ -170,7 +170,7 @@ class CashCarryExecutor:
                 swap_symbol,
                 settings.order_notional_usdt,
                 self._open_min_basis_pct(item, settings),
-                min_net_profit=self.history_quality.entry_quality_gate(settings).min_net_profit,
+                min_net_profit=self.history_quality.entry_quality_gate(settings, exchange=ExchangeName(item.exchange)).min_net_profit,
                 open_close_fee=item.estimated_open_close_fee,
                 funding_income=item.estimated_funding_income,
                 close_basis_pct=settings.cash_carry_close_basis_pct,
@@ -326,7 +326,7 @@ class CashCarryExecutor:
                 swap_symbol,
                 open_settings.order_notional_usdt,
                 self._open_min_basis_pct(adjusted, open_settings),
-                min_net_profit=self.history_quality.entry_quality_gate(open_settings).min_net_profit,
+                min_net_profit=self.history_quality.entry_quality_gate(open_settings, exchange=ExchangeName(adjusted.exchange)).min_net_profit,
                 open_close_fee=adjusted.estimated_open_close_fee,
                 funding_income=adjusted.estimated_funding_income,
                 close_basis_pct=open_settings.cash_carry_close_basis_pct,
@@ -1042,7 +1042,7 @@ class CashCarryExecutor:
         notional = base_qty * spot_entry_price
         reference = item.notional_usdt or settings.order_notional_usdt
         factor = notional / reference if reference > 0 and notional > 0 else Decimal("1")
-        gate = self.history_quality.entry_quality_gate(settings)
+        gate = self.history_quality.entry_quality_gate(settings, exchange=ExchangeName(item.exchange))
         return forward_perp_entry_guard_after_spot(
             swap,
             swap_symbol,
@@ -1063,7 +1063,7 @@ class CashCarryExecutor:
         return fee if fee > 0 else self._fee_rate(exchange)
 
     def _open_min_basis_pct(self, item: CashCarryOpportunity, settings: BotSettings) -> Decimal:
-        if self.history_quality.bootstrap_basis_allows(item.basis_pct, item.estimated_net_profit, settings):
+        if self.history_quality.bootstrap_basis_allows(item.basis_pct, item.estimated_net_profit, settings, exchange=ExchangeName(item.exchange)):
             return settings.cash_carry_bootstrap_min_basis_pct
         return settings.cash_carry_min_basis_pct
 

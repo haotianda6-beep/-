@@ -74,7 +74,7 @@ class CashCarryFastRefresher:
         basis_profit = convergence_basis_profit(settings, basis_pct)
         funding_income = settings.order_notional_usdt * funding_rate
         net = estimated_entry_net_profit(settings, basis_pct, funding_rate, item.estimated_open_close_fee)
-        reasons = self._forward_reasons(item.blocked_reasons, basis_pct, funding_rate, spot_volume, perp_volume, net, settings)
+        reasons = self._forward_reasons(item.blocked_reasons, ExchangeName(item.exchange), basis_pct, funding_rate, spot_volume, perp_volume, net, settings)
         return item.model_copy(update={
             "spot_price": q(spot_price),
             "perp_price": q(perp_price),
@@ -102,6 +102,7 @@ class CashCarryFastRefresher:
     def _forward_reasons(
         self,
         current: list[str],
+        exchange: ExchangeName,
         basis_pct: Decimal,
         funding_rate: Decimal,
         spot_volume: Decimal,
@@ -119,6 +120,7 @@ class CashCarryFastRefresher:
                 "现货/合约最低24h成交量低于",
                 "回归到平仓线后的净利预估",
                 "V3冷启动净利预估",
+                "V3频率调节净利预估",
                 "V2历史胜率保护",
                 "V3历史胜率保护",
                 "信号持续不足",
@@ -127,7 +129,7 @@ class CashCarryFastRefresher:
                 "基差分位不足",
             ),
         )
-        if basis_pct < settings.cash_carry_min_basis_pct and not self.history_quality.bootstrap_basis_allows(basis_pct, estimated_net_profit, settings):
+        if basis_pct < settings.cash_carry_min_basis_pct and not self.history_quality.bootstrap_basis_allows(basis_pct, estimated_net_profit, settings, exchange=exchange):
             reasons.append(f"合约溢价未达 {settings.cash_carry_min_basis_pct}%")
         reasons.extend(entry_basis_risk_reasons(basis_pct, settings))
         if funding_rate <= 0:
@@ -136,7 +138,7 @@ class CashCarryFastRefresher:
             reasons.append(f"资金费率低于 {settings.cash_carry_min_funding_rate_pct}%")
         if min(spot_volume, perp_volume) < settings.cash_carry_min_volume_usdt:
             reasons.append(f"现货/合约最低24h成交量低于 {settings.cash_carry_min_volume_usdt}U")
-        reasons.extend(self.history_quality.entry_net_reasons(estimated_net_profit, settings))
+        reasons.extend(self.history_quality.entry_net_reasons(estimated_net_profit, settings, exchange=exchange))
         return self._dedupe(reasons)
 
     def _preserved(self, current: list[str], dynamic_prefixes: tuple[str, ...]) -> list[str]:

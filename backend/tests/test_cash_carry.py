@@ -368,6 +368,64 @@ def test_cash_carry_v3_entry_gate_does_not_relax_after_recent_loss(tmp_path) -> 
     assert "频率低于目标" not in " / ".join(gate.reasons)
 
 
+def test_cash_carry_v3_entry_gate_isolated_by_exchange(tmp_path) -> None:
+    now = datetime(2026, 6, 28, tzinfo=timezone.utc)
+    older = now - timedelta(days=2)
+    state = tmp_path / "cash_carry_execution_state.json"
+    state.write_text(
+        '{"positions":['
+        + ",".join(
+            f'{{"exchange":"BITGET","symbol":"BWIN{i}USDT","status":"closed","closed_at":"{older.isoformat()}","strategy_version":"{CASH_CARRY_RULESET_VERSION}","history":{{"actual_net_profit":"1"}}}}'
+            for i in range(5)
+        )
+        + "]}",
+        encoding="utf-8",
+    )
+    history = CashCarryHistoryQuality(state)
+    settings = BotSettings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_bootstrap_min_trades=3,
+        cash_carry_target_daily_trades=10,
+        cash_carry_v3_min_profit_pct=Decimal("0.2"),
+        max_slippage_pct=Decimal("0.01"),
+    )
+
+    bitget_gate = history.entry_quality_gate(settings, now, ExchangeName.BITGET)
+    gate_gate = history.entry_quality_gate(settings, now, ExchangeName.GATE)
+
+    assert bitget_gate.min_net_profit == Decimal("0.75")
+    assert "频率低于目标 0/5" in " / ".join(bitget_gate.reasons)
+    assert gate_gate.min_net_profit == Decimal("0.90")
+    assert gate_gate.reasons == ()
+
+
+def test_cash_carry_scanner_does_not_apply_gate_losses_to_bitget_bootstrap(tmp_path) -> None:
+    state = tmp_path / "cash_carry_execution_state.json"
+    state.write_text(
+        '{"positions":['
+        + ",".join(
+            f'{{"exchange":"GATE","symbol":"GLOSS{i}USDT","status":"closed","strategy_version":"{CASH_CARRY_RULESET_VERSION}","history":{{"actual_net_profit":"-1"}}}}'
+            for i in range(10)
+        )
+        + "]}",
+        encoding="utf-8",
+    )
+    scanner = CashCarryScanner(CashCarryHistoryQuality(state))
+    data = _data("100.8167", "0.0002")
+    data.exchange = ExchangeName.BITGET
+    settings = BotSettings(
+        order_notional_usdt=Decimal("300"),
+        cash_carry_bootstrap_min_trades=3,
+        max_slippage_pct=Decimal("0.01"),
+    )
+
+    item = scanner._build_opportunity("ABCUSDT", data, settings)
+
+    assert item is not None
+    assert item.estimated_net_profit == Decimal("0.9501")
+    assert not item.blocked_reasons
+
+
 def test_cash_carry_v3_bootstrap_allows_positive_near_miss_before_first_samples() -> None:
     scanner = _scanner()
     settings = BotSettings(
@@ -376,7 +434,9 @@ def test_cash_carry_v3_bootstrap_allows_positive_near_miss_before_first_samples(
         max_slippage_pct=Decimal("0.01"),
     )
 
-    item = scanner._build_opportunity("ABCUSDT", _data("100.6612", "0.00005"), settings)
+    data = _data("100.6612", "0.00005")
+    data.exchange = ExchangeName.GATE
+    item = scanner._build_opportunity("ABCUSDT", data, settings)
 
     assert item is not None
     assert item.estimated_net_profit == Decimal("0.9336")
@@ -417,7 +477,9 @@ def test_cash_carry_v3_bootstrap_stops_after_minimum_real_samples(tmp_path) -> N
         max_slippage_pct=Decimal("0.01"),
     )
 
-    item = scanner._build_opportunity("ABCUSDT", _data("100.6612", "0.00005"), settings)
+    data = _data("100.6612", "0.00005")
+    data.exchange = ExchangeName.GATE
+    item = scanner._build_opportunity("ABCUSDT", data, settings)
 
     assert item is not None
     reasons = " / ".join(item.blocked_reasons)

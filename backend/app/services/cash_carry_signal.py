@@ -27,6 +27,7 @@ BURST_CAPTURE_BASIS_EXTRA_PCT = Decimal("0.10")
 @dataclass(frozen=True)
 class _SignalSample:
     at: float
+    exchange: ExchangeName
     basis_pct: Decimal
     estimated_net_profit: Decimal
     eligible: bool
@@ -58,6 +59,7 @@ class CashCarrySignalTracker:
         samples.append(
             _SignalSample(
                 now,
+                key[0],
                 item.basis_pct,
                 item.estimated_net_profit,
                 eligible,
@@ -148,7 +150,7 @@ class CashCarrySignalTracker:
             return False
         if sample.basis_pct < self._effective_fast_capture_basis_floor(settings):
             return False
-        return sample.estimated_net_profit >= self._fast_capture_net_floor(settings)
+        return sample.estimated_net_profit >= self._fast_capture_net_floor(sample, settings)
 
     def _has_burst_capture_cushion(self, sample: _SignalSample, settings: BotSettings) -> bool:
         if settings.order_notional_usdt <= 0 or settings.cash_carry_signal_min_seconds < BURST_CAPTURE_MIN_SECONDS:
@@ -157,7 +159,7 @@ class CashCarrySignalTracker:
             return False
         if not self._depth_allows_burst_capture(sample, settings):
             return False
-        return sample.estimated_net_profit >= self._burst_capture_net_floor(settings)
+        return sample.estimated_net_profit >= self._burst_capture_net_floor(sample, settings)
 
     def _burst_capture_basis_floor(self, settings: BotSettings) -> Decimal:
         return self._effective_fast_capture_basis_floor(settings) + BURST_CAPTURE_BASIS_EXTRA_PCT
@@ -167,14 +169,14 @@ class CashCarrySignalTracker:
             return min(settings.cash_carry_min_basis_pct, settings.cash_carry_bootstrap_min_basis_pct)
         return settings.cash_carry_min_basis_pct
 
-    def _fast_capture_net_floor(self, settings: BotSettings) -> Decimal:
-        quality_floor = self.history_quality.entry_quality_gate(settings).min_net_profit
+    def _fast_capture_net_floor(self, sample: _SignalSample, settings: BotSettings) -> Decimal:
+        quality_floor = self.history_quality.entry_quality_gate(settings, exchange=sample.exchange).min_net_profit
         extra = settings.order_notional_usdt * FAST_CAPTURE_FLOOR_EXTRA_NET_PCT / Decimal("100")
         pct_floor = settings.order_notional_usdt * FAST_CAPTURE_NET_PCT / Decimal("100")
         return max(quality_floor + extra, pct_floor)
 
-    def _burst_capture_net_floor(self, settings: BotSettings) -> Decimal:
-        quality_floor = self.history_quality.entry_quality_gate(settings).min_net_profit
+    def _burst_capture_net_floor(self, sample: _SignalSample, settings: BotSettings) -> Decimal:
+        quality_floor = self.history_quality.entry_quality_gate(settings, exchange=sample.exchange).min_net_profit
         pct_floor = settings.order_notional_usdt * BURST_CAPTURE_MIN_NET_PCT / Decimal("100")
         return max(quality_floor * BURST_CAPTURE_NET_MULTIPLIER, pct_floor)
 

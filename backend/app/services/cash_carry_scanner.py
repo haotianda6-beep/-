@@ -277,9 +277,9 @@ class CashCarryScanner:
         basis_profit = convergence_basis_profit(settings, basis_pct)
         funding_income = settings.order_notional_usdt * funding_rate
         estimated_net_profit = estimated_entry_net_profit(settings, basis_pct, funding_rate, fees)
-        reasons = self._blocked_reasons(basis_pct, funding_rate, spot_volume, perp_volume, estimated_net_profit, settings)
+        reasons = self._blocked_reasons(data.exchange, basis_pct, funding_rate, spot_volume, perp_volume, estimated_net_profit, settings)
         reasons.extend(entry_basis_risk_reasons(basis_pct, settings))
-        reasons.extend(self.history_quality.entry_net_reasons(estimated_net_profit, settings))
+        reasons.extend(self.history_quality.entry_net_reasons(estimated_net_profit, settings, exchange=data.exchange))
         reasons.extend(self.history_quality.blocked_reasons(data.exchange, symbol, settings))
         reasons.extend(local_identity_reasons(data.exchange.value, data.swap_markets[symbol].asset, data.spot_markets[symbol].asset))
         if self._pre_market_spot_transfer_closed(data.swap_markets[symbol], data.spot_markets[symbol]):
@@ -308,6 +308,7 @@ class CashCarryScanner:
 
     def _blocked_reasons(
         self,
+        exchange: ExchangeName,
         basis_pct: Decimal,
         funding_rate: Decimal,
         spot_volume: Decimal,
@@ -316,7 +317,7 @@ class CashCarryScanner:
         settings: BotSettings,
     ) -> list[str]:
         reasons: list[str] = []
-        if basis_pct < settings.cash_carry_min_basis_pct and not self.history_quality.bootstrap_basis_allows(basis_pct, estimated_net_profit, settings):
+        if basis_pct < settings.cash_carry_min_basis_pct and not self.history_quality.bootstrap_basis_allows(basis_pct, estimated_net_profit, settings, exchange=exchange):
             reasons.append(f"合约溢价未达 {settings.cash_carry_min_basis_pct}%")
         funding_rate_pct = funding_rate * Decimal("100")
         if funding_rate <= 0:
@@ -356,6 +357,7 @@ class CashCarryScanner:
                     "合约溢价未达",
                     "回归到平仓线后的净利预估",
                     "V3冷启动净利预估",
+                    "V3频率调节净利预估",
                     "V2历史胜率保护",
                     "V3历史胜率保护",
                     "信号持续不足",
@@ -367,7 +369,7 @@ class CashCarryScanner:
         ]
         if hard_reasons:
             return False
-        min_basis = settings.cash_carry_bootstrap_min_basis_pct if self.history_quality.bootstrap_active(settings) else settings.cash_carry_min_basis_pct
+        min_basis = settings.cash_carry_bootstrap_min_basis_pct if self.history_quality.bootstrap_active(settings, exchange=ExchangeName(item.exchange)) else settings.cash_carry_min_basis_pct
         if item.basis_pct < min_basis:
             return item.estimated_net_profit > Decimal("0")
         return item.estimated_net_profit >= Decimal("0")
@@ -392,7 +394,7 @@ class CashCarryScanner:
             swap_market.taker_fee or FEE_RATES[data.exchange],
             data.funding_rates.get(item.symbol, Decimal("0")),
             self._depth_min_basis_pct(item, settings),
-            self.history_quality.entry_quality_gate(settings).min_net_profit,
+            self.history_quality.entry_quality_gate(settings, exchange=data.exchange).min_net_profit,
         )
         if estimate is None:
             return item
@@ -406,7 +408,7 @@ class CashCarryScanner:
         return item.model_copy(update=updates)
 
     def _depth_min_basis_pct(self, item: CashCarryOpportunity, settings: BotSettings) -> Decimal:
-        if self.history_quality.bootstrap_basis_allows(item.basis_pct, item.estimated_net_profit, settings):
+        if self.history_quality.bootstrap_basis_allows(item.basis_pct, item.estimated_net_profit, settings, exchange=ExchangeName(item.exchange)):
             return settings.cash_carry_bootstrap_min_basis_pct
         return settings.cash_carry_min_basis_pct
 
