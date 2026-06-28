@@ -462,7 +462,7 @@ def test_cash_carry_depth_zero_blocks_ready_opportunity() -> None:
 
     checked = scanner._with_depth_estimate(item, data, settings)
 
-    assert checked.max_safe_notional_usdt == Decimal("100.00")
+    assert checked.max_safe_notional_usdt == Decimal("0.00")
     assert "盘口深度不足" in " / ".join(checked.blocked_reasons)
 
 
@@ -475,11 +475,11 @@ def test_cash_carry_depth_estimate_uses_bootstrap_basis_floor() -> None:
         cash_carry_bootstrap_min_trades=3,
         cash_carry_bootstrap_min_basis_pct=Decimal("0.6"),
     )
-    item = scanner._build_opportunity("ABCUSDT", _data("100.98", "0.002"), settings)
+    item = scanner._build_opportunity("ABCUSDT", _data("101.10", "0.002"), settings)
     assert item is not None
-    data = _data("100.98", "0.002")
+    data = _data("101.10", "0.002")
     data.spot_exchange = _BookExchange(asks=[[100, 2]], bids=[[99, 2]])
-    data.swap_exchange = _BookExchange(asks=[[101, 2]], bids=[[100.85, 2]])
+    data.swap_exchange = _BookExchange(asks=[[101.2, 2]], bids=[[101, 2]])
 
     checked = scanner._with_depth_estimate(item, data, settings)
 

@@ -392,6 +392,7 @@ class CashCarryScanner:
             swap_market.taker_fee or FEE_RATES[data.exchange],
             data.funding_rates.get(item.symbol, Decimal("0")),
             self._depth_min_basis_pct(item, settings),
+            self.history_quality.entry_quality_gate(settings).min_net_profit,
         )
         if estimate is None:
             return item

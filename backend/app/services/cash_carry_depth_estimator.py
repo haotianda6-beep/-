@@ -13,6 +13,7 @@ def estimate_max_safe_notional(
     swap_fee: Decimal,
     funding_rate: Decimal,
     min_basis_pct: Decimal | None = None,
+    min_net_profit: Decimal | None = None,
 ) -> Decimal | None:
     try:
         spot_book = spot.fetch_order_book(spot_symbol, limit=50)
@@ -23,7 +24,7 @@ def estimate_max_safe_notional(
     except Exception:
         return None
     max_slippage = settings.max_slippage_pct
-    min_net = settings.min_funding_net_usdt
+    min_net = min_net_profit if min_net_profit is not None else settings.min_funding_net_usdt
     max_notional = _forward_depth_notional(spot_book, swap_book, contract_size)
     check = lambda notional: _forward_ok(  # noqa: E731
         spot_book,
