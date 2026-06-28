@@ -692,7 +692,7 @@ class CashCarryExecutor:
             return None, "小额探索本金无效"
         base_probe_settings = settings.model_copy(update={"order_notional_usdt": probe_notional})
         depth_unconfirmed = self.state.recent_depth_unconfirmed_exchanges()
-        diagnostics: list[tuple[Decimal, Decimal, CashCarryOpportunity, str]] = []
+        diagnostics: list[tuple[int, Decimal, Decimal, CashCarryOpportunity, str]] = []
         for item in rows:
             exchange = ExchangeName(item.exchange)
             reason = self._probe_filter_reason(
@@ -704,23 +704,28 @@ class CashCarryExecutor:
                 allowed_open_exchanges,
                 depth_unconfirmed,
             )
+            priority = 1 if exchange in CASH_CARRY_EXCHANGE_SET else 3
             if reason is None:
                 candidate_settings = base_probe_settings
                 adjusted = self._probe_item(item, candidate_settings)
                 if self._probe_blockers_only(item.blocked_reasons):
+                    priority = 0
                     reason = self._probe_net_reject_reason(adjusted, candidate_settings) or "恢复小额试单条件已满足，等待执行锁"
                 elif self._shadow_probe_blockers_only(item.blocked_reasons):
+                    priority = 0
                     candidate_settings = self._shadow_probe_settings(item, base_probe_settings)
                     adjusted = self._probe_item(item, candidate_settings)
                     reason = self._shadow_probe_reject_reason(item, adjusted, settings, candidate_settings) or "影子样本小额探索条件已满足，等待执行锁"
                 else:
+                    priority = 2
                     reason = "包含硬风险原因：" + " / ".join(item.blocked_reasons[:3])
                 if reason.startswith(("恢复小额试单条件已满足", "影子样本小额探索条件已满足")) and not self._exposure_allows(adjusted, candidate_settings):
+                    priority = 1
                     reason = "仓位额度不足或超过单交易所/单币种敞口限制"
-            diagnostics.append((item.estimated_net_profit, item.basis_pct, item, reason))
+            diagnostics.append((priority, item.estimated_net_profit, item.basis_pct, item, reason))
         if not diagnostics:
             return None, "没有 Gate/Bitget 范围内候选"
-        _net, _basis, item, reason = max(diagnostics, key=lambda row: (row[0], row[1]))
+        _priority, _net, _basis, item, reason = min(diagnostics, key=lambda row: (row[0], -row[1], -row[2]))
         return item, f"{ExchangeName(item.exchange).value} {item.symbol} 未进入小额探索：{reason}"
 
     def _probe_filter_reason(

@@ -1040,6 +1040,26 @@ def test_cash_carry_executor_records_probe_diagnostic_when_shadow_basis_is_low(t
     assert "当前基差 0.5000% < 影子赢家最低入场门槛 0.5700%" in diagnostic["reason"]
 
 
+def test_cash_carry_executor_probe_diagnostic_prefers_actionable_soft_blocker(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(_shadow_state(5, ExchangeName.GATE), encoding="utf-8")
+    executor = CashCarryExecutor(state)
+    settings = BotSettings(cash_carry_auto_open_enabled=True, order_notional_usdt=Decimal("300"), cash_carry_recovery_probe_notional_usdt=Decimal("100"))
+    hard_blocked = _opportunity("HIGHUSDT", net="9.0", basis="2.0").model_copy(
+        update={"blocked_reasons": ["现货/合约最低24h成交量低于 300000U"]}
+    )
+    soft_blocked = _opportunity("ABCUSDT", net="2.0", basis="0.5").model_copy(
+        update={"blocked_reasons": ["合约溢价未达 0.8%", "V3冷启动净利预估 2.0000U < 冷启动安全垫 3.0000U"]}
+    )
+
+    result = executor.evaluate_open([hard_blocked, soft_blocked], settings)
+
+    assert result is None
+    diagnostic = executor.state.read()["last_probe_diagnostic"]
+    assert diagnostic["symbol"] == "ABCUSDT"
+    assert "当前基差 0.5000% < 影子赢家最低入场门槛 0.5700%" in diagnostic["reason"]
+
+
 def _opportunity(symbol: str = "ABCUSDT", net: str = "0.8", basis: str = "1", funding: str = "0.01", exchange: ExchangeName = ExchangeName.GATE) -> CashCarryOpportunity:
     return CashCarryOpportunity(
         exchange=exchange,
