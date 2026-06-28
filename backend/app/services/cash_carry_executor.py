@@ -827,17 +827,19 @@ class CashCarryExecutor:
         if entry_basis is not None:
             exchange = ExchangeName(original.exchange)
             estimate_gap_buffer = self.history_quality.estimate_gap_basis_buffer_pct(base_settings, exchange=exchange)
-            frequency_relax = Decimal("0") if estimate_gap_buffer > 0 else self._frequency_probe_basis_relaxation(summary, base_settings, exchange)
+            depth_haircut = self.state.recent_depth_basis_haircut_pct(exchange)
+            frequency_relax = Decimal("0") if estimate_gap_buffer > 0 or depth_haircut > 0 else self._frequency_probe_basis_relaxation(summary, base_settings, exchange)
             protective_floor = base_settings.cash_carry_close_basis_pct + self.frequency_probe_min_basis_over_close_pct
             required_basis = max(
                 Decimal("0"),
                 protective_floor,
-                entry_basis - self.shadow_probe_basis_buffer_pct + estimate_gap_buffer - frequency_relax,
+                entry_basis - self.shadow_probe_basis_buffer_pct + estimate_gap_buffer + depth_haircut - frequency_relax,
             )
             if original.basis_pct < required_basis:
                 buffer_note = f"（含真实成交偏差缓冲 {estimate_gap_buffer:.4f}%）" if estimate_gap_buffer > 0 else ""
+                depth_note = f"（含盘口深度折损缓冲 {depth_haircut:.4f}%）" if depth_haircut > 0 else ""
                 relax_note = f"（频率校准已放宽 {frequency_relax:.4f}%）" if frequency_relax > 0 else ""
-                return f"当前基差 {original.basis_pct:.4f}% < 影子目标胜率入场门槛 {required_basis:.4f}%{buffer_note}{relax_note}"
+                return f"当前基差 {original.basis_pct:.4f}% < 影子目标胜率入场门槛 {required_basis:.4f}%{buffer_note}{depth_note}{relax_note}"
         if probe_settings.order_notional_usdt <= 0 or base_settings.order_notional_usdt <= 0:
             return "小额本金或基础本金无效"
         scale = probe_settings.order_notional_usdt / base_settings.order_notional_usdt

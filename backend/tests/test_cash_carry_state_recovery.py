@@ -40,6 +40,21 @@ def test_cash_carry_state_read_tolerates_empty_file(tmp_path) -> None:
     assert CashCarryStateStore(state).read() == {"positions": []}
 
 
+def test_cash_carry_state_extracts_recent_depth_basis_haircut(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(
+        '{"positions":[],"recent_depth_blocks":['
+        '{"exchange":"GATE","symbol":"ABCUSDT","reason":"深度均价开仓基差 0.1000% 低于 0.5000% ","basis_pct":"0.4000","at":"2026-06-28T00:00:00+00:00"},'
+        '{"exchange":"BITGET","symbol":"XYZUSDT","reason":"深度均价开仓基差 0.2000% 低于 0.5000% ","basis_pct":"0.3000","at":"2026-06-28T00:00:00+00:00"}'
+        ']}',
+        encoding="utf-8",
+    )
+    now = datetime(2026, 6, 28, 0, 1, tzinfo=timezone.utc)
+
+    assert CashCarryStateStore(state).recent_depth_basis_haircut_pct(ExchangeName.GATE, now) == Decimal("0.3000")
+    assert CashCarryStateStore(state).recent_depth_basis_haircut_pct(ExchangeName.BITGET, now) == Decimal("0.1000")
+
+
 def _opportunity() -> CashCarryOpportunity:
     return CashCarryOpportunity(
         exchange=ExchangeName.GATE,

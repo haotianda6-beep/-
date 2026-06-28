@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -18,6 +19,7 @@ DEPTH_BLOCK_RECHECK_BASIS_DELTA_PCT = Decimal("0.25")
 DEPTH_BLOCK_EXCHANGE_CONFIRMATION_THRESHOLD = 2
 PROBE_DIAGNOSTIC_MIN_WRITE_SECONDS = 30
 PROBE_DIAGNOSTIC_TTL_SECONDS = 300
+DEPTH_BASIS_PATTERN = re.compile(r"深度均价开仓基差\s+(-?\d+(?:\.\d+)?)%")
 
 
 class CashCarryStateStore:
@@ -137,6 +139,28 @@ class CashCarryStateStore:
             for exchange, symbols in symbols_by_exchange.items()
             if len(symbols) >= threshold
         }
+
+    def recent_depth_basis_haircut_pct(
+        self,
+        exchange: ExchangeName,
+        now: datetime | None = None,
+        window_seconds: int = DEPTH_BLOCK_RETENTION_SECONDS,
+    ) -> Decimal:
+        current = now or datetime.now(timezone.utc)
+        exchange_name = ExchangeName(exchange)
+        haircuts: list[Decimal] = []
+        for key, at, reason, ticker_basis in self._parsed_depth_block_records(current):
+            if key[0] != exchange_name or ticker_basis is None:
+                continue
+            if (current - at).total_seconds() > window_seconds:
+                continue
+            depth_basis = self._depth_basis_from_reason(reason)
+            if depth_basis is None:
+                continue
+            haircut = ticker_basis - depth_basis
+            if haircut > 0:
+                haircuts.append(haircut)
+        return min(haircuts) if haircuts else Decimal("0")
 
     def mark_added(
         self,
@@ -303,6 +327,12 @@ class CashCarryStateStore:
             return Decimal(str(value))
         except (ArithmeticError, ValueError):
             return None
+
+    def _depth_basis_from_reason(self, reason: str) -> Decimal | None:
+        match = DEPTH_BASIS_PATTERN.search(reason)
+        if not match:
+            return None
+        return self._decimal_or_none(match.group(1))
 
     def _parse_time(self, value: Any) -> datetime | None:
         try:
