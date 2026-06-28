@@ -32,15 +32,30 @@ def test_cash_carry_shadow_memory_closes_missing_sample_after_timeout(tmp_path) 
     assert summary.open_count == 0
     assert summary.closed_count == 1
     assert summary.wins == 0
-    assert summary.total_estimated_net == Decimal("-0.5")
+    assert summary.total_estimated_net == Decimal("-1.1")
+
+
+def test_cash_carry_shadow_memory_waits_before_convergence_close(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    now = datetime.now(timezone.utc)
+    settings = BotSettings(order_notional_usdt=Decimal("300"))
+
+    memory = CashCarryShadowMemory(state)
+    memory.observe([_candidate("FASTUSDT", Decimal("0.42"), Decimal("0.20"), ["合约溢价未达 0.8%"])], settings, Decimal("0.9"), now)
+    memory.observe([_candidate("FASTUSDT", Decimal("0.01"), Decimal("0"), ["合约溢价未达 0.8%"])], settings, Decimal("0.9"), now + timedelta(seconds=30))
+
+    summary = CashCarryShadowMemory(state).summary(now + timedelta(seconds=30))
+
+    assert summary.open_count == 1
+    assert summary.closed_count == 0
 
 
 def test_cash_carry_shadow_memory_summary_can_filter_exchange(tmp_path) -> None:
     state = tmp_path / "state.json"
     state.write_text(
         '{"positions":[],"cash_carry_shadow":{"open":[], "closed":['
-        '{"opened_at":"2026-06-28T00:00:00+00:00","exchange":"GATE","symbol":"GUSDT","entry_basis_pct":"0.6","max_basis_pct":"0.7","closed_at":"2026-06-28T00:10:00+00:00","close_basis_pct":"0.1","estimated_net_profit":"1.2","reason":"基差回归"},'
-        '{"opened_at":"2026-06-28T00:00:00+00:00","exchange":"BITGET","symbol":"BUSDT","entry_basis_pct":"0.5","max_basis_pct":"0.6","closed_at":"2026-06-28T00:10:00+00:00","close_basis_pct":"0.2","estimated_net_profit":"0.4","reason":"基差回归"}'
+        '{"opened_at":"2026-06-28T00:00:00+00:00","exchange":"GATE","symbol":"GUSDT","entry_basis_pct":"0.6","max_basis_pct":"0.7","closed_at":"2026-06-28T00:10:00+00:00","close_basis_pct":"0.1","estimated_net_profit":"1.2","execution_buffer_usdt":"0","reason":"基差回归"},'
+        '{"opened_at":"2026-06-28T00:00:00+00:00","exchange":"BITGET","symbol":"BUSDT","entry_basis_pct":"0.5","max_basis_pct":"0.6","closed_at":"2026-06-28T00:10:00+00:00","close_basis_pct":"0.2","estimated_net_profit":"0.4","execution_buffer_usdt":"0","reason":"基差回归"}'
         ']}}',
         encoding="utf-8",
     )

@@ -11,7 +11,10 @@ from app.core.models import CashCarryOpportunity, ExchangeName
 
 SHADOW_WINDOW = timedelta(hours=24)
 SHADOW_MAX_HOLD = timedelta(hours=4)
+SHADOW_MIN_HOLD = timedelta(seconds=60)
 SHADOW_PROBE_MIN_NET_PCT = Decimal("0.05")
+SHADOW_EXECUTION_BUFFER_MIN_USDT = Decimal("0.30")
+SHADOW_EXECUTION_BUFFER_MIN_PCT = Decimal("0.10")
 SHADOW_CLOSED_LIMIT = 100
 SHADOW_OPEN_LIMIT = 50
 HARD_BLOCKER_PREFIXES = (
@@ -54,6 +57,7 @@ class CashCarryShadowClosedTrade:
     max_basis_pct: Decimal
     estimated_net_profit: Decimal
     reason: str
+    execution_buffer_usdt: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True)
@@ -138,18 +142,18 @@ class CashCarryShadowMemory:
             item = latest.get(key)
             if not item:
                 if now - position.opened_at >= SHADOW_MAX_HOLD:
-                    self._shadow_closed.append(self._close_shadow_trade(position, position.entry_basis_pct, position.max_basis_pct, now, "样本缺失超时"))
+                    self._shadow_closed.append(self._close_shadow_trade(position, position.entry_basis_pct, position.max_basis_pct, now, "样本缺失超时", settings))
                     self._shadow_open.pop(key, None)
                     changed = True
                 continue
             max_basis = max(position.max_basis_pct, item.basis_pct)
-            if item.basis_pct <= settings.cash_carry_close_basis_pct:
-                self._shadow_closed.append(self._close_shadow_trade(position, item.basis_pct, max_basis, now, "基差回归"))
+            if item.basis_pct <= settings.cash_carry_close_basis_pct and now - position.opened_at >= SHADOW_MIN_HOLD:
+                self._shadow_closed.append(self._close_shadow_trade(position, item.basis_pct, max_basis, now, "基差回归", settings))
                 self._shadow_open.pop(key, None)
                 changed = True
                 continue
             if now - position.opened_at >= SHADOW_MAX_HOLD:
-                self._shadow_closed.append(self._close_shadow_trade(position, item.basis_pct, max_basis, now, "超时观察"))
+                self._shadow_closed.append(self._close_shadow_trade(position, item.basis_pct, max_basis, now, "超时观察", settings))
                 self._shadow_open.pop(key, None)
                 changed = True
                 continue
@@ -158,9 +162,10 @@ class CashCarryShadowMemory:
                 changed = True
         return changed
 
-    def _close_shadow_trade(self, position: CashCarryShadowPosition, close_basis_pct: Decimal, max_basis_pct: Decimal, now: datetime, reason: str) -> CashCarryShadowClosedTrade:
-        net = position.notional_usdt * (position.entry_basis_pct - close_basis_pct) / Decimal("100") - position.open_close_fee
-        return CashCarryShadowClosedTrade(position.opened_at, now, position.exchange, position.symbol, position.entry_basis_pct, close_basis_pct, max_basis_pct, net, reason)
+    def _close_shadow_trade(self, position: CashCarryShadowPosition, close_basis_pct: Decimal, max_basis_pct: Decimal, now: datetime, reason: str, settings) -> CashCarryShadowClosedTrade:
+        buffer = _execution_buffer(position.notional_usdt, settings)
+        net = position.notional_usdt * (position.entry_basis_pct - close_basis_pct) / Decimal("100") - position.open_close_fee - buffer
+        return CashCarryShadowClosedTrade(position.opened_at, now, position.exchange, position.symbol, position.entry_basis_pct, close_basis_pct, max_basis_pct, net, reason, buffer)
 
     def _prune_shadow(self, now: datetime) -> bool:
         changed = False
@@ -253,7 +258,11 @@ def _parse_closed(item: dict[str, Any]) -> CashCarryShadowClosedTrade | None:
         values = [_decimal(item.get(key)) for key in ("entry_basis_pct", "close_basis_pct", "max_basis_pct", "estimated_net_profit")]
         if not opened_at or not closed_at or any(value is None for value in values):
             return None
-        return CashCarryShadowClosedTrade(opened_at, closed_at, ExchangeName(item["exchange"]), str(item["symbol"]), *values, str(item.get("reason") or ""))
+        execution_buffer = _decimal(item.get("execution_buffer_usdt"))
+        if execution_buffer is None:
+            execution_buffer = SHADOW_EXECUTION_BUFFER_MIN_USDT
+            values[-1] -= execution_buffer
+        return CashCarryShadowClosedTrade(opened_at, closed_at, ExchangeName(item["exchange"]), str(item["symbol"]), *values, str(item.get("reason") or ""), execution_buffer)
     except (KeyError, ValueError):
         return None
 
@@ -263,8 +272,24 @@ def _position_dict(item: CashCarryShadowPosition) -> dict[str, str]:
 
 
 def _closed_dict(item: CashCarryShadowClosedTrade) -> dict[str, str]:
-    return {**_base_dict(item), "closed_at": item.closed_at.isoformat(), "close_basis_pct": str(item.close_basis_pct), "estimated_net_profit": str(item.estimated_net_profit), "reason": item.reason}
+    return {
+        **_base_dict(item),
+        "closed_at": item.closed_at.isoformat(),
+        "close_basis_pct": str(item.close_basis_pct),
+        "estimated_net_profit": str(item.estimated_net_profit),
+        "reason": item.reason,
+        "execution_buffer_usdt": str(item.execution_buffer_usdt),
+    }
 
 
 def _base_dict(item) -> dict[str, str]:
     return {"opened_at": item.opened_at.isoformat(), "exchange": item.exchange.value, "symbol": item.symbol, "entry_basis_pct": str(item.entry_basis_pct), "max_basis_pct": str(item.max_basis_pct)}
+
+
+def _execution_buffer(notional: Decimal, settings) -> Decimal:
+    slippage_pct = getattr(settings, "max_slippage_pct", SHADOW_EXECUTION_BUFFER_MIN_PCT)
+    try:
+        slippage_pct = max(Decimal(str(slippage_pct)), SHADOW_EXECUTION_BUFFER_MIN_PCT)
+    except (InvalidOperation, ValueError):
+        slippage_pct = SHADOW_EXECUTION_BUFFER_MIN_PCT
+    return max(SHADOW_EXECUTION_BUFFER_MIN_USDT, notional * slippage_pct / Decimal("100"))
