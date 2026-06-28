@@ -319,6 +319,27 @@ def test_cash_carry_v3_entry_gate_raises_after_negative_estimate_gap(tmp_path) -
     assert "V3真实成交比预估平均低 0.6000U" in " / ".join(gate.reasons)
 
 
+def test_cash_carry_estimate_gap_basis_buffer_is_exchange_scoped(tmp_path) -> None:
+    state = tmp_path / "cash_carry_execution_state.json"
+    state.write_text(
+        '{"positions":['
+        + ",".join(
+            f'{{"exchange":"GATE","symbol":"GAP{i}USDT","status":"closed","strategy_version":"{CASH_CARRY_RULESET_VERSION}","history":{{"actual_net_profit":"0.2","actual_vs_entry_estimate":"-0.6"}}}}'
+            for i in range(3)
+        )
+        + ',{"exchange":"BITGET","symbol":"WINUSDT","status":"closed","strategy_version":"'
+        + CASH_CARRY_RULESET_VERSION
+        + '","history":{"actual_net_profit":"1.0","actual_vs_entry_estimate":"0.2"}}'
+        + "]}",
+        encoding="utf-8",
+    )
+    history = CashCarryHistoryQuality(state)
+    settings = BotSettings(order_notional_usdt=Decimal("300"))
+
+    assert history.estimate_gap_basis_buffer_pct(settings, exchange=ExchangeName.GATE) == Decimal("0.200")
+    assert history.estimate_gap_basis_buffer_pct(settings, exchange=ExchangeName.BITGET) == Decimal("0")
+
+
 def test_cash_carry_v3_entry_gate_relaxes_when_frequency_low_and_win_rate_good(tmp_path) -> None:
     now = datetime(2026, 6, 28, tzinfo=timezone.utc)
     state = tmp_path / "cash_carry_execution_state.json"

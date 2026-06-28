@@ -1060,6 +1060,24 @@ def test_cash_carry_executor_probe_diagnostic_prefers_actionable_soft_blocker(tm
     assert "当前基差 0.5000% < 影子目标胜率入场门槛 0.5700%" in diagnostic["reason"]
 
 
+def test_cash_carry_executor_shadow_probe_adds_real_estimate_gap_buffer(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(_shadow_state_with_estimate_gaps(5, ExchangeName.GATE), encoding="utf-8")
+    executor = CashCarryExecutor(state)
+    settings = BotSettings(cash_carry_auto_open_enabled=True, order_notional_usdt=Decimal("300"), cash_carry_recovery_probe_notional_usdt=Decimal("100"))
+    item = _opportunity(net="2.0", basis="0.65").model_copy(
+        update={"blocked_reasons": ["合约溢价未达 0.8%", "V3冷启动净利预估 2.0000U < 冷启动安全垫 3.0000U"]}
+    )
+
+    result = executor.evaluate_open([item], settings)
+
+    assert result is None
+    diagnostic = executor.state.read()["last_probe_diagnostic"]
+    assert diagnostic["symbol"] == "ABCUSDT"
+    assert "影子目标胜率入场门槛 0.7700%" in diagnostic["reason"]
+    assert "真实成交偏差缓冲 0.2000%" in diagnostic["reason"]
+
+
 def _opportunity(symbol: str = "ABCUSDT", net: str = "0.8", basis: str = "1", funding: str = "0.01", exchange: ExchangeName = ExchangeName.GATE) -> CashCarryOpportunity:
     return CashCarryOpportunity(
         exchange=exchange,
@@ -1130,6 +1148,21 @@ def _shadow_state(count: int, exchange: ExchangeName) -> str:
             + 'USDT","entry_basis_pct":"0.60","max_basis_pct":"0.70","closed_at":"2026-06-28T00:10:00+00:00","close_basis_pct":"0.00","estimated_net_profit":"1.20","reason":"基差回归"}'
         )
     return '{"positions":[],"cash_carry_shadow":{"open":[],"closed":[' + ",".join(rows) + "]}}"
+
+
+def _shadow_state_with_estimate_gaps(count: int, exchange: ExchangeName) -> str:
+    state = _shadow_state(count, exchange)
+    positions = ",".join(
+        '{"exchange":"'
+        + exchange.value
+        + '","symbol":"GAP'
+        + str(index)
+        + 'USDT","status":"closed","strategy_version":"'
+        + CASH_CARRY_RULESET_VERSION
+        + '","history":{"actual_net_profit":"0.2","actual_vs_entry_estimate":"-0.6"}}'
+        for index in range(3)
+    )
+    return state.replace('"positions":[]', '"positions":[' + positions + "]")
 
 
 class _FakeBitgetLeverage:

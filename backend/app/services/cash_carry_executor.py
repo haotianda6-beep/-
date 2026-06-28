@@ -822,9 +822,11 @@ class CashCarryExecutor:
             return f"影子最差亏损 {summary.worst_estimated_net:.4f}U 超过执行缓冲 {-close_execution_buffer(base_settings):.4f}U"
         entry_basis = summary.target_entry_basis_pct or summary.min_winning_entry_basis_pct
         if entry_basis is not None:
-            required_basis = max(Decimal("0"), entry_basis - self.shadow_probe_basis_buffer_pct)
+            estimate_gap_buffer = self.history_quality.estimate_gap_basis_buffer_pct(base_settings, exchange=ExchangeName(original.exchange))
+            required_basis = max(Decimal("0"), entry_basis - self.shadow_probe_basis_buffer_pct + estimate_gap_buffer)
             if original.basis_pct < required_basis:
-                return f"当前基差 {original.basis_pct:.4f}% < 影子目标胜率入场门槛 {required_basis:.4f}%"
+                buffer_note = f"（含真实成交偏差缓冲 {estimate_gap_buffer:.4f}%）" if estimate_gap_buffer > 0 else ""
+                return f"当前基差 {original.basis_pct:.4f}% < 影子目标胜率入场门槛 {required_basis:.4f}%{buffer_note}"
         if probe_settings.order_notional_usdt <= 0 or base_settings.order_notional_usdt <= 0:
             return "小额本金或基础本金无效"
         scale = probe_settings.order_notional_usdt / base_settings.order_notional_usdt

@@ -233,6 +233,19 @@ class CashCarryHistoryQuality:
             estimate_miss_count=sum(1 for gap in gaps if gap < 0),
         )
 
+    def estimate_gap_basis_buffer_pct(
+        self,
+        settings: BotSettings,
+        now: datetime | None = None,
+        exchange: ExchangeName | None = None,
+    ) -> Decimal:
+        summary = self.performance_summary(settings, now, exchange)
+        if settings.order_notional_usdt <= 0:
+            return Decimal("0")
+        if summary.estimate_sample_count < MIN_ESTIMATE_GAP_SAMPLES or summary.avg_estimate_gap >= 0:
+            return Decimal("0")
+        return abs(summary.avg_estimate_gap) / settings.order_notional_usdt * Decimal("100")
+
     def _refresh_if_needed(self) -> None:
         key = self._file_key()
         if key == self._cache_key:
