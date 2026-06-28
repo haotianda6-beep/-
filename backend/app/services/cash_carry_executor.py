@@ -901,7 +901,7 @@ class CashCarryExecutor:
         exchange = ExchangeName(item.exchange)
         if exchange not in depth_unconfirmed_exchanges:
             return True
-        required = item.notional_usdt if item.notional_usdt > 0 else settings.order_notional_usdt
+        required = settings.order_notional_usdt if settings.order_notional_usdt > 0 else item.notional_usdt
         if item.max_safe_notional_usdt is None:
             return True
         return item.max_safe_notional_usdt is not None and item.max_safe_notional_usdt >= required

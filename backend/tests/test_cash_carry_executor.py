@@ -241,7 +241,12 @@ def test_cash_carry_executor_still_blocks_explicit_insufficient_depth_confirmati
     executor = CashCarryExecutor(tmp_path / "state.json")
     executor.state.remember(ExecutionResult("depth-1", "blocked_by_depth", "ABC 深度不足", position=_opportunity("ABCUSDT", "3", exchange=ExchangeName.GATE)))
     executor.state.remember(ExecutionResult("depth-2", "blocked_by_depth", "XYZ 深度不足", position=_opportunity("XYZUSDT", "3", exchange=ExchangeName.GATE)))
-    settings = BotSettings(manual_confirm_required=False, cash_carry_auto_open_enabled=True, cash_carry_auto_trade_enabled=False)
+    settings = BotSettings(
+        manual_confirm_required=False,
+        cash_carry_auto_open_enabled=True,
+        cash_carry_auto_trade_enabled=False,
+        order_notional_usdt=Decimal("300"),
+    )
     weak = _opportunity("NEWUSDT", "3", exchange=ExchangeName.GATE).model_copy(
         update={"notional_usdt": Decimal("300"), "max_safe_notional_usdt": Decimal("100")}
     )
@@ -1022,6 +1027,31 @@ def test_shadow_probe_can_recheck_after_exchange_depth_confirmation_reason(tmp_p
     assert result[2] == "影子样本小额探索"
 
 
+def test_shadow_probe_uses_probe_notional_for_exchange_depth_confirmation(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(_shadow_state_with_exchange_depth_confirmation(5, ExchangeName.GATE), encoding="utf-8")
+    executor = CashCarryExecutor(state)
+    settings = BotSettings(order_notional_usdt=Decimal("300"), cash_carry_recovery_probe_notional_usdt=Decimal("100"))
+    item = _opportunity(net="2.0", basis="0.7").model_copy(
+        update={
+            "max_safe_notional_usdt": Decimal("150"),
+            "blocked_reasons": [
+                "GATE 近期 2 个币种执行前盘口深度失败，等待盘口深度确认后再开仓",
+                "合约溢价未达 0.8%",
+                "V3冷启动净利预估 2.0000U < 冷启动安全垫 3.0000U",
+            ],
+        }
+    )
+
+    result = executor._probe_open_candidate([item], settings, set(), {}, None)
+
+    assert result is not None
+    adjusted, probe_settings, mode = result
+    assert adjusted.max_safe_notional_usdt == Decimal("150")
+    assert probe_settings.order_notional_usdt == Decimal("100")
+    assert mode == "影子样本小额探索"
+
+
 def test_cash_carry_executor_records_probe_diagnostic_when_shadow_basis_is_low(tmp_path) -> None:
     state = tmp_path / "state.json"
     state.write_text(_shadow_state(5, ExchangeName.GATE), encoding="utf-8")
@@ -1243,6 +1273,26 @@ def _shadow_state_with_depth_haircut(count: int, exchange: ExchangeName, symbol:
         + '","reason":"深度均价开仓基差 0.1000% 低于 0.5000% ","basis_pct":"0.4000","at":"'
         + at
         + '"}]'
+    )
+    return state[:-1] + "," + depth_block + "}"
+
+
+def _shadow_state_with_exchange_depth_confirmation(count: int, exchange: ExchangeName) -> str:
+    state = _shadow_state(count, exchange)
+    at = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    depth_block = (
+        '"recent_depth_blocks":['
+        '{"exchange":"'
+        + exchange.value
+        + '","symbol":"DEPTH1USDT","reason":"深度均价开仓基差 0.1000% 低于 0.5000% ","basis_pct":"0.4000","at":"'
+        + at
+        + '"},'
+        '{"exchange":"'
+        + exchange.value
+        + '","symbol":"DEPTH2USDT","reason":"深度均价开仓基差 0.1000% 低于 0.5000% ","basis_pct":"0.4000","at":"'
+        + at
+        + '"}'
+        + "]"
     )
     return state[:-1] + "," + depth_block + "}"
 
