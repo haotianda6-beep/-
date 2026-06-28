@@ -54,6 +54,8 @@ def test_cash_carry_market_memory_shadow_trade_wins_on_convergence() -> None:
     assert summary.closed_count == 1
     assert summary.wins == 1
     assert summary.total_estimated_net == Decimal("2.4100")
+    assert summary.avg_estimated_net == Decimal("2.4100")
+    assert summary.min_winning_entry_basis_pct == Decimal("1.00")
 
 
 def test_cash_carry_market_memory_shadow_trade_records_timeout_loss() -> None:
@@ -70,6 +72,7 @@ def test_cash_carry_market_memory_shadow_trade_records_timeout_loss() -> None:
     assert summary.closed_count == 1
     assert summary.wins == 0
     assert summary.total_estimated_net == Decimal("-1.7000")
+    assert summary.min_winning_entry_basis_pct is None
 
 
 def test_cash_carry_market_memory_shadow_probe_records_low_positive_net() -> None:

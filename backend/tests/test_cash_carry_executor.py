@@ -942,6 +942,36 @@ def test_contract_order_amount_converts_base_quantity_to_contracts() -> None:
     assert contract_order_amount(_FakeSwap(is_pre_market=False), "BTC/USDT:USDT", Decimal("0.03265413")) == 326.0
 
 
+def test_shadow_probe_waits_for_enough_closed_samples(tmp_path) -> None:
+    executor = CashCarryExecutor(tmp_path / "state.json")
+    settings = BotSettings(order_notional_usdt=Decimal("300"), cash_carry_recovery_probe_notional_usdt=Decimal("100"))
+    item = _opportunity(net="2.0", basis="0.7").model_copy(
+        update={"blocked_reasons": ["合约溢价未达 0.8%", "V3冷启动净利预估 2.0000U < 冷启动安全垫 3.0000U"]}
+    )
+
+    result = executor._probe_open_candidate([item], settings, set(), {}, None)
+
+    assert result is None
+
+
+def test_shadow_probe_allows_only_after_shadow_stats_pass(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(_shadow_state(5), encoding="utf-8")
+    executor = CashCarryExecutor(state)
+    settings = BotSettings(order_notional_usdt=Decimal("300"), cash_carry_recovery_probe_notional_usdt=Decimal("100"))
+    item = _opportunity(net="2.0", basis="0.7").model_copy(
+        update={"blocked_reasons": ["合约溢价未达 0.8%", "V3冷启动净利预估 2.0000U < 冷启动安全垫 3.0000U"]}
+    )
+
+    result = executor._probe_open_candidate([item], settings, set(), {}, None)
+
+    assert result is not None
+    adjusted, probe_settings, mode = result
+    assert adjusted.symbol == "ABCUSDT"
+    assert probe_settings.order_notional_usdt == Decimal("100")
+    assert mode == "影子样本小额探索"
+
+
 def _opportunity(symbol: str = "ABCUSDT", net: str = "0.8", basis: str = "1", funding: str = "0.01", exchange: ExchangeName = ExchangeName.GATE) -> CashCarryOpportunity:
     return CashCarryOpportunity(
         exchange=exchange,
@@ -999,6 +1029,17 @@ def _state_with_position(tmp_path, status: str = "mismatch", strategy_version: s
         encoding="utf-8",
     )
     return state
+
+
+def _shadow_state(count: int) -> str:
+    rows = []
+    for index in range(count):
+        rows.append(
+            '{"opened_at":"2026-06-28T00:00:00+00:00","exchange":"GATE","symbol":"SHADOW'
+            + str(index)
+            + 'USDT","entry_basis_pct":"0.60","max_basis_pct":"0.70","closed_at":"2026-06-28T00:10:00+00:00","close_basis_pct":"0.00","estimated_net_profit":"1.20","reason":"基差回归"}'
+        )
+    return '{"positions":[],"cash_carry_shadow":{"open":[],"closed":[' + ",".join(rows) + "]}}"
 
 
 class _FakeBitgetLeverage:

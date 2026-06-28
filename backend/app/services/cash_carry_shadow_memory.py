@@ -64,6 +64,8 @@ class CashCarryShadowSummary:
     total_estimated_net: Decimal
     win_rate_pct: Decimal
     worst_estimated_net: Decimal
+    avg_estimated_net: Decimal = Decimal("0")
+    min_winning_entry_basis_pct: Decimal | None = None
     window_hours: int = 24
 
 
@@ -114,7 +116,10 @@ class CashCarryShadowMemory:
         total = sum((item.estimated_net_profit for item in closed), Decimal("0"))
         worst = min((item.estimated_net_profit for item in closed), default=Decimal("0"))
         win_rate = Decimal("0") if not closed else Decimal(wins) / Decimal(len(closed)) * Decimal("100")
-        return CashCarryShadowSummary(len(self._shadow_open), len(closed), wins, total, win_rate, worst)
+        avg = Decimal("0") if not closed else total / Decimal(len(closed))
+        winning_basis = [item.entry_basis_pct for item in closed if item.estimated_net_profit > 0]
+        min_winning_basis = min(winning_basis) if winning_basis else None
+        return CashCarryShadowSummary(len(self._shadow_open), len(closed), wins, total, win_rate, worst, avg, min_winning_basis)
 
     def _close_shadow_positions(
         self,

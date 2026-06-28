@@ -71,8 +71,13 @@ def cash_carry_frequency_event(
         )
         detail_parts.append(f"近门槛样本 {memory_summary.near_count} 次，基础质量样本 {memory_summary.base_quality_count} 次")
     if shadow_summary and (shadow_summary.closed_count or shadow_summary.open_count):
+        basis_note = (
+            f"，赢家最低入场基差 {shadow_summary.min_winning_entry_basis_pct:.4f}%"
+            if shadow_summary.min_winning_entry_basis_pct is not None
+            else ""
+        )
         detail_parts.append(
-            f"近{shadow_summary.window_hours}小时探索影子样本：已平 {shadow_summary.closed_count} 单，未平 {shadow_summary.open_count} 单，胜率 {shadow_summary.win_rate_pct:.2f}%，估算净利 {shadow_summary.total_estimated_net:.4f}U，最差 {shadow_summary.worst_estimated_net:.4f}U"
+            f"近{shadow_summary.window_hours}小时探索影子样本：已平 {shadow_summary.closed_count} 单，未平 {shadow_summary.open_count} 单，胜率 {shadow_summary.win_rate_pct:.2f}%，估算净利 {shadow_summary.total_estimated_net:.4f}U，均值 {shadow_summary.avg_estimated_net:.4f}U，最差 {shadow_summary.worst_estimated_net:.4f}U{basis_note}"
         )
     if counts:
         detail_parts.append("主要卡点：" + "，".join(f"{name}{count}个" for name, count in counts.most_common(4)))

@@ -17,6 +17,7 @@ from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_reconciler import build_cash_carry_external_perp_close_history, build_cash_carry_history
 from app.services.cash_carry_quality import close_execution_buffer
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGE_SET
+from app.services.cash_carry_shadow_memory import CashCarryShadowMemory
 from app.services.cash_carry_state import CashCarryStateStore
 from app.services.cash_carry_transfer import transfer_usdt_to_spot
 from app.services.exchange_factory import build_ccxt_exchange, sanitize_exchange_error
@@ -28,6 +29,9 @@ from app.services.execution_models import ExecutionResult, ExecutionStep
 class CashCarryExecutor:
     reopen_cooldown_seconds = 3600
     depth_block_cooldown_seconds = 90
+    shadow_probe_min_closed = 5
+    shadow_probe_min_net_pct = Decimal("0.10")
+    shadow_probe_basis_buffer_pct = Decimal("0.03")
     def __init__(self, state_path: Path | None = None) -> None:
         root = Path(__file__).resolve().parents[3]
         self.state_path = state_path or root / "config" / "cash_carry_execution_state.json"
@@ -82,12 +86,12 @@ class CashCarryExecutor:
             probe = self._probe_open_candidate(rows, settings, blocked_keys | depth_blocked_keys, active_counts, allowed_open_exchanges)
             if not probe:
                 return None
-            item, open_settings = probe
+            item, open_settings, mode_label = probe
             steps = self._open_plan(item, open_settings)
             gate_reasons = self._safety_gate(open_settings, opening=True)
             if gate_reasons:
                 return self.state.remember(ExecutionResult(str(uuid.uuid4()), "blocked_by_safety_gate", " / ".join(gate_reasons), steps))
-            return self._execute_open(item, open_settings, steps, "恢复小额试单")
+            return self._execute_open(item, open_settings, steps, mode_label)
         item = max(ready, key=lambda row: row.estimated_net_profit)
         steps = self._open_plan(item, settings)
         gate_reasons = self._safety_gate(settings, opening=True)
@@ -623,14 +627,14 @@ class CashCarryExecutor:
         blocked_keys: set[tuple[ExchangeName, str]],
         active_counts: dict[ExchangeName, int],
         allowed_open_exchanges: set[ExchangeName] | None,
-    ) -> tuple[CashCarryOpportunity, BotSettings] | None:
+    ) -> tuple[CashCarryOpportunity, BotSettings, str] | None:
         if not settings.cash_carry_recovery_probe_enabled or settings.cash_carry_recovery_probe_notional_usdt <= 0:
             return None
         probe_notional = min(settings.cash_carry_recovery_probe_notional_usdt, settings.order_notional_usdt)
         if probe_notional <= 0:
             return None
-        probe_settings = settings.model_copy(update={"order_notional_usdt": probe_notional})
-        candidates = []
+        base_probe_settings = settings.model_copy(update={"order_notional_usdt": probe_notional})
+        candidates: list[tuple[CashCarryOpportunity, BotSettings, str]] = []
         for item in rows:
             exchange = ExchangeName(item.exchange)
             if exchange not in CASH_CARRY_EXCHANGE_SET:
@@ -643,28 +647,87 @@ class CashCarryExecutor:
                 continue
             if self.history_quality.blocked_reasons(exchange, item.symbol, settings):
                 continue
-            if not self._probe_blockers_only(item.blocked_reasons):
+            if not self._depth_confirmation_allows(item, self.state.recent_depth_unconfirmed_exchanges(), base_probe_settings):
                 continue
-            if not self._depth_confirmation_allows(item, self.state.recent_depth_unconfirmed_exchanges(), probe_settings):
+            candidate_settings = base_probe_settings
+            adjusted = self._probe_item(item, candidate_settings)
+            mode_label = ""
+            if self._probe_blockers_only(item.blocked_reasons):
+                if not self._probe_net_allows(adjusted, candidate_settings):
+                    continue
+                mode_label = "恢复小额试单"
+            elif self._shadow_probe_blockers_only(item.blocked_reasons):
+                candidate_settings = self._shadow_probe_settings(item, base_probe_settings)
+                adjusted = self._probe_item(item, candidate_settings)
+                if not self._shadow_probe_allows(item, adjusted, settings, candidate_settings):
+                    continue
+                mode_label = "影子样本小额探索"
+            else:
                 continue
-            adjusted = self._probe_item(item, probe_settings)
-            if not self._probe_net_allows(adjusted, probe_settings):
+            if not self._exposure_allows(adjusted, candidate_settings):
                 continue
-            if not self._exposure_allows(adjusted, probe_settings):
-                continue
-            candidates.append(adjusted)
+            candidates.append((adjusted, candidate_settings, mode_label))
         if not candidates:
             return None
-        return max(candidates, key=lambda row: row.estimated_net_profit), probe_settings
+        return max(candidates, key=lambda row: row[0].estimated_net_profit)
 
     def _probe_blockers_only(self, reasons: list[str]) -> bool:
         return bool(reasons) and all(reason.startswith(("V2历史胜率保护", "V3历史胜率保护")) for reason in reasons)
+
+    def _shadow_probe_blockers_only(self, reasons: list[str]) -> bool:
+        allowed = (
+            "合约溢价未达",
+            "回归到平仓线后的净利预估",
+            "V3冷启动净利预估",
+            "V2历史胜率保护",
+            "V3历史胜率保护",
+            "信号持续不足",
+            "基差波动过大",
+            "基差分位样本不足",
+            "基差分位不足",
+        )
+        return bool(reasons) and all(reason.startswith(allowed) for reason in reasons)
 
     def _probe_net_allows(self, item: CashCarryOpportunity, settings: BotSettings) -> bool:
         if settings.order_notional_usdt <= 0:
             return False
         min_net = settings.order_notional_usdt * settings.cash_carry_recovery_probe_min_net_pct / Decimal("100")
         return item.estimated_net_profit >= min_net
+
+    def _shadow_probe_settings(self, item: CashCarryOpportunity, settings: BotSettings) -> BotSettings:
+        basis_floor = max(settings.cash_carry_close_basis_pct, item.basis_pct - self.shadow_probe_basis_buffer_pct)
+        return settings.model_copy(update={
+            "cash_carry_min_basis_pct": min(settings.cash_carry_min_basis_pct, basis_floor),
+            "cash_carry_bootstrap_min_basis_pct": min(settings.cash_carry_bootstrap_min_basis_pct, basis_floor),
+        })
+
+    def _shadow_probe_allows(
+        self,
+        original: CashCarryOpportunity,
+        adjusted: CashCarryOpportunity,
+        base_settings: BotSettings,
+        probe_settings: BotSettings,
+    ) -> bool:
+        summary = CashCarryShadowMemory(self.state_path).summary()
+        if summary.closed_count < self.shadow_probe_min_closed:
+            return False
+        target_win = base_settings.cash_carry_target_win_rate_pct or Decimal("70")
+        if summary.win_rate_pct < target_win or summary.total_estimated_net <= 0:
+            return False
+        if summary.worst_estimated_net < -close_execution_buffer(base_settings):
+            return False
+        if summary.min_winning_entry_basis_pct is not None:
+            required_basis = max(Decimal("0"), summary.min_winning_entry_basis_pct - self.shadow_probe_basis_buffer_pct)
+            if original.basis_pct < required_basis:
+                return False
+        if probe_settings.order_notional_usdt <= 0 or base_settings.order_notional_usdt <= 0:
+            return False
+        scale = probe_settings.order_notional_usdt / base_settings.order_notional_usdt
+        expected_shadow_net = summary.avg_estimated_net * scale
+        min_shadow_net = max(Decimal("0.05"), probe_settings.order_notional_usdt * self.shadow_probe_min_net_pct / Decimal("100"))
+        if expected_shadow_net < min_shadow_net:
+            return False
+        return adjusted.estimated_net_profit >= -close_execution_buffer(probe_settings)
 
     def _depth_confirmation_allows(
         self,
