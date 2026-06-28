@@ -32,6 +32,9 @@ class CashCarryExecutor:
     shadow_probe_min_closed = 5
     shadow_probe_min_net_pct = Decimal("0.10")
     shadow_probe_basis_buffer_pct = Decimal("0.03")
+    frequency_probe_min_shadow_win_margin_pct = Decimal("20")
+    frequency_probe_max_basis_relax_pct = Decimal("0.15")
+    frequency_probe_min_basis_over_close_pct = Decimal("0.15")
     def __init__(self, state_path: Path | None = None) -> None:
         root = Path(__file__).resolve().parents[3]
         self.state_path = state_path or root / "config" / "cash_carry_execution_state.json"
@@ -822,11 +825,19 @@ class CashCarryExecutor:
             return f"影子最差亏损 {summary.worst_estimated_net:.4f}U 超过执行缓冲 {-close_execution_buffer(base_settings):.4f}U"
         entry_basis = summary.target_entry_basis_pct or summary.min_winning_entry_basis_pct
         if entry_basis is not None:
-            estimate_gap_buffer = self.history_quality.estimate_gap_basis_buffer_pct(base_settings, exchange=ExchangeName(original.exchange))
-            required_basis = max(Decimal("0"), entry_basis - self.shadow_probe_basis_buffer_pct + estimate_gap_buffer)
+            exchange = ExchangeName(original.exchange)
+            estimate_gap_buffer = self.history_quality.estimate_gap_basis_buffer_pct(base_settings, exchange=exchange)
+            frequency_relax = Decimal("0") if estimate_gap_buffer > 0 else self._frequency_probe_basis_relaxation(summary, base_settings, exchange)
+            protective_floor = base_settings.cash_carry_close_basis_pct + self.frequency_probe_min_basis_over_close_pct
+            required_basis = max(
+                Decimal("0"),
+                protective_floor,
+                entry_basis - self.shadow_probe_basis_buffer_pct + estimate_gap_buffer - frequency_relax,
+            )
             if original.basis_pct < required_basis:
                 buffer_note = f"（含真实成交偏差缓冲 {estimate_gap_buffer:.4f}%）" if estimate_gap_buffer > 0 else ""
-                return f"当前基差 {original.basis_pct:.4f}% < 影子目标胜率入场门槛 {required_basis:.4f}%{buffer_note}"
+                relax_note = f"（频率校准已放宽 {frequency_relax:.4f}%）" if frequency_relax > 0 else ""
+                return f"当前基差 {original.basis_pct:.4f}% < 影子目标胜率入场门槛 {required_basis:.4f}%{buffer_note}{relax_note}"
         if probe_settings.order_notional_usdt <= 0 or base_settings.order_notional_usdt <= 0:
             return "小额本金或基础本金无效"
         scale = probe_settings.order_notional_usdt / base_settings.order_notional_usdt
@@ -838,6 +849,31 @@ class CashCarryExecutor:
         if adjusted.estimated_net_profit < min_allowed_net:
             return f"当前小额净利 {adjusted.estimated_net_profit:.4f}U < 允许下限 {min_allowed_net:.4f}U"
         return None
+
+    def _frequency_probe_basis_relaxation(
+        self,
+        summary,
+        settings: BotSettings,
+        exchange: ExchangeName,
+    ) -> Decimal:
+        if settings.cash_carry_target_daily_trades <= 0:
+            return Decimal("0")
+        target_win = settings.cash_carry_target_win_rate_pct or Decimal("70")
+        if summary.closed_count < self.shadow_probe_min_closed:
+            return Decimal("0")
+        win_margin = summary.win_rate_pct - target_win
+        if win_margin < self.frequency_probe_min_shadow_win_margin_pct:
+            return Decimal("0")
+        perf = self.history_quality.performance_summary(settings, exchange=exchange)
+        if perf.estimate_sample_count > 0 and perf.avg_estimate_gap < 0:
+            return Decimal("0")
+        if perf.total_trades >= settings.cash_carry_bootstrap_min_trades:
+            if perf.total_win_rate_pct < target_win or perf.total_net <= 0:
+                return Decimal("0")
+        target_per_exchange = Decimal(settings.cash_carry_target_daily_trades) / Decimal(max(1, len(CASH_CARRY_EXCHANGE_SET)))
+        if Decimal(perf.trades_24h) >= target_per_exchange:
+            return Decimal("0")
+        return min(self.frequency_probe_max_basis_relax_pct, win_margin / Decimal("100") * Decimal("0.50"))
 
     def _depth_confirmation_allows(
         self,

@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from app.core.models import BotSettings, CashCarryOpportunity, DataSource, ExchangeName
 from app.services.cash_carry_executor import CashCarryExecutor
+from app.services.cash_carry_state import CashCarryStateStore
 
 
 def test_cash_carry_does_not_reopen_recently_closed_symbol(tmp_path) -> None:
@@ -30,6 +31,13 @@ def test_cash_carry_restores_mismatch_when_live_position_is_matched(tmp_path) ->
     item = json.loads(state.read_text(encoding="utf-8"))["positions"][0]
     assert item["status"] == "open"
     assert "close_reason" not in item
+
+
+def test_cash_carry_state_read_tolerates_empty_file(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text("", encoding="utf-8")
+
+    assert CashCarryStateStore(state).read() == {"positions": []}
 
 
 def _opportunity() -> CashCarryOpportunity:

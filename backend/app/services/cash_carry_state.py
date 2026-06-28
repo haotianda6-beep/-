@@ -231,7 +231,10 @@ class CashCarryStateStore:
         return counts
 
     def read(self) -> dict[str, Any]:
-        return json.loads(self.state_path.read_text(encoding="utf-8")) if self.state_path.exists() else {"positions": []}
+        try:
+            return json.loads(self.state_path.read_text(encoding="utf-8")) if self.state_path.exists() else {"positions": []}
+        except (OSError, json.JSONDecodeError):
+            return {"positions": []}
 
     def write(self, state: dict[str, Any]) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
