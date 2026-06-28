@@ -19,7 +19,7 @@ def test_cash_carry_open_records_actual_fill_prices(tmp_path) -> None:
     assert state["perp_entry_price"] == "101.75"
     assert state["strategy_version"] == CASH_CARRY_RULESET_VERSION
     assert state["entry_basis_pct"] == "1.4963"
-    assert state["entry_estimated_net_profit"] == "1.0545"
+    assert state["entry_estimated_net_profit"] == "1.0645"
     assert state["entry_estimated_funding_income"] == "0.0100"
     assert state["entry_estimated_open_close_fee"] == "0.2418"
     assert state["entry_notional_usdt"] == "100.00"

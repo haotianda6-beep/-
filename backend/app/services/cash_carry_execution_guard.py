@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from decimal import Decimal
 
+from app.services.cash_carry_quality import entry_funding_credit
+
 
 @dataclass(frozen=True)
 class DepthGuardResult:
@@ -25,7 +27,6 @@ def forward_open_depth_guard(
     funding_income: Decimal = Decimal("0"),
     close_basis_pct: Decimal = Decimal("0"),
 ) -> DepthGuardResult:
-    _ = funding_income
     try:
         spot_book = spot.fetch_order_book(spot_symbol, limit=20)
         spot_qty, spot_avg = _buy_vwap_from_quote(spot_book.get("asks") or [], quote_notional, Decimal("1"))
@@ -42,7 +43,7 @@ def forward_open_depth_guard(
         if basis < min_basis_pct:
             return DepthGuardResult(False, f"深度均价开仓基差 {basis:.4f}% 低于 {min_basis_pct}% ", spot_avg, perp_avg, basis)
         tradable_basis = max(Decimal("0"), basis - close_basis_pct)
-        estimated_net = quote_notional * tradable_basis / Decimal("100") - open_close_fee
+        estimated_net = quote_notional * tradable_basis / Decimal("100") - open_close_fee + entry_funding_credit(quote_notional, funding_income)
         if estimated_net < min_net_profit:
             return DepthGuardResult(
                 False,
@@ -69,7 +70,6 @@ def forward_perp_entry_guard_after_spot(
     funding_income: Decimal = Decimal("0"),
     close_basis_pct: Decimal = Decimal("0"),
 ) -> DepthGuardResult:
-    _ = funding_income
     try:
         if base_quantity <= 0 or spot_entry_price <= 0:
             return DepthGuardResult(False, "现货真实成交数量或价格无效，取消合约开仓")
@@ -85,7 +85,7 @@ def forward_perp_entry_guard_after_spot(
             return DepthGuardResult(False, f"现货成交后合约可成交基差 {basis:.4f}% 低于 {min_basis_pct}%", spot_entry_price, perp_avg, basis)
         notional = base_quantity * spot_entry_price
         tradable_basis = max(Decimal("0"), basis - close_basis_pct)
-        estimated_net = notional * tradable_basis / Decimal("100") - open_close_fee
+        estimated_net = notional * tradable_basis / Decimal("100") - open_close_fee + entry_funding_credit(notional, funding_income)
         if estimated_net < min_net_profit:
             return DepthGuardResult(
                 False,

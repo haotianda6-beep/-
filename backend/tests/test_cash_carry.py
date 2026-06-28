@@ -8,7 +8,7 @@ from app.services.asset_identity import MarketAsset
 from app.services.cash_carry_fast_refresh import CashCarryFastRefresher
 from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
-from app.services.cash_carry_quality import entry_net_floor
+from app.services.cash_carry_quality import entry_funding_credit, entry_net_floor, estimated_entry_net_profit
 from app.services.cash_carry_scope import CASH_CARRY_INTERNAL_CANDIDATE_LIMIT
 from app.services.cash_carry_scanner import CashCarryExchangeData, CashCarryScanner, TradeMarket
 from app.services.live_market_types import CashCarryScan
@@ -43,6 +43,15 @@ def test_cash_carry_candidate_explains_negative_funding_and_low_basis() -> None:
     assert item is not None
     assert "合约溢价未达 0.8%" in item.blocked_reasons
     assert "资金费率不是正数，空头不能收资金费" in item.blocked_reasons
+
+
+def test_cash_carry_entry_net_uses_capped_funding_credit() -> None:
+    settings = BotSettings(order_notional_usdt=Decimal("300"), cash_carry_close_basis_pct=Decimal("0.2"))
+
+    net = estimated_entry_net_profit(settings, Decimal("0.7"), Decimal("0.01"), Decimal("0.4"))
+
+    assert entry_funding_credit(Decimal("300"), Decimal("3")) == Decimal("0.45")
+    assert net == Decimal("1.55")
 
 
 def test_cash_carry_applies_strategy_specific_volume_threshold() -> None:
@@ -156,7 +165,7 @@ def test_cash_carry_fast_refresh_uses_ws_prices() -> None:
 
     assert refreshed.opportunities
     assert refreshed.opportunities[0].basis_pct == Decimal("1.5000")
-    assert refreshed.opportunities[0].estimated_net_profit == Decimal("1.0000")
+    assert refreshed.opportunities[0].estimated_net_profit == Decimal("1.0200")
 
 
 def test_cash_carry_blocks_low_stable_net_profit() -> None:
@@ -422,7 +431,7 @@ def test_cash_carry_scanner_does_not_apply_gate_losses_to_bitget_bootstrap(tmp_p
     item = scanner._build_opportunity("ABCUSDT", data, settings)
 
     assert item is not None
-    assert item.estimated_net_profit == Decimal("0.9501")
+    assert item.estimated_net_profit == Decimal("1.0101")
     assert not item.blocked_reasons
 
 
@@ -439,7 +448,7 @@ def test_cash_carry_v3_bootstrap_allows_positive_near_miss_before_first_samples(
     item = scanner._build_opportunity("ABCUSDT", data, settings)
 
     assert item is not None
-    assert item.estimated_net_profit == Decimal("0.9336")
+    assert item.estimated_net_profit == Decimal("0.9486")
     assert item.blocked_reasons == []
 
 

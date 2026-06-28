@@ -5,6 +5,7 @@ from decimal import Decimal
 from app.core.models import BotSettings, CashCarryOpportunity, ExchangeName, RiskEvent
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_market_memory import CashCarryMarketMemorySummary, CashCarryShadowSummary
+from app.services.cash_carry_quality import entry_funding_credit
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGES
 
 
@@ -160,7 +161,8 @@ def _required_entry_basis_pct(
     notional = item.notional_usdt or settings.order_notional_usdt
     if notional <= 0:
         return None
-    required_tradable_pct = (min_net_profit - item.estimated_funding_income + item.estimated_open_close_fee) / notional * Decimal("100")
+    funding_credit = entry_funding_credit(notional, item.estimated_funding_income)
+    required_tradable_pct = (min_net_profit - funding_credit + item.estimated_open_close_fee) / notional * Decimal("100")
     min_basis = settings.cash_carry_min_basis_pct
     if history_quality and history_quality.bootstrap_active(settings):
         min_basis = settings.cash_carry_bootstrap_min_basis_pct

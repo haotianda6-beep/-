@@ -15,7 +15,7 @@ from app.services.cash_carry_execution_guard import forward_close_depth_guard, f
 from app.services.cash_carry_execution_models import CASH_CARRY_RULESET_VERSION, CashCarryPosition
 from app.services.cash_carry_history_quality import CashCarryHistoryQuality
 from app.services.cash_carry_reconciler import build_cash_carry_external_perp_close_history, build_cash_carry_history
-from app.services.cash_carry_quality import close_execution_buffer
+from app.services.cash_carry_quality import close_execution_buffer, estimated_entry_net_profit
 from app.services.cash_carry_scope import CASH_CARRY_EXCHANGE_SET
 from app.services.cash_carry_shadow_memory import CashCarryShadowMemory
 from app.services.cash_carry_state import CashCarryStateStore
@@ -1002,8 +1002,8 @@ class CashCarryExecutor:
             base_qty * spot_entry_price * spot_fee
             + base_qty * perp_entry_price * swap_fee
         ) * Decimal("2")
-        tradable_basis = max(Decimal("0"), basis_pct - settings.cash_carry_close_basis_pct)
-        estimated_net = notional * tradable_basis / Decimal("100") - open_close_fee
+        actual_settings = settings.model_copy(update={"order_notional_usdt": notional})
+        estimated_net = estimated_entry_net_profit(actual_settings, basis_pct, funding_rate, open_close_fee)
         return {
             "basis_pct": q(basis_pct),
             "estimated_net_profit": q(estimated_net),

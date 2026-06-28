@@ -5,6 +5,7 @@ from app.core.models import BotSettings
 
 
 CLOSE_EXECUTION_BUFFER_PCT = Decimal("0.2")
+ENTRY_FUNDING_CREDIT_CAP_PCT = Decimal("0.15")
 MAX_QUALITY_SCORE = Decimal("100")
 HARD_BLOCKER_PREFIXES = (
     "资金费率不是正数",
@@ -76,8 +77,15 @@ def estimated_entry_net_profit(
     funding_rate: Decimal,
     open_close_fee: Decimal,
 ) -> Decimal:
-    _ = funding_rate
-    return convergence_basis_profit(settings, basis_pct) - open_close_fee
+    funding_income = settings.order_notional_usdt * funding_rate
+    return convergence_basis_profit(settings, basis_pct) - open_close_fee + entry_funding_credit(settings.order_notional_usdt, funding_income)
+
+
+def entry_funding_credit(notional_usdt: Decimal, funding_income: Decimal) -> Decimal:
+    if notional_usdt <= 0 or funding_income <= 0:
+        return Decimal("0")
+    cap = notional_usdt * ENTRY_FUNDING_CREDIT_CAP_PCT / Decimal("100")
+    return min(funding_income, cap)
 
 
 def entry_quality_reasons(estimated_net_profit: Decimal, settings: BotSettings) -> list[str]:

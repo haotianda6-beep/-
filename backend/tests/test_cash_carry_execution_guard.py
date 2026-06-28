@@ -32,7 +32,7 @@ def test_forward_open_depth_guard_blocks_when_stable_net_is_too_low() -> None:
     )
 
     assert not result.ok
-    assert result.estimated_net_profit == Decimal("0.30")
+    assert result.estimated_net_profit == Decimal("0.31")
     assert "稳定开仓安全垫" in result.reason
 
 
