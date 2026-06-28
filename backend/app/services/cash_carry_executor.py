@@ -765,7 +765,10 @@ class CashCarryExecutor:
             "基差分位样本不足",
             "基差分位不足",
         )
-        return bool(reasons) and all(reason.startswith(allowed) for reason in reasons)
+        return bool(reasons) and all(reason.startswith(allowed) or self._is_depth_exchange_confirmation_reason(reason) for reason in reasons)
+
+    def _is_depth_exchange_confirmation_reason(self, reason: str) -> bool:
+        return "执行前盘口深度失败" in reason and "等待盘口深度确认" in reason
 
     def _probe_net_allows(self, item: CashCarryOpportunity, settings: BotSettings) -> bool:
         if settings.order_notional_usdt <= 0:
@@ -838,6 +841,8 @@ class CashCarryExecutor:
         if exchange not in depth_unconfirmed_exchanges:
             return True
         required = item.notional_usdt if item.notional_usdt > 0 else settings.order_notional_usdt
+        if item.max_safe_notional_usdt is None:
+            return True
         return item.max_safe_notional_usdt is not None and item.max_safe_notional_usdt >= required
 
     def _probe_item(self, item: CashCarryOpportunity, settings: BotSettings) -> CashCarryOpportunity:

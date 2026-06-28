@@ -224,14 +224,29 @@ def test_cash_carry_executor_tracks_multiple_recent_depth_failures(tmp_path) -> 
     assert records[0]["estimated_net_profit"] == "3"
 
 
-def test_cash_carry_executor_requires_depth_confirmation_after_exchange_depth_failures(tmp_path) -> None:
+def test_cash_carry_executor_rechecks_depth_after_exchange_depth_failures(tmp_path) -> None:
     executor = CashCarryExecutor(tmp_path / "state.json")
     executor.state.remember(ExecutionResult("depth-1", "blocked_by_depth", "ABC 深度不足", position=_opportunity("ABCUSDT", "3", exchange=ExchangeName.GATE)))
     executor.state.remember(ExecutionResult("depth-2", "blocked_by_depth", "XYZ 深度不足", position=_opportunity("XYZUSDT", "3", exchange=ExchangeName.GATE)))
     settings = BotSettings(manual_confirm_required=False, cash_carry_auto_open_enabled=True, cash_carry_auto_trade_enabled=False)
 
     assert executor.state.recent_depth_unconfirmed_exchanges()
-    assert executor.evaluate_open([_opportunity("NEWUSDT", "3", exchange=ExchangeName.GATE)], settings) is None
+    result = executor.evaluate_open([_opportunity("NEWUSDT", "3", exchange=ExchangeName.GATE)], settings)
+
+    assert result is not None
+    assert result.status == "blocked_by_safety_gate"
+
+
+def test_cash_carry_executor_still_blocks_explicit_insufficient_depth_confirmation(tmp_path) -> None:
+    executor = CashCarryExecutor(tmp_path / "state.json")
+    executor.state.remember(ExecutionResult("depth-1", "blocked_by_depth", "ABC 深度不足", position=_opportunity("ABCUSDT", "3", exchange=ExchangeName.GATE)))
+    executor.state.remember(ExecutionResult("depth-2", "blocked_by_depth", "XYZ 深度不足", position=_opportunity("XYZUSDT", "3", exchange=ExchangeName.GATE)))
+    settings = BotSettings(manual_confirm_required=False, cash_carry_auto_open_enabled=True, cash_carry_auto_trade_enabled=False)
+    weak = _opportunity("NEWUSDT", "3", exchange=ExchangeName.GATE).model_copy(
+        update={"notional_usdt": Decimal("300"), "max_safe_notional_usdt": Decimal("100")}
+    )
+
+    assert executor.evaluate_open([weak], settings) is None
 
 
 def test_cash_carry_executor_allows_confirmed_depth_after_exchange_depth_failures(tmp_path) -> None:
@@ -984,6 +999,27 @@ def test_shadow_probe_requires_same_exchange_shadow_samples(tmp_path) -> None:
     result = executor._probe_open_candidate([item], settings, set(), {}, None)
 
     assert result is None
+
+
+def test_shadow_probe_can_recheck_after_exchange_depth_confirmation_reason(tmp_path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(_shadow_state(5, ExchangeName.GATE), encoding="utf-8")
+    executor = CashCarryExecutor(state)
+    settings = BotSettings(order_notional_usdt=Decimal("300"), cash_carry_recovery_probe_notional_usdt=Decimal("100"))
+    item = _opportunity(net="2.0", basis="0.7").model_copy(
+        update={
+            "blocked_reasons": [
+                "GATE 近期 2 个币种执行前盘口深度失败，等待盘口深度确认后再开仓",
+                "合约溢价未达 0.8%",
+                "V3冷启动净利预估 2.0000U < 冷启动安全垫 3.0000U",
+            ]
+        }
+    )
+
+    result = executor._probe_open_candidate([item], settings, set(), {}, None)
+
+    assert result is not None
+    assert result[2] == "影子样本小额探索"
 
 
 def test_cash_carry_executor_records_probe_diagnostic_when_shadow_basis_is_low(tmp_path) -> None:
